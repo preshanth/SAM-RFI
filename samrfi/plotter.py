@@ -1,20 +1,20 @@
 from astropy.visualization import ZScaleInterval, ImageNormalize
 import matplotlib.pyplot as plt
 
-from .radiorfi import RadioRFI
-
 class Plotter:
-    def __init__(self, objectRFI):
+    def __init__(self, radiorfi_instance):
         # Call the constructor of the base class
-        self.objectRFI = objectRFI
+        self.RadioRFI = radiorfi_instance
 
 
     def plot(self, mode='DATA', baseline=0, polarization=0):
 
         if mode == 'DATA':
-            data = self.objectRFI.rfi_antenna_data
-        if mode == 'FLAG':
-            data = self.objectRFI.flags
+            data = self.RadioRFI.rfi_antenna_data
+        elif mode == 'FLAG':
+            data = self.RadioRFI.flags
+        else:
+            raise ValueError("Invalid mode. Use 'DATA' or 'FLAG'.")
 
         norm = ImageNormalize(data[baseline,polarization,:,:].T, interval=ZScaleInterval())
 
@@ -28,12 +28,12 @@ class Plotter:
         fig.clf() 
         plt.clf()    
         
-        masked_spectrograph = np.where(np.logical_not(self.objectRFI.flags), self.objectRFI.rfi_antenna_data, 0)
+        masked_spectrograph = np.where(np.logical_not(self.RadioRFI.flags), self.RadioRFI.rfi_antenna_data, 0)
 
         fig, ax = plt.subplots(3,1, figsize=(10, 12),)
 
-        ax[0].imshow(self.objectRFI.rfi_antenna_data, aspect='auto', cmap='viridis')
-        ax[1].imshow(self.objectRFI.flags, aspect='auto', cmap='viridis')
+        ax[0].imshow(self.RadioRFI.rfi_antenna_data, aspect='auto', cmap='viridis')
+        ax[1].imshow(self.RadioRFI.flags, aspect='auto', cmap='viridis')
         ax[2].imshow(masked_spectrograph, aspect='auto', cmap='viridis')
         ax[0].scatter(self.max_peaks[0][:,1], self.max_peaks[0][:,0], c='r', s=0.5)
 
@@ -59,5 +59,5 @@ class Plotter:
     def plotit(self,):
 
         fig, ax = plt.subplots(2, 1, figsize=(10, 3),dpi=150)
-        ax[0].imshow(np.abs(self.objectRFI.rfi_antenna_data), vmin=0, vmax=100)
-        ax[1].imshow(np.abs(self.objectRFI.rfi_antenna_data * (1 - self.objectRFI.flags)), vmin=0, vmax=100)
+        ax[0].imshow(np.abs(self.RadioRFI.rfi_antenna_data), vmin=0, vmax=100)
+        ax[1].imshow(np.abs(self.RadioRFI.rfi_antenna_data * (1 - self.RadioRFI.flags)), vmin=0, vmax=100)

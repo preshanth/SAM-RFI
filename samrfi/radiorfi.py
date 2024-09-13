@@ -5,15 +5,19 @@ from casatools import table
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
 from tqdm import tqdm
 
+
+
 class RadioRFI:
 
     def __init__(self, vis=False, dir_path=None):
+
+        from .plotter import Plotter
+        self.plotter = Plotter(self)
 
         self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
         
         self.rfi_antenna_data = None
         self.flags = None
-
 
         if dir_path:
             if dir_path.endswith('/'):
