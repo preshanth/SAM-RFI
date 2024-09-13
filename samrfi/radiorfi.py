@@ -5,8 +5,6 @@ from casatools import table
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
 from tqdm import tqdm
 
-
-
 class RadioRFI:
 
     def __init__(self, vis=False, dir_path=None):
@@ -15,7 +13,7 @@ class RadioRFI:
         self.plotter = Plotter(self)
 
         self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
-        
+
         self.rfi_antenna_data = None
         self.flags = None
 
@@ -117,13 +115,12 @@ class RadioRFI:
     def update_flags(self, flags):
         self.flags = flags
 
+    def create_residuals(self,):
+        self.residuals = np.where(np.logical_not(self.flags), self.rfi_antenna_data, 0)
 
     #########################
     # Running Models
     #########################
-
-
-    
 
     def test_realdata(self, save=True,):
 

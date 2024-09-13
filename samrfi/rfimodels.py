@@ -17,7 +17,7 @@ class RFIModels:
 
     def __init__(self, sam_checkpoint, sam_type, radiorfi_instance, device='cuda',):
 
-        self.radiorfi_instance = radiorfi_instance
+        self.RadioRFI = radiorfi_instance
         sam_checkpoint = str(sam_checkpoint)
         self.sam_type = sam_type
 
@@ -27,9 +27,9 @@ class RFIModels:
         self.mask_generator = SamAutomaticMaskGenerator(sam)
         self.predictor = SamPredictor(sam)
 
-        print(self.radiorfi_instance.rfi_antenna_data.shape)
+        print(self.RadioRFI.rfi_antenna_data.shape)
 
-        self.radiorfi_instance.update_flags('Flags updated')
+        self.RadioRFI.update_flags('Flags updated')
 
     def run_sam(self,remove_largest=True,pad_width=50):
 
@@ -105,22 +105,16 @@ class RFIModels:
 
             pol_flags_list = []
 
-            for baseline in tqdm(range(self.radiorfi_instance.rfi_antenna_data.shape[0])):
+            for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
 
                 flags = []
 
-                for pol in range(self.radiorfi_instance.rfi_antenna_data.shape[1]):
+                for pol in range(self.RadioRFI.rfi_antenna_data.shape[1]):
 
-                    data = self.radiorfi_instance.rfi_antenna_data[baseline,pol,:,:]
+                    data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
 
                     single_data = data/np.median(data)
                     
-                    stat = stats.median_abs_deviation(single_data, axis=None)
-                    median = np.median(single_data)
-                    single_data = np.clip(single_data, (median + (stat * 1)),(median + (stat * 10)))
-
-                    single_data = np.pad(single_data, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='constant', constant_values=(median*.5 + (stat * 1)))
-
                     single_patch = Image.fromarray(single_data).convert("RGB")
                     bbox = self.get_bounding_box(single_data)
 
@@ -137,8 +131,6 @@ class RFIModels:
                         masks = self.processor.image_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu())
                         masks = masks[0].cpu().numpy().squeeze()
 
-                    masks = masks[pad_width:-pad_width,pad_width:-pad_width]
-
                     flags.append(masks)
                 pol_flags = np.stack(flags)
                 pol_flags_list.append(pol_flags)
@@ -148,22 +140,19 @@ class RFIModels:
             
             self.flags = baseline_flags
 
-
-            np.save(f"{self.directory}/flags.npy",baseline_flags)
-
         elif patch_run:
 
             pol_flags_list = []
 
-            for baseline in tqdm(range(self.radiorfi_instance.rfi_antenna_data.shape[0])):
+            for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
 
                 flags = []
 
-                for pol in range(self.radiorfi_instance.rfi_antenna_data.shape[1]):
+                for pol in range(self.RadioRFI.rfi_antenna_data.shape[1]):
 
-                    data = self.radiorfi_instance.rfi_antenna_data[baseline,pol,:,:]
-                    single_data = np.sqrt(data)
-                    single_data = single_data/np.median(single_data)
+                    data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
+
+                    single_data = single_data/np.median(data)
 
                     patches, original_shape, padded_shape = self.create_patches(single_data)
 
@@ -201,9 +190,10 @@ class RFIModels:
 
             self.flags = baseline_flags
 
-            self.create_residuals()
-
-            self.radiorfi_instance.update_flags(self.flags)
+        self.RadioRFI.update_flags(self.flags)
+        
+        if save:    
+            np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
 
 
 
@@ -310,6 +300,3 @@ class RFIModels:
         
         # Remove the padding to get the original image size
         return reconstructed_image[:original_shape[0], :original_shape[1]]
-
-    def create_residuals(self,):
-        self.residuals = np.where(np.logical_not(self.flags), self.radiorfi_instance.rfi_antenna_data, 0)
