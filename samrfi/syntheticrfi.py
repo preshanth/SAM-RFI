@@ -1,5 +1,18 @@
 class SyntheticRFI:
 
+    def __init__(self, min_freq, max_freq, time_int, points, num_persistent=6, num_intermittent=2, noise=10, mean=5, edge_buffer=50):
+        self.frequencies = np.linspace(min_freq, max_freq, points)
+        self.time_int = time_int
+        self.points = points
+        self.edge_buffer = edge_buffer
+        self.min_freq = min_freq
+        self.max_freq = max_freq
+        self.noise = noise
+        self.mean = mean
+        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
+        self.temp_spectrograph = np.zeros((self.time_int, self.points))
+        self.model_spectrograph = np.zeros((self.time_int, self.points))
+
     def baseline_profile(self):
         """
         Generates a baseline profile using a normal distribution.
