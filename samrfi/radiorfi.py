@@ -1,8 +1,61 @@
-class AstronomyRFI:
+import os
+import numpy as np
+import pandas as pd
+from casatools import table
+from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
+from tqdm import tqdm
 
-    def load(self, vis=None, mode='DATA',ant_i=2):
+class RadioRFI:
 
+    def __init__(self, vis=False, dir_path=None):
+
+        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
         
+        self.rfi_antenna_data = None
+        self.flags = None
+
+
+        if dir_path:
+            if dir_path.endswith('/'):
+                dir_path = dir_path[:-1]
+
+            current_directory = str(dir_path)
+        else:
+            current_directory = os.getcwd()
+
+        new_directory = os.path.join(current_directory, 'samrfi_data')
+
+        if not os.path.exists(new_directory):
+            os.makedirs(new_directory)
+
+        self.directory = new_directory
+        
+
+        if vis:
+            # Path to ms
+            self.vis = str(vis)
+            
+            # Number of antenna 
+            tb_antenna = table()
+            tb_antenna.open(self.vis+'/ANTENNA')
+            self.num_antennas = tb_antenna.nrows()
+            tb_antenna.close()
+
+            # Number of spectral windows
+            tb_spw = table()
+            tb_spw.open(self.vis+'/SPECTRAL_WINDOW')
+            self.num_spw = tb_spw.nrows()
+            self.channels_per_spw = tb_spw.getcol('NUM_CHAN')
+            tb_spw.close()
+
+            # Tables
+            self.tb = table()
+            self.tb.open(vis, nomodify=False)
+        else:
+            self.vis = None
+
+    def load(self, vis=None, mode='DATA', ant_i=2):
+
         if not self.vis:
             self.vis = str(vis)
 
@@ -52,41 +105,13 @@ class AstronomyRFI:
         if mode == 'DATA':
             self.rfi_antenna_data_complex = np.stack(rfi_list)
             self.rfi_antenna_data = np.abs(self.rfi_antenna_data_complex)
+            print(self.rfi_antenna_data.shape)
         
         if mode == 'FLAG':
             self.ms_flags = np.stack(rfi_list)
 
-    def find_spectrograph_peaks(self, min_distance=10, threshold_abs=30):
-        """
-        Find peaks in the spectrograph image.
-
-        Parameters:
-            spectrograph (numpy.ndarray): The input spectrograph image.
-            min_distance (int): The minimum distance between peaks. Default is 10.
-            threshold_abs (int): The minimum intensity value for peaks. Default is 25.
-
-        Returns:
-            numpy.ndarray: An array of peak coordinates.
-        """
-        max_peaks = peak_local_max(self.spectrograph, min_distance=min_distance, threshold_abs=threshold_abs)
-        self.max_peaks = max_peaks, np.ones(len(max_peaks))
-
-    def get_bounding_box(self, ground_truth_map):
-        # get bounding box from mask
-        ## https://github.com/bnsreenu/python_for_microscopists/blob/master/331_fine_tune_SAM_mito.ipynb
-        y_indices, x_indices = np.where(ground_truth_map > 0)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        # add perturbation to bounding box coordinates
-        H, W = ground_truth_map.shape
-        x_min = max(0, x_min - np.random.randint(0, 20))
-        x_max = min(W, x_max + np.random.randint(0, 20))
-        y_min = max(0, y_min - np.random.randint(0, 20))
-        y_max = min(H, y_max + np.random.randint(0, 20))
-        bbox = [x_min, y_min, x_max, y_max]
-
-        return bbox
-
+    def update_flags(self, flags):
+        self.flags = flags
 
 
     #########################
@@ -94,170 +119,7 @@ class AstronomyRFI:
     #########################
 
 
-    def run_sam(self,remove_largest=True,pad_width=50):
-
-        self.pad_width = pad_width
-        self.pad_spectrograph(pad_width=pad_width)
-        self.create_RGB_channels()
-
-        masks = self.mask_generator.generate(self.test_image)
-
-        if remove_largest:
-            masks = self.rm_largest_mask(masks)
-        
-        self.flags = self.create_flags(masks)
-
-        self.flags = self.flags[pad_width:-pad_width,pad_width:-pad_width]
-        self.spectrograph = self.temp_spectrograph[pad_width:-pad_width,pad_width:-pad_width]
-
-    def run_sam_predict(self,pad_width=50):
-
-        self.pad_width = pad_width
-        # self.pad_spectrograph(pad_width=pad_width)
-        # self.create_RGB_channels()
-        self.predictor.set_image(self.test_image)
-
-        self.find_spectrograph_peaks()
-        masks, scores, logits = self.predictor.predict(
-            point_coords=self.max_peaks[0],
-            point_labels=self.max_peaks[1],
-            multimask_output=False,
-        )
-
-        self.masks = masks
-        self.scores = scores
-        self.logits = logits
-        self.flags = np.logical_not(masks[0])
-        # self.flags = self.flags[pad_width:-pad_width,pad_width:-pad_width]
-        # self.spectrograph = self.spectrograph[pad_width:-pad_width,pad_width:-pad_width]
-
-    def load_model(self,model_path, sam_type="huge"):
-        # "/home/gpuhost002/ddeal/RFI-AI/models/derod_checkpoint_large_real_data_test_v3.pth"
-        # Load the model configuration
-
-        model_path = str(model_path)
-        sam_type = str(sam_type)
-
-        self.model_config = SamConfig.from_pretrained(f"facebook/sam-vit-{sam_type}")
-        self.processor = SamProcessor.from_pretrained(f"facebook/sam-vit-{sam_type}")
-
-        # Create an instance of the model architecture with the loaded configuration
-        self.model = SamModel(config=self.model_config)
-        # Update the model by loading the weights from saved file.
-        self.model.load_state_dict(torch.load(model_path))
-
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
-
-
-    def run_rfi_model(self, pad_width=50, patch_run=False, threshold=0.5, save=False):
-
-        self.pad_width = pad_width
-
-        print("SAMRFI Progress...")
-
-
-        if not patch_run:
-
-            pol_flags_list = []
-
-            for baseline in tqdm(range(self.rfi_antenna_data.shape[0])):
-
-                flags = []
-
-                for pol in range(self.rfi_antenna_data.shape[1]):
-
-                    data = self.rfi_antenna_data[baseline,pol,:,:]
-
-                    single_data = data/np.median(data)
-                    
-                    stat = stats.median_abs_deviation(single_data, axis=None)
-                    median = np.median(single_data)
-                    single_data = np.clip(single_data, (median + (stat * 1)),(median + (stat * 10)))
-
-                    single_data = np.pad(single_data, pad_width=((pad_width, pad_width), (pad_width, pad_width)), mode='constant', constant_values=(median*.5 + (stat * 1)))
-
-                    single_patch = Image.fromarray(single_data).convert("RGB")
-                    bbox = self.get_bounding_box(single_data)
-
-                    inputs = self.processor(single_patch, input_boxes=[[bbox]], return_tensors="pt")
-
-                    # Move the input tensor to the GPU if it's not already there
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    self.model.eval()
-
-                    # forward pass
-                    with torch.no_grad():
-                        outputs = self.model(**inputs,multimask_output=False)
-
-                        masks = self.processor.image_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu())
-                        masks = masks[0].cpu().numpy().squeeze()
-
-                    masks = masks[pad_width:-pad_width,pad_width:-pad_width]
-
-                    flags.append(masks)
-                pol_flags = np.stack(flags)
-                pol_flags_list.append(pol_flags)
-
-            self.pol_flags_list = pol_flags_list
-            baseline_flags = np.stack(pol_flags_list)
-            
-            self.flags = baseline_flags
-
-
-            np.save(f"{self.directory}/flags.npy",baseline_flags)
-
-        elif patch_run:
-
-            pol_flags_list = []
-
-            for baseline in tqdm(range(self.rfi_antenna_data.shape[0])):
-
-                flags = []
-
-                for pol in range(self.rfi_antenna_data.shape[1]):
-
-                    data = self.rfi_antenna_data[baseline,pol,:,:]
-                    single_data = np.sqrt(data)
-                    single_data = single_data/np.median(single_data)
-
-                    patches, original_shape, padded_shape = self.create_patches(single_data)
-
-                    patch_flags = []
-
-                    for patch in patches:
-
-                        single_patch = Image.fromarray(patch).convert("RGB")
-
-                        bbox = self.get_bounding_box(patch)
-
-                        inputs = self.processor(single_patch, input_boxes=[[bbox]], return_tensors="pt")
-
-                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                        self.model.eval()
-
-                        with torch.no_grad():
-                            outputs = self.model(**inputs,multimask_output=False)
-
-                            single_patch_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
-                            single_patch_prob = single_patch_prob.cpu().numpy().squeeze()
-                            single_patch_prediction = (single_patch_prob > threshold)
-
-                        patch_flags.append(single_patch_prediction > 0)
-
-                    master_flag = self.reconstruct_image(patch_flags, original_shape, padded_shape)
-
-                    flags.append(master_flag)
-
-                pol_flags = np.stack(flags)
-                pol_flags_list.append(pol_flags)
-
-            self.pol_flags_list = pol_flags_list
-            baseline_flags = np.stack(pol_flags_list)
-
-            self.flags = baseline_flags
-
-            self.create_residuals()
+    
 
     def test_realdata(self, save=True,):
 
