@@ -1,17 +1,25 @@
-class SyntheticRFI:
+import numpy as np
+import pandas as pd
 
-    def __init__(self, min_freq, max_freq, time_int, points, num_persistent=6, num_intermittent=2, noise=10, mean=5, edge_buffer=50):
-        self.frequencies = np.linspace(min_freq, max_freq, points)
-        self.time_int = time_int
-        self.points = points
-        self.edge_buffer = edge_buffer
-        self.min_freq = min_freq
-        self.max_freq = max_freq
-        self.noise = noise
-        self.mean = mean
+from .radiorfi import RadioRFI
+
+class SyntheticRFI(RadioRFI):
+
+    def __init__(self, dir_path=False):
+        
+        super().__init__(dir_path)
+        
+        self.time_int = None
+        self.points = None
+        self.edge_buffer = None
+        self.min_freq = None
+        self.max_freq = None
+        self.noise = None
+        self.mean = None
+        self.temp_spectrograph = None
+        self.model_spectrograph = None
+
         self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
-        self.temp_spectrograph = np.zeros((self.time_int, self.points))
-        self.model_spectrograph = np.zeros((self.time_int, self.points))
 
     def baseline_profile(self):
         """
@@ -62,7 +70,18 @@ class SyntheticRFI:
         if table:
             self.rfi_table = pd.concat([self.rfi_table, new_row], ignore_index=True)
 
-    
+    # def add_rifi_spectrograph(self, amplitude, center_freq, bandwidth, table=False, horizontal=False):
+    #     rfi_signal = self.generate_rfi(amplitude, center_freq, bandwidth)
+        
+    #     if horizontal:
+    #         for i in range(self.temp_spectrograph.shape[0]):
+    #             self.temp_spectrograph[i, :] += rfi_signal
+    #             new_row = pd.DataFrame({'rfi_type':['persistent'], 'amplitude': [amplitude], 'center_freq': [center_freq], 'bandwidth': [bandwidth], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
+    #     else:
+    #         for i in range(self.temp_spectrograph.shape[1]):
+    #             self.temp_spectrograph[:, i] += rfi_signal
+    #             new_row = pd.DataFrame({'rfi_type':['persistent'], 'amplitude': [amplitude], 'center_freq': [center_freq], 'bandwidth': [bandwidth], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
+
     def add_square_rifi_spectrograph(self, amplitude, center_freq, bandwidth, horizontal=False, table=False):
 
         ## note to self, make sure to add time to the table
@@ -217,3 +236,5 @@ class SyntheticRFI:
                                                 bandwidth=np.abs(np.random.normal(50, 10)), time_period=np.random.randint(1,500), duty_cycle=np.random.uniform(0,1), time_offset=np.random.randint(1, 100), table=True)
 
         self.spectrograph = self.temp_spectrograph + self.create_spectrograph()
+
+        self.rfi_antenna_data = self.spectrograph.reshape(1, 1, self.points, self.time_int)

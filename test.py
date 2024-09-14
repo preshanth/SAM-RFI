@@ -1,4 +1,4 @@
-from samrfi import RadioRFI, Plotter, RFIModels
+from samrfi import RadioRFI, Plotter, RFIModels, SyntheticRFI
 
 ms_path = '/home/gpuhost001/ddeal/RFI-AI/one_antenna_3C219_sqrt.ms'
 dir_path = '/home/gpuhost001/ddeal/RFI-AI/'
