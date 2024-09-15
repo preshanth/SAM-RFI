@@ -1,4 +1,4 @@
-from samrfi import RadioRFI, Plotter, RFIModels, SyntheticRFI
+from samrfi import RadioRFI, RFIModels
 
 ms_path = '/home/gpuhost001/ddeal/RFI-AI/one_antenna_3C219_sqrt.ms'
 dir_path = '/home/gpuhost001/ddeal/RFI-AI/'
@@ -17,4 +17,6 @@ model.run_rfi_model(patch_run=False)
 print(datarfi.flags.shape)
 print(datarfi.rfi_antenna_data.shape)
 
-datarfi.plotter.plot(mode='FLAG', baseline=0, polarization=0)
+# datarfi.plotter.plot(mode='FLAG', baseline=0, polarization=0)
+
+datarfi.radio_metrics.calculate_metrics(datarfi.flags)
