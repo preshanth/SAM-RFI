@@ -112,6 +112,8 @@ class RadioRFIMetricsCalculator:
 
                 self.metrics_results = metrics_df
 
+                return self.metrics_results
+
     def test_realdata(self, save=True,):
 
         rfi_per = []
