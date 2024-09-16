@@ -9,4 +9,6 @@ synthetic_rfi.generate_waterfall(pers_freq_gauss=5, pers_time_gauss=1, inter_fre
 print(synthetic_rfi.spectrograph.shape)
 
 print(synthetic_rfi.rfi_antenna_data.shape)
-synthetic_rfi.plotter.plot(mode='DATA', baseline=0, polarization=0)
+
+print(synthetic_rfi.rfi_table)
+# synthetic_rfi.plotter.plot(mode='DATA', baseline=0, polarization=0)

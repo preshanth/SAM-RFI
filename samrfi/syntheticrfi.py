@@ -206,8 +206,10 @@ class SyntheticRFI(RadioRFI):
         # Generate the RFI signals for both channels
         if func_type == 'GAUSS':
             rfi_signal_1 = self.gaussian_function(self.frequencies, amplitude, center_freq, bandwidth)
+            rfi_type = 'intermittent_gauss'
         if func_type == 'SQUARE':
             rfi_signal_1 = self.square_function(self.frequencies, amplitude, center_freq, bandwidth)
+            rfi_type = 'intermittent_square'
         else:
             raise ValueError("Invalid func_type value. Use 'GAUSS' or 'SQUARE'.")
         
@@ -221,7 +223,7 @@ class SyntheticRFI(RadioRFI):
         # Update the RFI table
         if table:
             new_rows = pd.DataFrame({
-                'rfi_type': ['intermittent'],
+                'rfi_type': [rfi_type],
                 'amplitude': [amplitude],
                 'center_freq': [center_freq],
                 'bandwidth': [bandwidth],
