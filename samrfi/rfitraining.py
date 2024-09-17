@@ -112,7 +112,7 @@ class RFITraining:
         
         self.dataset = dataset
 
-    def train(self, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
+    def train(self, num_epochs=3, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
 
         rfi_combined = four_rotations(self.rfi_instance.rfi_antenna_data)
         
@@ -159,7 +159,6 @@ class RFITraining:
 
         # Training loop
         ave_meanloss = []
-        num_epochs = 40
 
         model.to(self.device)
         model.train()
@@ -203,11 +202,19 @@ class RFITraining:
 
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_sam-{sam_checkpoint}_{timestamp}.pth"
+        filename = f"model_stretch{stretch}_sigma{flag_sigma}_patch{patch_method}_size{patch_size}_sam-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
 
 
         if trained_model_path:
-            torch.save(model.state_dict(), trained_model_path)
+            try:
+                torch.save(model.state_dict(), trained_model_path)
+            except:
+                print("Model path not found. Saving model to default directory.")
+                method_dir = os.path.join(self.rfi_instance.directory, 'models')
+                
+                if not os.path.exists(method_dir):
+                    os.makedirs(method_dir)
+                torch.save(model.state_dict(), os.path.join(method_dir, filename))
         else:
             method_dir = os.path.join(self.rfi_instance.directory, 'models')
             if not os.path.exists(method_dir):
