@@ -15,6 +15,16 @@ import sys
 sys.path.insert(0, os.path.abspath('../'))
 
 import samrfi
+
+from unittest.mock import MagicMock
+
+class Mock(MagicMock):
+    @classmethod
+    def __getattr__(cls, name):
+        return MagicMock()
+
+MOCK_MODULES = ['casatools']
+sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 # -- Project information -----------------------------------------------------
 
 project = 'samrfi'
@@ -52,7 +62,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_logo = "spklogo3.png"
+# html_logo = "spklogo3.png"
 
 html_theme = 'sphinx_rtd_theme'
 
