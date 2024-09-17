@@ -4,4 +4,4 @@ from .syntheticrfi import SyntheticRFI
 from .metricscalculator import RadioRFIMetricsCalculator
 from .metricscalculator import SyntheticRFIMetricsCalculator
 from .plotter import Plotter
-from .utilities import Utilities
+from .utilities import *

@@ -12,6 +12,7 @@ from tqdm import tqdm
 from scipy import stats
 
 from .radiorfi import RadioRFI
+from .utilities import *
 
 class RFIModels:
 
@@ -116,7 +117,7 @@ class RFIModels:
                     single_data = data/np.median(data)
                     
                     single_patch = Image.fromarray(single_data).convert("RGB")
-                    bbox = self.get_bounding_box(single_data)
+                    bbox = get_bounding_box(single_data)
 
                     inputs = self.processor(single_patch, input_boxes=[[bbox]], return_tensors="pt")
 
@@ -152,9 +153,9 @@ class RFIModels:
 
                     data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
 
-                    single_data = single_data/np.median(data)
+                    single_data = data/np.median(data)
 
-                    patches, original_shape, padded_shape = self.create_patches(single_data)
+                    patches, original_shape, padded_shape = create_patches(single_data)
 
                     patch_flags = []
 
@@ -162,7 +163,7 @@ class RFIModels:
 
                         single_patch = Image.fromarray(patch).convert("RGB")
 
-                        bbox = self.get_bounding_box(patch)
+                        bbox = get_bounding_box(patch)
 
                         inputs = self.processor(single_patch, input_boxes=[[bbox]], return_tensors="pt")
 
@@ -178,7 +179,7 @@ class RFIModels:
 
                         patch_flags.append(single_patch_prediction > 0)
 
-                    master_flag = self.reconstruct_image(patch_flags, original_shape, padded_shape)
+                    master_flag = reconstruct_image(patch_flags, original_shape, padded_shape)
 
                     flags.append(master_flag)
 
@@ -195,38 +196,6 @@ class RFIModels:
         if save:    
             np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
 
-
-
-    def find_spectrograph_peaks(self, min_distance=10, threshold_abs=30):
-        """
-        Find peaks in the spectrograph image.
-
-        Parameters:
-            spectrograph (numpy.ndarray): The input spectrograph image.
-            min_distance (int): The minimum distance between peaks. Default is 10.
-            threshold_abs (int): The minimum intensity value for peaks. Default is 25.
-
-        Returns:
-            numpy.ndarray: An array of peak coordinates.
-        """
-        max_peaks = peak_local_max(self.spectrograph, min_distance=min_distance, threshold_abs=threshold_abs)
-        self.max_peaks = max_peaks, np.ones(len(max_peaks))
-
-    def get_bounding_box(self, ground_truth_map):
-        # get bounding box from mask
-        ## https://github.com/bnsreenu/python_for_microscopists/blob/master/331_fine_tune_SAM_mito.ipynb
-        y_indices, x_indices = np.where(ground_truth_map > 0)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        # add perturbation to bounding box coordinates
-        H, W = ground_truth_map.shape
-        x_min = max(0, x_min - np.random.randint(0, 20))
-        x_max = min(W, x_max + np.random.randint(0, 20))
-        y_min = max(0, y_min - np.random.randint(0, 20))
-        y_max = min(H, y_max + np.random.randint(0, 20))
-        bbox = [x_min, y_min, x_max, y_max]
-
-        return bbox
 
     def create_RGB_channels(self,zeroR=False,zeroG=False,zeroB=False):
         """
@@ -265,38 +234,3 @@ class RFIModels:
             self.image_B = np.zeros((self.spectrograph.shape[0], self.spectrograph.shape[1]))
 
         self.test_image = np.dstack([self.image_R,self.image_G,self.image_B])
-
-    def create_patches(self, image, patch_size=256):
-        # ChatGPT assisted with this function
-        # Get image dimensions
-        rows, cols = image.shape
-        
-        # Calculate padding size
-        pad_rows = (patch_size - rows % patch_size) % patch_size
-        pad_cols = (patch_size - cols % patch_size) % patch_size
-
-        # Pad the image to ensure it can be evenly divided into patches
-        padded_image = np.pad(image, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
-
-        # Create patches
-        patches = []
-        for i in range(0, padded_image.shape[0], patch_size):
-            for j in range(0, padded_image.shape[1], patch_size):
-                patch = padded_image[i:i + patch_size, j:j + patch_size]
-                patches.append(patch)
-        
-        return patches, image.shape, padded_image.shape    
-
-    def reconstruct_image(self, patches, original_shape, padded_shape, patch_size=256):
-        # ChatGPT assisted with this function
-        # Create an empty array to hold the reconstructed image
-        reconstructed_image = np.zeros(padded_shape)
-        
-        patch_index = 0
-        for i in range(0, padded_shape[0], patch_size):
-            for j in range(0, padded_shape[1], patch_size):
-                reconstructed_image[i:i + patch_size, j:j + patch_size] = patches[patch_index]
-                patch_index += 1
-        
-        # Remove the padding to get the original image size
-        return reconstructed_image[:original_shape[0], :original_shape[1]]

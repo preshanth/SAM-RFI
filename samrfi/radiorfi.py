@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from .plotter import Plotter
 from .metricscalculator import RadioRFIMetricsCalculator, SyntheticRFIMetricsCalculator
+
 class RadioRFI:
 
     def __init__(self, vis=False, dir_path=None):
@@ -15,11 +16,11 @@ class RadioRFI:
         self.radio_metrics = RadioRFIMetricsCalculator(self)
         self.synthetic_metrics = SyntheticRFIMetricsCalculator(self)
 
-        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'duty_cycle', 'time_period', 'time_offset'])
-
         self.rfi_antenna_data = None
         self.flags = None
 
+        self.module_type = 'radio'
+        
         if dir_path:
             if dir_path.endswith('/'):
                 dir_path = dir_path[:-1]

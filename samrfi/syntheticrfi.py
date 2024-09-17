@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from .radiorfi import RadioRFI
+from .metricscalculator import SyntheticRFIMetricsCalculator
 
 class SyntheticRFI(RadioRFI):
 
@@ -10,6 +11,10 @@ class SyntheticRFI(RadioRFI):
         
         super().__init__(dir_path)
         
+        self.module_type = 'synthetic'
+
+        self.synthetic_metrics = SyntheticRFIMetricsCalculator(self)
+
         self.points_time = points_time
         self.points_freq = points_freq
 
@@ -212,8 +217,6 @@ class SyntheticRFI(RadioRFI):
             rfi_type = 'intermittent_square'
         else:
             raise ValueError("Invalid func_type value. Use 'GAUSS' or 'SQUARE'.")
-        
-        print(rfi_signal_1.shape)
 
         # Add the intermittent RFI to the spectrograph
         for t in range(self.points_time):
@@ -237,7 +240,7 @@ class SyntheticRFI(RadioRFI):
         
         return modified_spectrograph
 
-    def generate_waterfall(self, pers_freq_gauss=1, pers_time_gauss=0, inter_freq_gauss=0, inter_freq_square=0, pers_freq_square=0, pers_time_square=0, noise=10, mean=5, edge_buffer=50):
+    def generate_waterfall(self, mean_rfi=1, std_rfi=5, pers_freq_gauss=1, pers_time_gauss=0, inter_freq_gauss=0, inter_freq_square=0, pers_freq_square=0, pers_time_square=0, noise=10, mean=5, edge_buffer=50):
         """
         Generate a waterfall plot with simulated radio frequency interference (RFI).
 
@@ -255,6 +258,9 @@ class SyntheticRFI(RadioRFI):
         self.noise = noise
         self.mean = mean
 
+        mean_rfi = 1
+        std_rfi = 5
+
         persistent_rfi_spec = self.blank_spectrograph
         persistent_rfi_time = self.blank_spectrograph
         intermittent_rfi_gauss = self.blank_spectrograph
@@ -265,7 +271,7 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(pers_freq_gauss):
             spec_list.append(self.add_gaussian_rfi_spectrograph(
-                amplitude=np.random.normal(50, 10),
+                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
                 center=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
                 width=np.abs(np.random.normal(50, 3)),
                 rfi_axis='FREQ',
@@ -276,7 +282,7 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(pers_time_gauss):
             spec_list.append(self.add_gaussian_rfi_spectrograph(
-                amplitude=np.random.normal(50, 10),
+                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
                 center=np.random.uniform(self.min_time + edge_buffer, self.max_time - edge_buffer),
                 width=np.abs(np.random.normal(50, 3)),
                 rfi_axis='TIME',
@@ -287,7 +293,7 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(inter_freq_gauss):
             spec_list.append(self.intermittent_rfi(
-                amplitude=np.random.normal(50, 10),
+                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
                 center_freq=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
                 bandwidth=np.abs(np.random.normal(50, 10)),
                 time_period=np.random.randint(1, 500),
@@ -301,7 +307,7 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(inter_freq_square):
             spec_list.append(self.intermittent_rfi(
-                amplitude=np.random.normal(50, 10),
+                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
                 center_freq=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
                 bandwidth=np.abs(np.random.normal(50, 10)),
                 time_period=np.random.randint(1, 500),
@@ -315,7 +321,7 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(pers_freq_square):
             spec_list.append(self.add_square_rfi_spectrograph(
-                amplitude=np.random.uniform(50, 10), 
+                amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)), 
                 center=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer), 
                 width=np.random.uniform(1, 10), 
                 rfi_axis='FREQ',
@@ -326,12 +332,14 @@ class SyntheticRFI(RadioRFI):
         spec_list = []
         for i in np.arange(pers_time_square):
             spec_list.append(self.add_square_rfi_spectrograph(
-                amplitude=np.random.uniform(50, 10), 
+                amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)), 
                 center=np.random.uniform(self.min_time + edge_buffer, self.max_time - edge_buffer), 
                 width=np.random.uniform(75, 10), 
                 rfi_axis='TIME',
                 table=True))
         square_rfi_time = np.sum(spec_list, axis=0)
 
-        self.spectrograph = persistent_rfi_spec + persistent_rfi_time + intermittent_rfi_gauss + intermittent_rfi_square + square_rfi_spec + square_rfi_time + self.create_spectrograph()
+        self.synthetic_rfi_array = persistent_rfi_spec + persistent_rfi_time + intermittent_rfi_gauss + intermittent_rfi_square + square_rfi_spec + square_rfi_time
+        self.spectrograph = self.synthetic_rfi_array + self.create_spectrograph()
+
         self.rfi_antenna_data = self.spectrograph.reshape(1, 1, self.points_freq, self.points_time)
