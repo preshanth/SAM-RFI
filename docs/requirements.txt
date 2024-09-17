@@ -9,5 +9,7 @@ scipy
 astropy
 matplotlib
 casatools
+casadata
+casaconfig
 scikit-image
 monai
