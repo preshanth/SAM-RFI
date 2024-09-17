@@ -4,7 +4,7 @@
 
 -------------------------------------------------------------------------------------
 
-**Authors:** Derod Deal (dealderod@gmail.edu), Preshanth Jagannathana (pjaganna@nrao.edu)
+**Authors:** Derod Deal (dealderod@gmail.com), Preshanth Jagannathana (pjaganna@nrao.edu)
 
 `SamRFI` is a python package that ultilizes Meta's Segment Anything Model (SAM) for radio frequency interference (RFI) segmentation.
 
@@ -23,4 +23,28 @@ pip install samrfi
 
 ## Using the library
 
-Get started with `SamRFI` with only two lines of code.
+Get started with `SamRFI` with a few lines of code.
+
+```python
+
+from samrfi import RadioRFI
+
+ms_path = '/home/gpuhost001/ddeal/RFI-AI/one_antenna_3C219_sqrt.ms'
+
+datarfi = RadioRFI(vis=ms_path)
+datarfi.load(ant_i=1)
+
+```
+
+Using the `RadioRFI` class, `SamRFI` loads in data from a specified measurement set as time-frequency spectrograms. We can also plot the waterfall plots using the `Plotter` class:
+
+```python
+
+datarfi.plotter.plot(mode='DATA', baseline=0, polarization=0)
+
+```
+
+![](https://github.com/preshanth/SAM-RFI/blob/main/plots/samrfi_3C219.png)
+
+The data is loaded per baseline per polarization for each waterfall plot. The y-axis represents the time steps while the x-axis represents the number of channels (all spectral window channels attached together).
+

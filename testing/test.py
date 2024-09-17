@@ -1,3 +1,6 @@
+import sys
+sys.path.append('../')
+
 from samrfi import RadioRFI, RFIModels
 import numpy as np
 ms_path = '/home/gpuhost001/ddeal/RFI-AI/one_antenna_3C219_sqrt.ms'

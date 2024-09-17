@@ -65,7 +65,7 @@ class RadioRFI:
         else:
             self.vis = None
 
-    def load(self, vis=None, mode='DATA', ant_i=2):
+    def load(self, vis=None, mode='DATA', ant_i=None):
 
         if not self.vis:
             self.vis = str(vis)
@@ -95,7 +95,9 @@ class RadioRFI:
         antenna_baseline_map = []
 
 
-        self.num_antennas_i = ant_i
+        if ant_i:
+            self.num_antennas_i = ant_i
+
         for i in tqdm(range(self.num_antennas_i)):
        # for i in tqdm(range(self.num_antennas)):
             for j in tqdm(range(i + 1, self.num_antennas)):

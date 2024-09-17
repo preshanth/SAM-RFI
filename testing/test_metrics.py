@@ -1,3 +1,6 @@
+import sys
+sys.path.append('../')
+
 from samrfi import SyntheticRFI, RFIModels
 
 dir_path = '/home/gpuhost001/ddeal/RFI-AI/'
