@@ -48,3 +48,18 @@ datarfi.plotter.plot(mode='DATA', baseline=0, polarization=0)
 
 The data is loaded per baseline per polarization for each waterfall plot. The y-axis represents the time steps while the x-axis represents the number of channels (all spectral window channels attached together).
 
+
+After the data is loaded, you can immediately run a retrained `SamRFI` model to segment RFI and generate flags.
+
+```python
+
+sam_checkpoint = "/home/gpuhost001/ddeal/RFI-AI/models/sam_vit_h_4b8939.pth"
+sam_type = "vit_h"
+
+model_path = "/home/gpuhost001/ddeal/RFI-AI/models/derod_checkpoint_huge_calib_phase_patch_epoch40_sigma5_sqrt_custom_perpatch.pth"
+model = RFIModels(sam_checkpoint, sam_type, radiorfi_instance=datarfi, device='cuda',)
+model.load_model(model_path)
+model.run_rfi_model(patch_run=False)
+
+```
+
