@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath('../'))
 
 import samrfi
 
-casatools_directory = ".casa/data"
+casatools_directory = "~/.casa/data"
 
 if not os.path.exists(casatools_directory):
     os.makedirs(casatools_directory)
