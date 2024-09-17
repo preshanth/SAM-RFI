@@ -15,6 +15,12 @@ import sys
 sys.path.insert(0, os.path.abspath('../'))
 
 import samrfi
+
+casatools_directory = "/home/docs/.casa/data"
+
+if not os.path.exists(casatools_directory):
+    os.makedirs(casatools_directory)
+
 # -- Project information -----------------------------------------------------
 
 project = 'samrfi'
