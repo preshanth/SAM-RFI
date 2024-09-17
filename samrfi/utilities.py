@@ -136,7 +136,7 @@ def getvals(tb, col='DATA', vis="", spw="", scan=""):
     tb.close()
     return dat
 
-def four_rotations(rfi_antenna_data)
+def four_rotations(rfi_antenna_data):
 
     rfi_combined = []
 
@@ -146,8 +146,6 @@ def four_rotations(rfi_antenna_data)
             rfi_combined.append(np.flip(per_pol, axis=0))
             rfi_combined.append(per_pol.T)
             rfi_combined.append(np.flip(per_pol.T, axis=0))
-
-    rfi_combined = np.stack(rfi_combined)
 
     return rfi_combined
 

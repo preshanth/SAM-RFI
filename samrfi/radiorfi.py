@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 from casatools import table
+
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
 from tqdm import tqdm
 
@@ -35,6 +36,11 @@ class RadioRFI:
             os.makedirs(new_directory)
 
         self.directory = new_directory
+
+        casalogs_directory = os.path.join(current_directory, 'casalogs')
+
+        if not os.path.exists(casalogs_directory):
+            os.makedirs(casalogs_directory)
         
         if vis:
             # Path to ms

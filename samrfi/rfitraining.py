@@ -2,11 +2,10 @@ from tqdm import tqdm
 from statistics import mean
 import matplotlib.pyplot as plt
 
-
 import torch
 from torch.nn.functional import threshold, normalize, interpolate
 from torchvision import transforms
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 import monai
@@ -49,7 +48,7 @@ class RFITraining:
 
         for data in tqdm(self.patched_data):
             
-            data = stretch(data)
+            data = stretch_func(data)
 
             data = data/np.median(data)
 
@@ -63,7 +62,7 @@ class RFITraining:
 
         flags = []
 
-        for data in tqdm(images):
+        for data in tqdm(self.patched_data):
             stat = stats.median_abs_deviation(data, axis=None)
             median = np.median(data)
 
@@ -75,14 +74,15 @@ class RFITraining:
 
     def rm_blank_patches(self):
 
+        filtered_flags = [arr for arr in self.patched_flags if arr.any()]
         # Create a mask indicating which arrays contain only False values
-        filtered_flags = [not arr.any() for arr in self.patched_flags]
+        filtered_flags_im = [not arr.any() for arr in self.patched_flags]
 
         # Initialize an empty list to store the filtered arrays
         filtered_images = []
     
         # Iterate over the arrays and their corresponding mask values
-        for arr, m in zip(self.patched_data, filtered_flags):
+        for arr, m in zip(self.patched_data, filtered_flags_im):
             # If the mask value is False, add the array to the filtered list
             if not m:
                 filtered_images.append(arr)
@@ -93,16 +93,21 @@ class RFITraining:
     def randomize_patches(self,):
 
         # Shuffle the data and flags in unison
-        indices = np.random.permutation(filtered_images.shape[0])
+        indices = np.random.permutation(len(self.patched_data))
 
         self.patched_data = self.patched_data[indices]
         self.patched_flags = self.patched_flags[indices]
 
-    def create_dataset(self,):
+    def create_dataset(self,num_patches=None):
+        print(self.patched_data.shape, self.patched_flags.shape)
+
+        if num_patches:
+            self.patched_data = self.patched_data[:num_patches]
+            self.patched_flags = self.patched_flags[:num_patches]
 
         dataset_dict = {
-            "image": [Image.fromarray(img) for img in filtered_images],
-            "label": [Image.fromarray(mask) for mask in filtered_flags],
+            "image": [Image.fromarray(img) for img in self.patched_data],
+            "label": [Image.fromarray(mask) for mask in self.patched_flags],
         }
 
         # Create the dataset using the datasets.Dataset class
@@ -112,7 +117,7 @@ class RFITraining:
         
         self.dataset = dataset
 
-    def train(self, num_epochs=3, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
+    def train(self, num_epochs=3, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, num_patches=None, batch_size=4, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
 
         rfi_combined = four_rotations(self.rfi_instance.rfi_antenna_data)
         
@@ -123,7 +128,7 @@ class RFITraining:
         self.create_patched_flags(sigma=flag_sigma)
         self.rm_blank_patches()
         self.randomize_patches()
-        self.create_dataset()
+        self.create_dataset(num_patches=num_patches)
 
         if sam_checkpoint == 'huge':
             sam_type = "sam-vit-huge"
@@ -137,12 +142,12 @@ class RFITraining:
         processor = SamProcessor.from_pretrained(f"facebook/{sam_type}")
 
         # Create a new train_dataset with the updated dataset
-        train_dataset = SAMDataset(dataset=dataset, processor=processor)
+        train_dataset = SAMDataset(dataset=self.dataset , processor=processor)
 
         model = SamModel.from_pretrained(f"facebook/{sam_type}")
 
         # Create a new train_dataloader with the updated train_dataset
-        train_dataloader = DataLoader(train_dataset, batch_size=4,shuffle=True,)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size,shuffle=True,)
         
         # make sure we only compute gradients for mask decoder
         for name, param in model.named_parameters():
@@ -169,13 +174,13 @@ class RFITraining:
 
             for batch in tqdm(train_dataloader):
                 # forward pass
-                outputs = model(pixel_values=batch["pixel_values"].to(device),
-                                input_boxes=batch["input_boxes"].to(device),
+                outputs = model(pixel_values=batch["pixel_values"].to(self.device),
+                                input_boxes=batch["input_boxes"].to(self.device),
                                 multimask_output=False)
 
                 # compute loss
                 predicted_masks = outputs.pred_masks.squeeze(1)
-                ground_truth_masks = batch["ground_truth_mask"].float().to(device)
+                ground_truth_masks = batch["ground_truth_mask"].float().to(self.device)
 
                 # Ensure ground truth masks are resized to match the predicted masks
                 if len(ground_truth_masks.shape) == 3:  # Add channel dimension if missing
@@ -202,7 +207,7 @@ class RFITraining:
 
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"model_stretch{stretch}_sigma{flag_sigma}_patch{patch_method}_size{patch_size}_sam-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
+        filename = f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_sam-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
 
 
         if trained_model_path:
@@ -227,7 +232,7 @@ class RFITraining:
 
             fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
 
-            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} ({len(self.patched_data)})", color="blue")
+            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} — Epoch {num_epochs} Patches {len(self.patched_data)}", color="blue")
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Mean Loss")
             ax.set_title("Mean Loss vs Epoch")
@@ -240,7 +245,7 @@ class RFITraining:
             plt.show()
 
 
-class SAMDataset(Dataset):
+class SAMDataset(TorchDataset):
     """
     This class is used to create a dataset that serves input images and masks.
     It takes a dataset and a processor as input and overrides the __len__ and __getitem__ methods of the Dataset class.
