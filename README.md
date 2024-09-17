@@ -1,5 +1,4 @@
 # SamRFI - AI RFI Segmentation and CASA Flagging Pipeline 
-This is an exploration of Segmentation based Radio Frequency Intereference (RFI) mitigation.
 
 ![](https://github.com/preshanth/SAM-RFI/blob/main/samrfi.png)
 
@@ -7,4 +6,4 @@ This is an exploration of Segmentation based Radio Frequency Intereference (RFI)
 
 **Authors:** Derod Deal (dealderod@gmail.edu), Preshanth Jagannathana (pjaganna@nrao.edu)
 
-`SamRFI` is a python package that ultilizes Meta's Segment Anything Model (SAM) for RFI segmentation.
+`SamRFI` is a python package that ultilizes Meta's Segment Anything Model (SAM) for radio frequency interference (RFI) segmentation.
