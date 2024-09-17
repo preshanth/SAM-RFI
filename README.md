@@ -6,7 +6,7 @@
 
 **Authors:** Derod Deal (dealderod@gmail.com), Preshanth Jagannathana (pjaganna@nrao.edu)
 
-`SamRFI` is a python package that ultilizes Meta's Segment Anything Model (SAM) for radio frequency interference (RFI) segmentation.
+`SamRFI` is a python package that ultilizes Meta's Segment Anything Model (SAM) for Radio Frequency Interference (RFI) segmentation.
 
 
 ## Statement of need
