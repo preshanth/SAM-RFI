@@ -15,4 +15,5 @@ scikit-image
 monai
 patchify
 datasets
+sphinx_rtd_theme
 git+https://github.com/facebookresearch/segment-anything.git
