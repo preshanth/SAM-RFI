@@ -26,5 +26,5 @@ API
 .. autoclass:: samrfi.MetricsCalculator
    :members:
 
-.. autoclass:: samrfi.utilities
+.. automodule:: samrfi.utilities
    :members:
