@@ -25,6 +25,15 @@ The pipeline is currently under development on `GitHub <https://github.com/presh
    <br>
 
 
+.. toctree::
+   :maxdepth: 3
+   :hidden:
+
+   Index <self>
+   Installation <installation>
+   Quickstart <quickstart>
+   API <api>
+
 License & Attribution
 =====================
 
