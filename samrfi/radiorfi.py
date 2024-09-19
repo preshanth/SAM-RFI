@@ -94,6 +94,7 @@ class RadioRFI:
 
         antenna_baseline_map = []
 
+        print('\nLoading data...')
 
         if ant_i:
             self.num_antennas_i = ant_i
