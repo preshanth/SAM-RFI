@@ -24,7 +24,6 @@ The pipeline is currently under development on `GitHub <https://github.com/presh
 .. raw:: html
    <br>
 
-
 .. toctree::
    :maxdepth: 3
    :hidden:

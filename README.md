@@ -78,7 +78,17 @@ To save these flags to the measurement set, use `RadioRFI.save_flags`:
 datarfi.save_flags()
 ```
 
-In this pipeline, you can also generate synthetic rfi waterfall data using `SyntheticRFI`. Data from either `RadioRFI` or `SyntheticRFI` can be used to train your own models using `RFITraining`. The peformance of flagging is handled with calculating metrics using `RadioRFIMetricsCalculator` and     `SyntheticRFIMetricsCalculator`. Please visit our readthedocs or our example notebooks for more information.
+In this pipeline, you can also generate synthetic rfi waterfall data using `SyntheticRFI`. Data from either `RadioRFI` or `SyntheticRFI` can be used to train your own models using `RFITraining`. The peformance of flagging is handled with calculating metrics using `RadioRFIMetricsCalculator` and     `SyntheticRFIMetricsCalculator`. Please visit our [readthedocs](https://sam-rfi.readthedocs.io/en/latest/) or our example notebooks for more information.
+
+#### SamRFI notebooks
+
+- `RadioRFI`
+- `SyntheticRFI`
+- `RFIModels`
+- `RFITraining`
+    - [Retraining SAM for RFI Segementation](https://github.com/preshanth/SAM-RFI/blob/main/notebooks/training_sammodels.ipynb)
+- Metrics Classes
+- `Plotter`
 
 This software is currently under development on [GitHub](https://github.com). To report bugs or to send feature requests, send us an email or [open an issue](https://github.com/preshanth/SAM-RFI/issues) on GitHub.
 

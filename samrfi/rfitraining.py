@@ -36,7 +36,7 @@ class RFITraining:
     ###############
 
     def apply_stretch(self, stretch='SQRT'):
-
+        
         images_med = []
 
         if stretch == 'SQRT':
@@ -45,6 +45,8 @@ class RFITraining:
             stretch_func = np.log10
         else:
             raise ValueError("Invalid stretch. Use 'SQRT' or 'LOG10'.")
+
+        print(f"\nApplying {stretch} stretch to {len(self.patched_data)} patches...")
 
         for data in tqdm(self.patched_data):
             
@@ -61,6 +63,8 @@ class RFITraining:
     def create_patched_flags(self,sigma=8):
 
         flags = []
+
+        print(f"\nCreating sigma {sigma} flags for each data patch...")
 
         for data in tqdm(self.patched_data):
             stat = stats.median_abs_deviation(data, axis=None)
@@ -167,6 +171,8 @@ class RFITraining:
 
         model.to(self.device)
         model.train()
+
+        print(f"\nTraining model...")
 
         for epoch in range(num_epochs):
             
