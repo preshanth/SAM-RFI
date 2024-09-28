@@ -14,4 +14,4 @@ datarfi.rfi_antenna_data = datarfi.rfi_antenna_data[0:2]
 print(datarfi.rfi_antenna_data.shape)
 
 new_model = RFITraining(datarfi, device='cuda')
-new_model.train(num_epochs=2, stretch='SQRT', num_patches=50)
+new_model.train(num_epochs=1, stretch='SQRT', num_patches=50)
