@@ -19,11 +19,11 @@ datarfi_original.rfi_antenna_data = new_arr
 print('WORKING')
 
 calib_phase_ori = RFITraining(datarfi_original, device='cuda')
-calib_phase_ori.train(num_epochs=60, stretch='SQRT', num_patches=150, flag_sigma=5, patch_size=256,)
+calib_phase_ori.train(num_epochs=70, stretch='SQRT', num_patches=600, flag_sigma=5, patch_size=256, plot=False)
 
 np.save('/home/gpuhost001/ddeal/RFI-AI/samrfi_data/models/sqrt_sigma5_29_1.npy', calib_phase_ori.ave_meanloss)
 
 calib_phase_ori = RFITraining(datarfi_original, device='cuda')
-calib_phase_ori.train(num_epochs=60, stretch='LOG10', num_patches=150, flag_sigma=5, patch_size=256,)
+calib_phase_ori.train(num_epochs=70, stretch='LOG10', num_patches=600, flag_sigma=8, patch_size=256, plot=False)
 
 np.save('/home/gpuhost001/ddeal/RFI-AI/samrfi_data/models/log10_sigma5_29_1.npy', calib_phase_ori.ave_meanloss)

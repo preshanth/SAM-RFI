@@ -27,7 +27,7 @@ class SyntheticRFI(RadioRFI):
         self.noise = None
         self.mean = None
         self.temp_spectrograph = None
-        self.model_spectrograph = None
+        self.model_spectrograph = np.zeros((self.points_freq, self.points_time))
 
         self.persistent_rfi_spec = np.zeros((self.points_freq, self.points_time))
         self.blank_spectrograph = np.zeros((self.points_freq, self.points_time))
@@ -144,41 +144,150 @@ class SyntheticRFI(RadioRFI):
     def add_spectrographs(self, spectrograph1, spectrograph2):
         return spectrograph1 + spectrograph2
 
-    def create_model_spectrograph(self,):
+    # def create_model_spectrograph(self,):
+    #     """
+    #     Create a model spectrograph based on the given table of RFI parameters.
+
+    #     Parameters:
+    #         table (pandas.DataFrame): A table containing RFI parameters such as amplitude, center frequency, and bandwidth.
+    #         frequencies (numpy.ndarray): An array of frequencies.
+    #         points_time (int): The number of time intervals.
+    #         points_freq (int): The number of points_freq in the spectrograph.
+
+    #     Returns:
+    #         numpy.ndarray: The model spectrograph.
+
+    #     """
+
+    #     self.temp_spectrograph = np.zeros((self.points_time, self.points_freq))
+    #     for index, row in self.rfi_table.iterrows():
+    #         if row['rfi_type'] == 'gauss_persistent_freq':
+    #             self.add_gaussian_rfi_spectrograph(row['amplitude'], 
+    #                                                     row['center_freq'],  row['bandwidth'])
+
+    #         if row['rfi_type'] == 'gauss_persistent_time':
+    #             self.add_gaussian_rfi_spectrograph(row['amplitude'], 
+    #                                                     row['center_freq'],  row['bandwidth'])
+
+    #         if row['rfi_type'] == 'intermittent':
+    #             self.intermittent_rfi(row['amplitude'], row['center_freq'],
+    #                                             row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'])
+
+    #         if row['rfi_type'] == 'persistent_sq':
+    #             self.add_square_rfi_spectrograph(row['amplitude'], 
+    #                                                     row['center_freq'],  row['bandwidth'])
+
+            
+    #     self.model_spectrograph = self.temp_spectrograph
+
+    # def create_model_spectrograph(self):
+    #     """
+    #     Create a model spectrograph based on the given table of RFI parameters.
+
+    #     Returns:
+    #         numpy.ndarray: The model spectrograph.
+    #     """
+    #     self.temp_spectrograph = np.zeros((self.points_time, self.points_freq))
+        
+    #     for index, row in self.rfi_table.iterrows():
+    #         if row['rfi_type'] == 'gauss_persistent_freq':
+    #             self.temp_spectrograph += self.add_gaussian_rfi_spectrograph(row['amplitude'], row['center_freq'], row['bandwidth'], rfi_axis='FREQ')
+            
+    #         elif row['rfi_type'] == 'gauss_persistent_time':
+    #             self.temp_spectrograph += self.add_gaussian_rfi_spectrograph(row['amplitude'], row['center_time'], row['timewidth'], rfi_axis='TIME')
+            
+    #         elif row['rfi_type'] == 'intermittent_gauss':
+    #             self.temp_spectrograph += self.intermittent_rfi(row['amplitude'], row['center_freq'], row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'], func_type='GAUSS')
+            
+    #         elif row['rfi_type'] == 'intermittent_square':
+    #             self.temp_spectrograph += self.intermittent_rfi(row['amplitude'], row['center_freq'], row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'], func_type='SQUARE')
+            
+    #         elif row['rfi_type'] == 'square_persistent_freq':
+    #             self.temp_spectrograph += self.add_square_rfi_spectrograph(row['amplitude'], row['center_freq'], row['bandwidth'], rfi_axis='FREQ')
+            
+    #         elif row['rfi_type'] == 'square_persistent_time':
+    #             self.temp_spectrograph += self.add_square_rfi_spectrograph(row['amplitude'], row['center_time'], row['timewidth'], rfi_axis='TIME')
+            
+    #         else:
+    #             raise ValueError(f"Unknown rfi_type: {row['rfi_type']}")
+
+    #     self.model_spectrograph = self.temp_spectrograph
+
+
+    def create_model_spectrograph(self):
         """
         Create a model spectrograph based on the given table of RFI parameters.
 
-        Parameters:
-            table (pandas.DataFrame): A table containing RFI parameters such as amplitude, center frequency, and bandwidth.
-            frequencies (numpy.ndarray): An array of frequencies.
-            points_time (int): The number of time intervals.
-            points_freq (int): The number of points_freq in the spectrograph.
-
         Returns:
-            numpy.ndarray: The model spectrograph.
-
+            None
         """
+        # Initialize the model spectrograph with zeros
+        self.model_spectrograph = np.zeros((self.points_freq, self.points_time))
 
-        self.temp_spectrograph = np.zeros((self.points_time, self.points_freq))
+        # Process each row in the rfi_table and add the corresponding RFI to the model spectrograph
         for index, row in self.rfi_table.iterrows():
             if row['rfi_type'] == 'gauss_persistent_freq':
-                self.add_gaussian_rfi_spectrograph(row['amplitude'], 
-                                                        row['center_freq'],  row['bandwidth'])
+                spectrogram = self.add_gaussian_rfi_spectrograph(
+                    amplitude=row['amplitude'],
+                    center=row['center_freq'],
+                    width=row['bandwidth'],
+                    rfi_axis='FREQ'
+                )
+                self.model_spectrograph += spectrogram
 
-            if row['rfi_type'] == 'gauss_persistent_time':
-                self.add_gaussian_rfi_spectrograph(row['amplitude'], 
-                                                        row['center_freq'],  row['bandwidth'])
+            elif row['rfi_type'] == 'gauss_persistent_time':
+                spectrogram = self.add_gaussian_rfi_spectrograph(
+                    amplitude=row['amplitude'],
+                    center=row['center_time'],
+                    width=row['timewidth'],
+                    rfi_axis='TIME'
+                )
+                self.model_spectrograph += spectrogram
 
-            if row['rfi_type'] == 'intermittent':
-                self.intermittent_rfi(row['amplitude'], row['center_freq'],
-                                                row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'])
+            elif row['rfi_type'] == 'square_persistent_freq':
+                spectrogram = self.add_square_rfi_spectrograph(
+                    amplitude=row['amplitude'],
+                    center=row['center_freq'],
+                    width=row['bandwidth'],
+                    rfi_axis='FREQ'
+                )
+                self.model_spectrograph += spectrogram
 
-            if row['rfi_type'] == 'persistent_sq':
-                self.add_square_rfi_spectrograph(row['amplitude'], 
-                                                        row['center_freq'],  row['bandwidth'])
+            elif row['rfi_type'] == 'square_persistent_time':
+                spectrogram = self.add_square_rfi_spectrograph(
+                    amplitude=row['amplitude'],
+                    center=row['center_time'],
+                    width=row['timewidth'],
+                    rfi_axis='TIME'
+                )
+                self.model_spectrograph += spectrogram
 
-            
-        self.model_spectrograph = self.temp_spectrograph
+            elif row['rfi_type'] == 'intermittent_gauss':
+                spectrogram = self.intermittent_rfi(
+                    amplitude=row['amplitude'],
+                    center_freq=row['center_freq'],
+                    bandwidth=row['bandwidth'],
+                    time_period=row['time_period'],
+                    duty_cycle=row['duty_cycle'],
+                    time_offset=row['time_offset'],
+                    func_type='GAUSS'
+                )
+                self.model_spectrograph += spectrogram
+
+            elif row['rfi_type'] == 'intermittent_square':
+                spectrogram = self.intermittent_rfi(
+                    amplitude=row['amplitude'],
+                    center_freq=row['center_freq'],
+                    bandwidth=row['bandwidth'],
+                    time_period=row['time_period'],
+                    duty_cycle=row['duty_cycle'],
+                    time_offset=row['time_offset'],
+                    func_type='SQUARE'
+                )
+                self.model_spectrograph += spectrogram
+
+            else:
+                raise ValueError(f"Unknown rfi_type: {row['rfi_type']}")
 
     def intermittent_rfi(self, amplitude, center_freq, bandwidth, time_period, duty_cycle, time_offset=0, func_type='GAUSS', table=False, ):
         # Generated by Copilot
@@ -212,7 +321,7 @@ class SyntheticRFI(RadioRFI):
         if func_type == 'GAUSS':
             rfi_signal_1 = self.gaussian_function(self.frequencies, amplitude, center_freq, bandwidth)
             rfi_type = 'intermittent_gauss'
-        if func_type == 'SQUARE':
+        elif func_type == 'SQUARE':
             rfi_signal_1 = self.square_function(self.frequencies, amplitude, center_freq, bandwidth)
             rfi_type = 'intermittent_square'
         else:
@@ -255,6 +364,9 @@ class SyntheticRFI(RadioRFI):
         Returns:
             None
         """
+
+        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'center_time', 'timewidth', 'duty_cycle', 'time_period', 'time_offset'])
+
         self.noise = noise
         self.mean = mean
 

@@ -50,7 +50,7 @@ class RFITraining:
 
         for data in tqdm(self.patched_data):
 
-            data = data/np.median(data)
+            data = data/np.nanmedian(data)
 
             images_med.append(data)
 
@@ -63,6 +63,9 @@ class RFITraining:
 
         for data in tqdm(self.patched_data):
             
+            # epsilon = 1e-10  # A small positive number
+            # data = np.where(data == 0, epsilon, data)
+
             data = stretch_func(np.abs(data))
 
             finite_data = data[np.isfinite(data)]
@@ -74,7 +77,7 @@ class RFITraining:
             # Replace infinite values with the MAD
             data[inf_mask] = mad
 
-            data = data/np.median(data)
+            data = data/np.nanmedian(data)
 
             images_med.append(data)
 
@@ -90,7 +93,7 @@ class RFITraining:
 
         for data in tqdm(self.patched_data):
             stat = stats.median_abs_deviation(data, axis=None)
-            median = np.median(data)
+            median = np.nanmedian(data)
 
             # Calculate upper and lower thresholds
             upper_threshold = median + (stat * sigma)

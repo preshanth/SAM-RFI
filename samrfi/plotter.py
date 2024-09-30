@@ -16,11 +16,17 @@ class Plotter:
         else:
             raise ValueError("Invalid mode. Use 'DATA' or 'FLAG'.")
 
-        norm = ImageNormalize(data[baseline,polarization,:,:].T, interval=ZScaleInterval())
+        if mode == 'DATA':
+            norm = ImageNormalize(data[baseline,polarization,:,:].T, interval=ZScaleInterval())
 
-        fig, ax = plt.subplots(figsize=(16, 8),dpi=300)
-        ax.imshow(data[baseline,polarization,:,:].T, aspect='auto', cmap='viridis', norm=norm)
-        plt.show()
+            fig, ax = plt.subplots(figsize=(16, 8),dpi=300)
+            ax.imshow(data[baseline,polarization,:,:].T, aspect='auto', cmap='viridis', norm=norm)
+            plt.show()
+
+        if mode == 'FLAG':
+            fig, ax = plt.subplots(figsize=(16, 8),dpi=300)
+            ax.imshow(data[baseline,polarization,:,:].T, aspect='auto', cmap='gray')
+            plt.show()
 
 
     def overplot_detection(self,save=False):

@@ -114,7 +114,7 @@ class RFIModels:
 
                     data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
 
-                    single_data = data/np.median(data)
+                    single_data = data/np.nanmedian(data)
                     
                     single_patch = Image.fromarray(single_data).convert("RGB")
                     bbox = get_bounding_box(single_data)
@@ -141,23 +141,29 @@ class RFIModels:
             
             self.flags = baseline_flags
 
+            self.RadioRFI.update_flags(self.flags)
+
         elif patch_run:
 
             pol_flags_list = []
+            pol_flags_prob_list = []
+
 
             for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
 
                 flags = []
+                flags_prob = []
 
                 for pol in range(self.RadioRFI.rfi_antenna_data.shape[1]):
 
                     data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
 
-                    single_data = data/np.median(data)
+                    single_data = data/np.nanmedian(data)
 
                     patches, original_shape, padded_shape = create_patches(single_data)
 
                     patch_flags = []
+                    patch_flags_prob = []
 
                     for patch in patches:
 
@@ -175,23 +181,36 @@ class RFIModels:
 
                             single_patch_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
                             single_patch_prob = single_patch_prob.cpu().numpy().squeeze()
-                            single_patch_prediction = (single_patch_prob > threshold)
+                            single_patch_prediction = single_patch_prob > threshold
 
-                        patch_flags.append(single_patch_prediction > 0)
+                        patch_flags.append(single_patch_prediction)
+                        patch_flags_prob.append(single_patch_prob)
+
 
                     master_flag = reconstruct_image(patch_flags, original_shape, padded_shape)
+                    master_flag_prob = reconstruct_image(patch_flags_prob, original_shape, padded_shape)
 
                     flags.append(master_flag)
+                    flags_prob.append(master_flag_prob)
+
 
                 pol_flags = np.stack(flags)
                 pol_flags_list.append(pol_flags)
+                
+                pol_flags_prob = np.stack(flags_prob)
+                pol_flags_prob_list.append(pol_flags_prob)
 
             self.pol_flags_list = pol_flags_list
             baseline_flags = np.stack(pol_flags_list)
 
             self.flags = baseline_flags
 
-        self.RadioRFI.update_flags(self.flags)
+            self.pol_flags_prob_list = pol_flags_prob_list
+            baseline_flags_prob = np.stack(pol_flags_prob_list)
+
+            self.flags_prob = baseline_flags_prob
+
+            self.RadioRFI.update_flags(baseline_flags)
         
         if save:    
             np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
