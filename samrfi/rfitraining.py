@@ -46,11 +46,33 @@ class RFITraining:
         else:
             raise ValueError("Invalid stretch. Use 'SQRT' or 'LOG10'.")
 
-        print(f"\nApplying {stretch} stretch to {len(self.patched_data)} patches...")
+        print(f"\nApplying median normalization only to {len(self.patched_data)} patches...")
+
+        for data in tqdm(self.patched_data):
+
+            data = data/np.median(data)
+
+            images_med.append(data)
+
+        images = np.stack(images_med)
+
+        self.patched_data_norm_only = images
+
+        print(f"\nApplying {stretch} stretch and normalization to {len(self.patched_data)} patches...")
+        images_med = []
 
         for data in tqdm(self.patched_data):
             
-            data = stretch_func(data)
+            data = stretch_func(np.abs(data))
+
+            finite_data = data[np.isfinite(data)]
+            mad = stats.median_abs_deviation(finite_data, nan_policy='omit')
+
+            # Identify the indices of infinite values (inf and -inf)
+            inf_mask = np.isinf(data)
+
+            # Replace infinite values with the MAD
+            data[inf_mask] = mad
 
             data = data/np.median(data)
 
@@ -70,7 +92,12 @@ class RFITraining:
             stat = stats.median_abs_deviation(data, axis=None)
             median = np.median(data)
 
-            flag = data > (median + (stat * sigma))
+            # Calculate upper and lower thresholds
+            upper_threshold = median + (stat * sigma)
+            lower_threshold = median - (stat * sigma)
+
+            # Flag data points outside the thresholds
+            flag = (data > upper_threshold) | (data < lower_threshold)
             
             flags.append(flag)
 
@@ -84,6 +111,7 @@ class RFITraining:
 
         # Initialize an empty list to store the filtered arrays
         filtered_images = []
+        filtered_images_norm_only = []
     
         # Iterate over the arrays and their corresponding mask values
         for arr, m in zip(self.patched_data, filtered_flags_im):
@@ -91,26 +119,33 @@ class RFITraining:
             if not m:
                 filtered_images.append(arr)
 
-        self.patched_data = np.stack(filtered_images)
+        for arr, m in zip(self.patched_data_norm_only, filtered_flags_im):
+            # If the mask value is False, add the array to the filtered list
+            if not m:
+                filtered_images_norm_only.append(arr)
+
+        self.patched_data_norm_only = np.stack(filtered_images_norm_only)
         self.patched_flags = np.stack(filtered_flags)
+        self.patched_data = np.stack(filtered_images)
 
     def randomize_patches(self,):
 
         # Shuffle the data and flags in unison
-        indices = np.random.permutation(len(self.patched_data))
+        indices = np.random.permutation(len(self.patched_data_norm_only))
 
+        self.patched_data_norm_only = self.patched_data_norm_only[indices]
         self.patched_data = self.patched_data[indices]
         self.patched_flags = self.patched_flags[indices]
 
     def create_dataset(self,num_patches=None):
-        print(self.patched_data.shape, self.patched_flags.shape)
+        print(self.patched_data_norm_only.shape, self.patched_flags.shape)
 
         if num_patches:
-            self.patched_data = self.patched_data[:num_patches]
+            self.patched_data_norm_only = self.patched_data_norm_only[:num_patches]
             self.patched_flags = self.patched_flags[:num_patches]
 
         dataset_dict = {
-            "image": [Image.fromarray(img) for img in self.patched_data],
+            "image": [Image.fromarray(img) for img in self.patched_data_norm_only],
             "label": [Image.fromarray(mask) for mask in self.patched_flags],
         }
 
@@ -238,7 +273,7 @@ class RFITraining:
 
             fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
 
-            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} — Epoch {num_epochs} Patches {len(self.patched_data)}", color="blue")
+            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} — Epoch {num_epochs} Patches {len(self.patched_data_norm_only)}", color="blue")
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Mean Loss")
             ax.set_title("Mean Loss vs Epoch")
