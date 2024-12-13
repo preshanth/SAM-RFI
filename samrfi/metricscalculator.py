@@ -1,6 +1,12 @@
 import numpy as np
 import pandas as pd
+import os
+from tqdm import tqdm
 
+import matplotlib.pyplot as plt
+from astropy.visualization import ZScaleInterval, ImageNormalize
+
+from .utilities import *
 
 def calculate_metrics(self, flags, ground_truth):
     """
@@ -96,7 +102,7 @@ class RadioRFIMetricsCalculator:
 
         for i in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
             for j in range(self.RadioRFI.rfi_antenna_data.shape[1]):
-                per, scr = self.runtest(self.RadioRFI.rfi_antenna_data[i,j,:,:], self.RadioRFI.flags[i,j,:,:])
+                per, scr = runtest(self.RadioRFI.rfi_antenna_data[i,j,:,:], self.RadioRFI.flags[i,j,:,:])
 
                 rfi_per.append(per)
                 rfi_scr.append(scr)
@@ -130,7 +136,7 @@ class RadioRFIMetricsCalculator:
                     fig.suptitle(f'Baseline {i} - Polarization {j} - RFI Percent Flagged: {per:.2f} - Score: {scr:.2f}')
                     fig.savefig(f'{method_dir}/real_data_test_baseline_{i}_pol_{j}.png')
 
-        self.realdata_results = pd.DataFrame({'Baseline': baseline_id , 'Polarization': pol_id, 'RFI Percent Flagged':rfi_per, 'Score':rfi_scr})
+        self.realdata_results = pd.DataFrame({'Baseline': baseline_id , 'Polarization': pol_id, 'RFI Percent Flagged':rfi_per, 'Calcquality Score':rfi_scr})
         
         if save:
             self.realdata_results.to_csv(f'{method_dir}/real_data_test_results.csv')

@@ -95,7 +95,7 @@ class RFIModels:
         self.model.to(self.device)
 
 
-    def run_rfi_model(self, pad_width=50, patch_run=False, threshold=0.5, save=False):
+    def run_rfi_model(self, pad_width=50, patch_run=False, sliding_patch=False, adding_patch=False,threshold=0.5, save=False):
 
         self.pad_width = pad_width
 
@@ -160,7 +160,17 @@ class RFIModels:
 
                     single_data = data/np.nanmedian(data)
 
-                    patches, original_shape, padded_shape = create_patches(single_data)
+
+                    if adding_patch:
+                        patches, positions = extract_patches_with_context(single_data)
+                        patches = [patches[i] for i in range(patches.shape[0])]
+                    elif not sliding_patch:
+                        patches, original_shape, padded_shape = create_patches(single_data)
+                    elif sliding_patch:
+                        patches, positions = extract_patches(single_data, window_size=256, overlap=128)
+                        patches = [patches[i] for i in range(patches.shape[0])]
+
+                    self.patches = patches
 
                     patch_flags = []
                     patch_flags_prob = []
@@ -186,9 +196,18 @@ class RFIModels:
                         patch_flags.append(single_patch_prediction)
                         patch_flags_prob.append(single_patch_prob)
 
+                    if adding_patch:
+                        cropped_patches = crop_patches(np.stack(patch_flags))
+                        master_flag = reconstruct_from_patches_adding(cropped_patches, positions, single_data.shape)
 
-                    master_flag = reconstruct_image(patch_flags, original_shape, padded_shape)
-                    master_flag_prob = reconstruct_image(patch_flags_prob, original_shape, padded_shape)
+                        cropped_patches_prob = crop_patches(np.stack(patch_flags_prob))
+                        master_flag_prob = reconstruct_from_patches_adding(cropped_patches_prob, positions, single_data.shape)
+                    elif not sliding_patch:
+                        master_flag = reconstruct_image(patch_flags, original_shape, padded_shape)
+                        master_flag_prob = reconstruct_image(patch_flags_prob, original_shape, padded_shape)
+                    elif sliding_patch:
+                        master_flag = reconstruct_from_patches(np.stack(patch_flags), positions, single_data.shape, window_size=256, overlap=128)
+                        master_flag_prob = reconstruct_from_patches(np.stack(patch_flags_prob), positions, single_data.shape, window_size=256, overlap=128)
 
                     flags.append(master_flag)
                     flags_prob.append(master_flag_prob)
