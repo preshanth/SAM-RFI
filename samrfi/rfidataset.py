@@ -134,7 +134,7 @@ class RFIDataset:
         self.patched_data = self.patched_data[indices]
         self.patched_flags = self.patched_flags[indices]
 
-    def create_dataset(self,num_patches=None):
+    def create_dataset(self, num_patches=None):
 
         rfi_combined = four_rotations(self.rfi_instance.rfi_antenna_data)
         
