@@ -26,8 +26,23 @@ from .radiorfi import RadioRFI
 from .utilities import *
 
 class RFIDataset:
-    def __init__(self, rfi_instance):
+    def __init__(self, rfi_instance, dir_path=False):
         self.rfi_instance = rfi_instance
+
+        if dir_path:
+            if dir_path.endswith('/'):
+                dir_path = dir_path[:-1]
+
+            current_directory = str(dir_path)
+        else:
+            current_directory = os.getcwd()
+
+        new_directory = os.path.join(current_directory, 'samrfi_data')
+
+        if not os.path.exists(new_directory):
+            os.makedirs(new_directory)
+        
+        self.directory = new_directory
 
     def apply_normalization(self, before_stretch=False):
 
@@ -164,7 +179,8 @@ class RFIDataset:
 
         if apply_stretching:
             self.apply_stretch(stretch=stretch)
-            self.apply_normalization(before_stretch=False)
+        
+        self.apply_normalization(before_stretch=False)
 
         if custom_flag == True:
         
@@ -199,3 +215,50 @@ class RFIDataset:
 
     ### Add a SAVE method to save the dataset to a file
 
+    def save_dataset(self, dataset_path=False):
+
+        params = self.dataset_params
+
+        stretch = params["stretch"]
+        flag_sigma = params["flag_sigma"]
+        patch_method = params["patch_method"]
+        patch_size = params["patch_size"]
+        custom_flag = params["custom_flag"]
+        apply_stretching = params["apply_stretching"]
+        num_patches = params["num_patches"]
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        filename_parts = [
+            f"dataset",
+            f"patch-{patch_method}",
+            f"size-{patch_size}",
+            timestamp
+        ]
+
+        filename_parts.insert(1, f"num_patches-{self.dataset.shape[0]}")
+
+        if not custom_flag:
+            filename_parts.insert(1, f"sigma-{flag_sigma}")
+
+        if apply_stretching:
+            filename_parts.insert(1, f"stretch-{stretch}")
+
+        filename = "_".join(filename_parts)
+        
+        if dataset_path:
+            try:
+                self.dataset.save_to_disk(os.path.join(method_dir, dataset_path))
+            except:
+                print("Dataset path not found. Saving model to default directory.")
+                method_dir = os.path.join(self.directory, 'datasets')
+                
+                if not os.path.exists(method_dir):
+                    os.makedirs(method_dir)
+                self.dataset.save_to_disk(os.path.join(method_dir, filename))
+        else:
+            method_dir = os.path.join(self.directory, 'datasets')
+            if not os.path.exists(method_dir):
+                os.makedirs(method_dir)
+            
+            self.dataset.save_to_disk(os.path.join(method_dir, filename))

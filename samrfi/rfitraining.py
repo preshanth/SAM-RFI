@@ -137,7 +137,6 @@ class RFITraining:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_sam-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
 
-
         if trained_model_path:
             try:
                 torch.save(model.state_dict(), trained_model_path)
