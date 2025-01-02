@@ -23,16 +23,33 @@ from datetime import datetime
 
 from .syntheticrfi import SyntheticRFI
 from .radiorfi import RadioRFI
+from .rfidataset import RFIDataset
 from .utilities import *
 
 
 class RFITraining:
 
-    def __init__(self, rfidataset_instance, device='cuda'):
+    def __init__(self, rfidataset_instance, device='cuda', dir_path=None):
         self.device = device
         self.RFIDataset = rfidataset_instance
 
-    def train(self, num_epochs=3, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, num_patches=None, batch_size=4, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
+        if dir_path:
+            if dir_path.endswith('/'):
+                dir_path = dir_path[:-1]
+
+            current_directory = str(dir_path)
+        else:
+            current_directory = os.getcwd()
+
+        new_directory = os.path.join(current_directory, 'samrfi_data')
+
+        if not os.path.exists(new_directory):
+            os.makedirs(new_directory)
+
+        self.directory = new_directory
+
+    def train(self, num_epochs=3, batch_size=4, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
+
 
         if sam_checkpoint == 'huge':
             sam_type = "sam-vit-huge"
@@ -44,10 +61,13 @@ class RFITraining:
             raise ValueError("Invalid SAM checkpoint. Use 'huge', 'base', or 'large'.")
 
         processor = SamProcessor.from_pretrained(f"facebook/{sam_type}")
+
+        train_dataset = SAMDataset(dataset=self.RFIDataset.dataset, processor=processor)
+
         model = SamModel.from_pretrained(f"facebook/{sam_type}")
 
         # Create a new train_dataloader with the updated train_dataset
-        train_dataloader = DataLoader(RFIDataset.train_dataset, batch_size=batch_size,shuffle=True,)
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size,shuffle=True,)
         
         # make sure we only compute gradients for mask decoder
         for name, param in model.named_parameters():
@@ -107,6 +127,12 @@ class RFITraining:
 
             self.ave_meanloss = ave_meanloss
 
+        params = self.RFIDataset.dataset_params
+
+        stretch = params["stretch"]
+        flag_sigma = params["flag_sigma"]
+        patch_method = params["patch_method"]
+        patch_size = params["patch_size"]
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_sam-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
@@ -117,13 +143,13 @@ class RFITraining:
                 torch.save(model.state_dict(), trained_model_path)
             except:
                 print("Model path not found. Saving model to default directory.")
-                method_dir = os.path.join(self.rfi_instance.directory, 'models')
+                method_dir = os.path.join(self.directory, 'models')
                 
                 if not os.path.exists(method_dir):
                     os.makedirs(method_dir)
                 torch.save(model.state_dict(), os.path.join(method_dir, filename))
         else:
-            method_dir = os.path.join(self.rfi_instance.directory, 'models')
+            method_dir = os.path.join(self.directory, 'models')
             if not os.path.exists(method_dir):
                 os.makedirs(method_dir)
             
@@ -134,7 +160,7 @@ class RFITraining:
 
             fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
 
-            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} — Epoch {num_epochs} Patches {len(self.patched_data_norm_only)}", color="blue")
+            ax.plot(self.ave_meanloss, label=f"Sigma {flag_sigma} {stretch} — Epoch {num_epochs} Patches {len(self.RFIDataset.patched_data_norm_only)}", color="blue")
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Mean Loss")
             ax.set_title("Mean Loss vs Epoch")
@@ -145,3 +171,39 @@ class RFITraining:
             fig.savefig(os.path.join(method_dir, filename))
             
             plt.show()
+
+class SAMDataset(TorchDataset):
+    """
+    This class is used to create a dataset that serves input images and masks.
+    It takes a dataset and a processor as input and overrides the __len__ and __getitem__ methods of the Dataset class.
+    """
+    def __init__(self, dataset, processor):
+        self.dataset = dataset
+        self.processor = processor
+        # self.resize_transform = transforms.Compose([
+        # transforms.Resize((2000, 2000)),
+        # # Add other transformations here if necessary
+        # ])
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        image = item["image"]
+        ground_truth_mask = np.array(item["label"])
+        
+        # get bounding box prompt
+        prompt = get_bounding_box(ground_truth_mask)
+        # input_pointsa = get_peak_points(real_array)
+
+        # prepare image and prompt for the model
+        inputs = self.processor(image, input_boxes=[[prompt]],return_tensors="pt")
+
+        # remove batch dimension which the processor adds by default
+        inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+        # add ground truth segmentation
+        inputs["ground_truth_mask"] = ground_truth_mask
+
+        return inputs

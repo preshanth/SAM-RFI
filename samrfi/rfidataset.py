@@ -29,9 +29,30 @@ class RFIDataset:
     def __init__(self, rfi_instance):
         self.rfi_instance = rfi_instance
 
-    def apply_stretch(self, stretch='SQRT'):
-        
+    def apply_normalization(self, before_stretch=False):
+
         images_med = []
+
+        print(f"\nApplying median normalization only to {len(self.patched_data)} patches...")
+
+        for data in tqdm(self.patched_data):
+
+            # Normalization
+            data = data/np.nanmedian(data)
+
+            images_med.append(data)
+
+        images = np.stack(images_med)
+        
+        # The stretching only affects the final outcome of the masks, since we want the image itself to be as is when training.
+
+        if before_stretch:
+            self.patched_data_norm_only = images
+        else:
+            self.patched_data = images
+
+
+    def apply_stretch(self, stretch='SQRT'):
 
         if stretch == 'SQRT':
             stretch_func = np.sqrt
@@ -39,18 +60,6 @@ class RFIDataset:
             stretch_func = np.log10
         else:
             raise ValueError("Invalid stretch. Use 'SQRT' or 'LOG10'.")
-
-        print(f"\nApplying median normalization only to {len(self.patched_data)} patches...")
-
-        for data in tqdm(self.patched_data):
-
-            data = data/np.nanmedian(data)
-
-            images_med.append(data)
-
-        images = np.stack(images_med)
-
-        self.patched_data_norm_only = images
 
         print(f"\nApplying {stretch} stretch and normalization to {len(self.patched_data)} patches...")
         images_med = []
@@ -70,8 +79,6 @@ class RFIDataset:
 
             # Replace infinite values with the MAD
             data[inf_mask] = mad
-
-            data = data/np.nanmedian(data)
 
             images_med.append(data)
 
@@ -134,28 +141,43 @@ class RFIDataset:
         self.patched_data = self.patched_data[indices]
         self.patched_flags = self.patched_flags[indices]
 
-    def create_dataset(self, num_patches=None):
+    def create_dataset(self, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, num_patches=None, apply_stretching=True, custom_flag=True):
+
+        # Storing parameters
+        self.dataset_params = {
+            "stretch": stretch,
+            "flag_sigma": flag_sigma,
+            "patch_method": patch_method,
+            "patch_size": patch_size,
+            "num_patches": num_patches,
+            "apply_stretching": apply_stretching,
+            "custom_flag": custom_flag,
+        }
 
         rfi_combined = four_rotations(self.rfi_instance.rfi_antenna_data)
         
         if patch_method == 'patchify':
             self.patched_data = create_patchify_patches(rfi_combined, patch_size=patch_size)
 
-        if custom == True:
-            self.apply_stretch(stretch=stretch)
+        # Store normalization without stretching in a seperate variable
+        self.apply_normalization(before_stretch=True)
 
+        if apply_stretching:
+            self.apply_stretch(stretch=stretch)
+            self.apply_normalization(before_stretch=False)
+
+        if custom_flag == True:
+        
             rfi_flags_combined = four_rotations(self.rfi_instance.flags)
             
             if patch_method == 'patchify':
                 self.patched_flags = create_patchify_patches(rfi_flags_combined, patch_size=patch_size)
             
         else:
-            self.apply_stretch(stretch=stretch)
             self.create_patched_flags(sigma=flag_sigma)
             
         self.rm_blank_patches()
         self.randomize_patches()
-        self.create_dataset(num_patches=num_patches)
 
         print(self.patched_data_norm_only.shape, self.patched_flags.shape)
 
@@ -175,43 +197,5 @@ class RFIDataset:
         
         self.dataset = dataset
 
-        self.train_dataset = SAMDataset(dataset=self.dataset, processor=processor)
-
-
     ### Add a SAVE method to save the dataset to a file
 
-class SAMDataset(TorchDataset):
-    """
-    This class is used to create a dataset that serves input images and masks.
-    It takes a dataset and a processor as input and overrides the __len__ and __getitem__ methods of the Dataset class.
-    """
-    def __init__(self, dataset, processor):
-        self.dataset = dataset
-        self.processor = processor
-        # self.resize_transform = transforms.Compose([
-        # transforms.Resize((2000, 2000)),
-        # # Add other transformations here if necessary
-        # ])
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-        image = item["image"]
-        ground_truth_mask = np.array(item["label"])
-        
-        # get bounding box prompt
-        prompt = get_bounding_box(ground_truth_mask)
-        # input_pointsa = get_peak_points(real_array)
-
-        # prepare image and prompt for the model
-        inputs = self.processor(image, input_boxes=[[prompt]],return_tensors="pt")
-
-        # remove batch dimension which the processor adds by default
-        inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-        # add ground truth segmentation
-        inputs["ground_truth_mask"] = ground_truth_mask
-
-        return inputs
