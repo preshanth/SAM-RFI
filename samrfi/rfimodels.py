@@ -95,7 +95,7 @@ class RFIModels:
         self.model.to(self.device)
 
 
-    def run_rfi_model(self, pad_width=50, patch_run=False, sliding_patch=False, adding_patch=False,threshold=0.5, save=False):
+    def run_rfi_model(self, pad_width=50, patch_run=False, sliding_patch=False, adding_patch=False, threshold=0.5, save=False):
 
         self.pad_width = pad_width
 
