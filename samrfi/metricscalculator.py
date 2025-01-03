@@ -119,8 +119,10 @@ class RadioRFIMetricsCalculator:
 
                     norm3 = ImageNormalize(residual, interval=ZScaleInterval())
 
-                    im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto')
-                    im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, norm=norm2, aspect='auto')
+                    # im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto')
+                    # im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, norm=norm2, aspect='auto')
+                    im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, vmin=0, vmax=1, aspect='auto', cmap='coolwarm')
+                    im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, cmap='gray', aspect='auto')
                     im3 = ax[2].imshow(residual, vmin=0, vmax=1, cmap='coolwarm', aspect='auto')
 
                     ax[0].set_title('Baseline')
