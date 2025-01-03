@@ -50,7 +50,6 @@ class RFITraining:
 
     def train(self, num_epochs=3, batch_size=4, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
 
-
         if sam_checkpoint == 'huge':
             sam_type = "sam-vit-huge"
         elif sam_checkpoint == 'base':

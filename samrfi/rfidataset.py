@@ -216,6 +216,23 @@ class RFIDataset:
     ### Add a SAVE method to save the dataset to a file
 
     def save_dataset(self, dataset_path=False):
+        """
+        Saves the dataset to disk with a filename constructed from dataset parameters.
+        Parameters:
+        dataset_path (str, optional): The path where the dataset should be saved. If not provided, the dataset will be saved to a default directory.
+        The filename is constructed using the following dataset parameters:
+        - stretch
+        - flag_sigma
+        - patch_method
+        - patch_size
+        - custom_flag
+        - apply_stretching
+        - num_patches
+        The filename also includes a timestamp to ensure uniqueness.
+        If the provided dataset_path does not exist, the dataset will be saved to a default directory.
+        Raises:
+        Exception: If there is an error saving the dataset to the provided path.
+        """
 
         params = self.dataset_params
 
