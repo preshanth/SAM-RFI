@@ -111,7 +111,7 @@ class RadioRFIMetricsCalculator:
                 pol_id.append(j)
 
                 if save:
-                    fig, ax = plt.subplots(3,1, figsize=(14, 8),)
+                    fig, ax = plt.subplots(3,1, figsize=(20, 16),dpi=175)
                     norm1 = ImageNormalize(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, interval=ZScaleInterval())
                     norm2 = ImageNormalize(self.RadioRFI.flags[i,j,:,:].T, interval=ZScaleInterval())
 
@@ -121,7 +121,7 @@ class RadioRFIMetricsCalculator:
 
                     im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto')
                     im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, norm=norm2, aspect='auto')
-                    im3 = ax[2].imshow(residual, norm=norm3, aspect='auto')
+                    im3 = ax[2].imshow(residual, vmin=0, vmax=1, cmap='coolwarm', aspect='auto')
 
                     ax[0].set_title('Baseline')
                     ax[1].set_title('Flags')
@@ -148,7 +148,7 @@ class RadioRFIMetricsCalculator:
         method_name = self.test_calcquality.__name__
 
         if save:
-            method_dir = os.path.join(self.directory, method_name)
+            method_dir = os.path.join(self.RadioRFI.directory, method_name)
 
             if not os.path.exists(method_dir):
                 os.makedirs(method_dir)
