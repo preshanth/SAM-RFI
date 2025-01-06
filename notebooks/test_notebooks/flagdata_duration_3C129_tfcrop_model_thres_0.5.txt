@@ -1,0 +1,1 @@
+Flagdata operation on one_antenna_3C129_tfcrop.ms with the tfcrop model took 1090.14 seconds. Patch run is true, sliding patch is true. Threshold is 0.5

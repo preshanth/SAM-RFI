@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 from casatools import table
 
-from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
 from tqdm import tqdm
 
 from .plotter import Plotter

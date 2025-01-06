@@ -12,6 +12,9 @@ import monai
 
 from transformers import SamProcessor, SamModel
 
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
 from datasets import Dataset
 from PIL import Image
 
@@ -48,6 +51,15 @@ class RFITraining:
 
         self.directory = new_directory
 
+        self.checkpoint_path = None
+
+        self.sam2_ckpt = None
+        self.sam2_cfg = None
+
+    ################
+    # SAM Training
+    ################
+
     def train(self, num_epochs=3, batch_size=4, sam_checkpoint='huge', plot=True, model_path=None, trained_model_path=None):
 
         if sam_checkpoint == 'huge':
@@ -68,6 +80,9 @@ class RFITraining:
         # Create a new train_dataloader with the updated train_dataset
         train_dataloader = DataLoader(train_dataset, batch_size=batch_size,shuffle=True,)
         
+        ##
+        self.train_dataloader_sam1 = train_dataloader
+
         # make sure we only compute gradients for mask decoder
         for name, param in model.named_parameters():
             if name.startswith("vision_encoder") or name.startswith("prompt_encoder"):
@@ -95,6 +110,7 @@ class RFITraining:
 
             for batch in tqdm(train_dataloader):
                 # forward pass
+                
                 outputs = model(pixel_values=batch["pixel_values"].to(self.device),
                                 input_boxes=batch["input_boxes"].to(self.device),
                                 multimask_output=False)
@@ -170,6 +186,216 @@ class RFITraining:
             
             plt.show()
 
+    ################
+    # SAM 2 Training
+    ################
+
+    def train_sam2(self, num_epochs=3, batch_size=4, sam_checkpoint='small', plot=True, model_path=None, trained_model_path=None):
+        """
+        Fine-tune SAM 2 model (instead of the original SAM).
+        Valid values for 'sam_checkpoint' are: 'tiny', 'small', 'base_plus', or 'large'.
+        """
+
+        # Map user input to valid SAM 2 checkpoints and config files
+        checkpoint_config_map = {
+            "tiny":      ("sam2_hiera_tiny.pt",      "sam2_hiera_t.yaml"),
+            "small":     ("sam2_hiera_small.pt",     "sam2_hiera_s.yaml"),
+            "base_plus": ("sam2_hiera_base_plus.pt","sam2_hiera_b+.yaml"),
+            "large":     ("sam2_hiera_large.pt",     "sam2_hiera_l.yaml")
+        }
+
+        if sam_checkpoint not in checkpoint_config_map:
+            raise ValueError("Invalid SAM2 checkpoint. Use 'tiny', 'small', 'base_plus', or 'large'.")
+
+        sam2_ckpt, sam2_cfg = checkpoint_config_map[sam_checkpoint]
+
+        # Build SAM 2 model
+        sam2_model = build_sam2(self.sam2_cfg, self.sam2_ckpt, device=self.device)
+        predictor = SAM2ImagePredictor(sam2_model)
+
+        # Make sure we only compute (or allow) gradients for the parts we want to train.
+        # For SAM 2, we might typically train the mask decoder + prompt encoder.
+        predictor.model.sam_mask_decoder.train(True)
+        predictor.model.sam_prompt_encoder.train(True)
+
+        # Optionally load a pre-trained state
+        if model_path:
+            predictor.model.load_state_dict(torch.load(model_path))
+
+        # Create dataset and dataloader with minimal changes to existing structure.
+        train_dataset = SAM2Dataset(dataset=self.RFIDataset.dataset)  # Removed the processor usage
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        self.train_dataloader = train_dataloader
+        # Define an optimizer (Adam is kept from the original code, but you could use AdamW)
+        optimizer = Adam(predictor.model.parameters(), lr=1e-5, weight_decay=0)
+
+        # Example segmentation loss
+        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+
+        # Store average mean loss for each epoch
+        ave_meanloss = []
+
+        # Set model to training mode
+        predictor.model.to(self.device)
+
+        print(f"\nTraining SAM 2 model...")
+
+        for epoch in range(num_epochs):
+            epoch_losses = []
+
+            for batch in tqdm(train_dataloader):
+
+                for i in range(batch["image"].shape[0]):
+                    # Retrieve data from the batch
+                    # Minimal changes: we still get `image`, `ground_truth_mask`, and `input_boxes`.
+                    # In your original code, `image` is a PIL Image, so convert to numpy if needed.
+                    single_image = batch["image"][i]  # shape [3, H, W]
+                    ground_truth_mask = batch["ground_truth_mask"][i]
+                    bounding_box = batch["input_boxes"][i]  # The bounding box prompt
+
+                    # Convert PIL image to NumPy array (RGB)
+                    np_image = single_image.cpu().numpy()
+                    # np_image = np.array(pil_image)
+                    print(f"Image shape: {np_image.shape}")
+
+                    # Prepare image in predictor
+                    predictor.set_image(np_image)
+
+                    bounding_box = [float(coord) for coord in bounding_box]
+
+                    # Convert bounding box to tensor with shape [1, 4]
+                    bounding_box_tensor = torch.tensor([bounding_box], device=self.device).float()
+
+                    # Prepare your bounding box prompts:
+                    # For a single bounding box, we keep boxes=[bounding_box].
+                    # If you'd like multiple bounding boxes, you can adapt below.
+                    # You could also incorporate points, mask logits, etc., as needed.
+                    if bounding_box is not None:
+                        # Format for SAM2: (points=(...), boxes=..., masks=None)
+                        # Here we only pass `boxes` to the prompt encoder if bounding_box is available.
+                        sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
+                            points=None,
+                            boxes=torch.tensor([bounding_box], device=self.device).float().unsqueeze(0),
+                            masks=None
+                        )
+                    else:
+                        sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
+                            points=None,
+                            boxes=None,
+                            masks=None
+                        )
+
+                    # Run the mask decoder
+                    # For a single image, we can set repeat_image=False
+                    # high_res_feats and image_embed come from predictor._features
+                    batched_mode = False
+                    high_res_features = [feat_level[-1].unsqueeze(0) for feat_level in predictor._features["high_res_feats"]]
+                    low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
+                        image_embeddings=predictor._features["image_embed"][-1].unsqueeze(0),
+                        image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=True,
+                        repeat_image=batched_mode,
+                        high_res_features=high_res_features,
+                    )
+
+                    # Post-process predicted masks to original shape
+                    prd_masks = predictor._transforms.postprocess_masks(
+                        low_res_masks, predictor._orig_hw[-1]
+                    )
+
+                    # For simplicity, we consider only the first mask in the batch (prd_masks[:, 0])
+                    predicted_masks = torch.sigmoid(prd_masks[:, 0])
+
+                    # Resize ground truth to match predicted shape if necessary
+                    if len(ground_truth_mask.shape) == 3:
+                        ground_truth_mask = ground_truth_mask.unsqueeze(1)
+
+                    predicted_mask_size = predicted_masks.shape[-2:]
+                    ground_truth_masks_resized = interpolate(
+                        ground_truth_mask,
+                        size=predicted_mask_size,
+                        mode='bilinear',
+                        align_corners=False
+                    )
+
+                    # Compute segmentation loss
+                    loss = seg_loss(predicted_masks.unsqueeze(1), ground_truth_masks_resized)
+
+                    # Backprop
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(predictor.model.parameters(), max_norm=1.0)
+                    optimizer.step()
+
+                    epoch_losses.append(loss.item())
+
+            # End of epoch
+            print(f"EPOCH: {epoch}")
+            print(f"Mean loss: {mean(epoch_losses)}")
+            ave_meanloss.append(mean(epoch_losses))
+
+            self.ave_meanloss = ave_meanloss
+
+        # Build file name for saving
+        params = self.RFIDataset.dataset_params
+        stretch = params["stretch"]
+        flag_sigma = params["flag_sigma"]
+        patch_method = params["patch_method"]
+        patch_size = params["patch_size"]
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = (
+            f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_"
+            f"sam2-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
+        )
+
+        # Save the trained model
+        if trained_model_path:
+            try:
+                torch.save(predictor.model.state_dict(), trained_model_path)
+            except:
+                print("Model path not found. Saving model to default directory.")
+                method_dir = os.path.join(self.directory, 'models')
+                if not os.path.exists(method_dir):
+                    os.makedirs(method_dir)
+                torch.save(predictor.model.state_dict(), os.path.join(method_dir, filename))
+        else:
+            method_dir = os.path.join(self.directory, 'models')
+            if not os.path.exists(method_dir):
+                os.makedirs(method_dir)
+            torch.save(predictor.model.state_dict(), os.path.join(method_dir, filename))
+
+        # Plot if required
+        if plot:
+            plt.clf()
+            fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
+            ax.plot(
+                self.ave_meanloss,
+                label=(
+                    f"Sigma {flag_sigma} {stretch} — "
+                    f"Epoch {num_epochs} Patches {len(self.RFIDataset.patched_data_norm_only)}"
+                ),
+                color="blue"
+            )
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Mean Loss")
+            ax.set_title("Mean Loss vs Epoch")
+            plt.legend()
+
+            filename = (
+                f"loss_plot_model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_"
+                f"size-{patch_size}_sam2-{sam_checkpoint}_{timestamp}.png"
+            )
+            fig.savefig(os.path.join(method_dir, filename))
+            plt.show()
+
+
+
+
+
 class SAMDataset(TorchDataset):
     """
     This class is used to create a dataset that serves input images and masks.
@@ -196,7 +422,7 @@ class SAMDataset(TorchDataset):
         # input_pointsa = get_peak_points(real_array)
 
         # prepare image and prompt for the model
-        inputs = self.processor(image, input_boxes=[[prompt]],return_tensors="pt")
+        inputs = self.processor(image, input_boxes=[[prompt]], return_tensors="pt")
 
         # remove batch dimension which the processor adds by default
         inputs = {k:v.squeeze(0) for k,v in inputs.items()}
@@ -205,3 +431,28 @@ class SAMDataset(TorchDataset):
         inputs["ground_truth_mask"] = ground_truth_mask
 
         return inputs
+
+class SAM2Dataset(TorchDataset):
+    """
+    Minimal changes: we remove references to huggingface SamProcessor.
+    Keep bounding box logic. Return the same item structure needed for SAM 2.
+    """
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        # Convert the PIL image to a NumPy array
+        image = np.array(item["image"], dtype=np.float32)  # shape (H, W, C)
+        ground_truth_mask = np.array(item["label"], dtype=np.float32)  # shape (H, W)
+        # Get bounding box prompt
+        prompt = get_bounding_box(ground_truth_mask)
+
+        return {
+            "image": image,                 # shape (C, H, W)
+            "ground_truth_mask": ground_truth_mask,  # shape (H, W)
+            "input_boxes": prompt
+        }

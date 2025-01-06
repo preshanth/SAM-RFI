@@ -213,6 +213,9 @@ class RFIDataset:
         
         self.dataset = dataset
 
+
+    ### Add a method to quickly plot the dataset
+
     ### Add a SAVE method to save the dataset to a file
 
     def save_dataset(self, dataset_path=False):
@@ -279,3 +282,16 @@ class RFIDataset:
                 os.makedirs(method_dir)
             
             self.dataset.save_to_disk(os.path.join(method_dir, filename))
+            
+    '''
+    def load_dataset(self, dataset_path):
+        """
+        Loads a dataset from disk.
+        Parameters:
+        dataset_path (str): The path to the dataset file.
+        Returns:
+        Dataset: The loaded dataset.
+        Raises:
+        Exception: If there is an error loading the dataset from the provided path.
+        """
+    ''' 

@@ -88,6 +88,7 @@ class RadioRFIMetricsCalculator:
 
         rfi_per = []
         rfi_scr = []
+        rfi_calcq = []
         baseline_id = []
         pol_id = []   
 
@@ -99,25 +100,31 @@ class RadioRFIMetricsCalculator:
             if not os.path.exists(method_dir):
                 os.makedirs(method_dir)
 
+        zero_flag = np.zeros((self.RadioRFI.rfi_antenna_data.shape[2], self.RadioRFI.rfi_antenna_data.shape[3]))
 
         for i in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
             for j in range(self.RadioRFI.rfi_antenna_data.shape[1]):
                 per, scr = runtest(self.RadioRFI.rfi_antenna_data[i,j,:,:], self.RadioRFI.flags[i,j,:,:])
 
+                # calcquality with blank flags
+            
+                calcq_zero = calcquality(self.RadioRFI.rfi_antenna_data[i,j,:,:], zero_flag)
+
                 rfi_per.append(per)
                 rfi_scr.append(scr)
+                rfi_calcq.append(calcq_zero)
 
                 baseline_id.append(i)
                 pol_id.append(j)
 
                 if save:
                     fig, ax = plt.subplots(3,1, figsize=(20, 16),dpi=175)
-                    norm1 = ImageNormalize(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, interval=ZScaleInterval())
-                    norm2 = ImageNormalize(self.RadioRFI.flags[i,j,:,:].T, interval=ZScaleInterval())
+                    # norm1 = ImageNormalize(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, interval=ZScaleInterval())
+                    # norm2 = ImageNormalize(self.RadioRFI.flags[i,j,:,:].T, interval=ZScaleInterval())
 
                     residual = np.where(np.logical_not(self.RadioRFI.flags[i,j,:,:].T), self.RadioRFI.rfi_antenna_data[i,j,:,:].T, 0)
 
-                    norm3 = ImageNormalize(residual, interval=ZScaleInterval())
+                    # norm3 = ImageNormalize(residual, interval=ZScaleInterval())
 
                     # im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto')
                     # im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, norm=norm2, aspect='auto')
@@ -135,10 +142,10 @@ class RadioRFIMetricsCalculator:
 
                     plt.close(fig)
 
-                    fig.suptitle(f'Baseline {i} - Polarization {j} - RFI Percent Flagged: {per:.2f} - Score: {scr:.2f}')
+                    fig.suptitle(f'Baseline {i} - Polarization {j} - RFI Percent Flagged: {per:.2f} - Calcquality: {scr:.2f} - Calcq w/ blank flag: {calcq_zero:.2f}')
                     fig.savefig(f'{method_dir}/real_data_test_baseline_{i}_pol_{j}.png')
 
-        self.realdata_results = pd.DataFrame({'Baseline': baseline_id , 'Polarization': pol_id, 'RFI Percent Flagged':rfi_per, 'Calcquality Score':rfi_scr})
+        self.realdata_results = pd.DataFrame({'Baseline': baseline_id , 'Polarization': pol_id, 'RFI_Percent_Flagged':rfi_per, 'Calcquality_Score':rfi_scr, 'Calcquality_Blank_Flag':rfi_calcq})
         
         if save:
             self.realdata_results.to_csv(f'{method_dir}/real_data_test_results.csv')
