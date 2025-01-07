@@ -11,26 +11,33 @@ import os
 from tqdm import tqdm
 from scipy import stats
 
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
 from .radiorfi import RadioRFI
 from .utilities import *
 
 class RFIModels:
 
-    def __init__(self, sam_checkpoint, sam_type, radiorfi_instance, device='cuda',):
+    def __init__(self, radiorfi_instance, device='cuda',):
 
         self.RadioRFI = radiorfi_instance
-        sam_checkpoint = str(sam_checkpoint)
-        self.sam_type = sam_type
 
-        sam = sam_model_registry[self.sam_type](checkpoint=sam_checkpoint)
-        sam.to(device=device)
+        # sam_checkpoint = str(sam_checkpoint)
+        # sam = sam_model_registry[self.sam_type](checkpoint=sam_checkpoint)
+        # sam.to(device=device)
 
-        self.mask_generator = SamAutomaticMaskGenerator(sam)
-        self.predictor = SamPredictor(sam)
+        # self.mask_generator = SamAutomaticMaskGenerator(sam)
+        # self.predictor = SamPredictor(sam)
 
         print(self.RadioRFI.rfi_antenna_data.shape)
 
         self.RadioRFI.update_flags('Flags updated')
+
+        self.sam_type = None
+        self.sam2_cfg = None
+        self.sam2_ckpt = None
+        self.device = device
 
     def run_sam(self,remove_largest=True,pad_width=50):
 
@@ -72,7 +79,6 @@ class RFIModels:
     def load_model(self,model_path):
         # "/home/gpuhost002/ddeal/RFI-AI/models/derod_checkpoint_large_real_data_test_v3.pth"
         # Load the model configuration
-
         model_path = str(model_path)
 
         if self.sam_type == 'vit_l':
@@ -93,6 +99,13 @@ class RFIModels:
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
+
+    def load_model_sam2(self,model_path):
+
+        self.sam2_model = build_sam2(self.sam2_cfg, self.sam2_ckpt, device=self.device)
+        self.sam2_predictor = SAM2ImagePredictor(self.sam2_model)
+        self.sam2_predictor.model.load_state_dict(torch.load(model_path))
+
 
 
     def run_rfi_model(self, pad_width=50, patch_run=False, sliding_patch=False, adding_patch=False, threshold=0.5, save=False):
@@ -150,6 +163,7 @@ class RFIModels:
 
 
             for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
+                
 
                 flags = []
                 flags_prob = []
@@ -181,17 +195,22 @@ class RFIModels:
 
                         bbox = get_bounding_box(patch)
 
-                        inputs = self.processor(single_patch, input_boxes=[[bbox]], return_tensors="pt")
+                        inputs = self.processor(single_patch, input_boxes=[[bbox]], logits=True, return_tensors="pt")
 
                         inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+                        self.inputs = inputs
+                        
                         self.model.eval()
 
                         with torch.no_grad():
-                            outputs = self.model(**inputs,multimask_output=False)
-
+                            outputs = self.model(**inputs, multimask_output=False)
+                            
                             single_patch_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
                             single_patch_prob = single_patch_prob.cpu().numpy().squeeze()
                             single_patch_prediction = single_patch_prob > threshold
+
+                            self.outputs = outputs
 
                         patch_flags.append(single_patch_prediction)
                         patch_flags_prob.append(single_patch_prob)
@@ -219,6 +238,7 @@ class RFIModels:
                 pol_flags_prob = np.stack(flags_prob)
                 pol_flags_prob_list.append(pol_flags_prob)
 
+
             self.pol_flags_list = pol_flags_list
             baseline_flags = np.stack(pol_flags_list)
 
@@ -234,6 +254,70 @@ class RFIModels:
         if save:    
             np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
 
+    def run_model_sam2(self, threshold=0.5, patch_size=1024,save=False):
+
+        pol_flags_list = []
+
+        for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
+
+            flags = []
+
+            for pol in range(self.RadioRFI.rfi_antenna_data.shape[1]):
+
+                # Normalize the data before running the model.
+                data = self.RadioRFI.rfi_antenna_data[baseline,pol,:,:]
+
+                single_data = data/np.nanmedian(data)
+
+                patches, original_shape, padded_shape = create_patches(single_data, patch_size=patch_size)
+
+                self.patches = patches
+
+                patch_flags = []
+
+                for patch in patches:
+
+                    single_patch = Image.fromarray(patch).convert("RGB")
+
+                    bbox = np.array(get_bounding_box(patch))
+                    # From https://www.datacamp.com/tutorial/sam2-fine-tuning
+
+                    #self.input_points = get_points(patch, num_samples)
+                    self.bbox = bbox
+                    self.input_points = get_peak_points(patch, min_distance=8)
+                    self.point_labels = np.ones(self.input_points.shape[0], dtype=int)
+                    
+                    # print(self.input_points.shape)
+                    # print(self.point_labels.shape)
+
+                    with torch.no_grad():
+                        self.sam2_predictor.set_image(single_patch)
+                        masks, scores, logits = self.sam2_predictor.predict(
+                            point_coords=self.input_points,
+                            point_labels=self.point_labels,
+                            box=bbox,
+                            multimask_output=False,
+                        )
+
+                    #print(masks.shape)
+                    self.test_masks = masks
+                    patch_flags.append(masks[0])
+
+                master_flag = reconstruct_image(patch_flags, original_shape, padded_shape, patch_size=patch_size)
+
+                flags.append(master_flag)
+
+            pol_flags = np.stack(flags)
+            pol_flags_list.append(pol_flags)
+
+        baseline_flags = np.stack(pol_flags_list)
+
+        self.flags = baseline_flags
+
+        self.RadioRFI.update_flags(baseline_flags)
+
+        if save:
+            np.save(f"{self.RadioRFI.directory}/sam2_flags.npy",baseline_flags)                
 
     def create_RGB_channels(self,zeroR=False,zeroG=False,zeroB=False):
         """

@@ -1,5 +1,7 @@
 import numpy as np
 from patchify import patchify
+from skimage.feature import peak_local_max
+
 
 def get_bounding_box(ground_truth_map):
     # get bounding box from mask
@@ -17,7 +19,6 @@ def get_bounding_box(ground_truth_map):
     bbox = [x_min, y_min, x_max, y_max]
 
     return bbox
-
 
 def find_spectrograph_peaks(spectrograph, min_distance=10, threshold_abs=30):
     """
@@ -213,7 +214,7 @@ def reconstruct_image(patches, original_shape, padded_shape, patch_size=256):
     # Remove the padding to get the original image size
     return reconstructed_image[:original_shape[0], :original_shape[1]]
 
-import numpy as np
+
 
 def compute_start_indices(size, window_size, stride):
     if size <= window_size:
@@ -289,23 +290,6 @@ def reconstruct_from_patches(patches, positions, array_shape, window_size=256, o
     # This can be customized based on your specific requirements
     
     return output_array
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def extract_patches_with_context(array, patch_size=192, context_size=256):
@@ -406,3 +390,27 @@ def reconstruct_from_patches_adding(patches, positions, array_shape, patch_size=
     for idx, (y, x) in enumerate(positions):
         output_array[y:y+patch_size, x:x+patch_size] = patches[idx]
     return output_array
+
+# Adapted from https://www.datacamp.com/tutorial/sam2-fine-tuning
+def get_points(mask, num_points):  # Sample points inside the input mask
+   points = []
+   coords = np.argwhere(mask > 0)
+
+   for _ in range(num_points):
+       y, x = coords[np.random.randint(len(coords))]
+       points.append([x, y])
+   return np.array(points)
+
+
+
+def get_peak_points(image, min_distance=16,):
+    """
+    Return up to num_points local maxima coordinates from the image in shape (N, 2).
+    Utilizes skimage.feature.peak_local_max.
+    """
+    # peaks is an array of (row, col)
+    peaks = peak_local_max(image, min_distance=min_distance,)
+    if len(peaks) == 0:
+        return np.empty((0, 2), dtype=int)  # No peaks found
+
+    return peaks
