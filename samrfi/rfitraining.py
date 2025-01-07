@@ -191,7 +191,7 @@ class RFITraining:
     ################
 
     # Adapted from https://www.datacamp.com/tutorial/sam2-fine-tuning
-    def train_sam2(self, num_epochs=3, batch_size=4, sam_checkpoint='small', min_point_distance = 16,plot=True, model_path=None, trained_model_path=None):
+    def train_sam2(self, num_epochs=3, batch_size=4, sam_checkpoint='small', min_point_distance = 16, step_size = 20, gamma = 0.2, num_points=128, plot=True, model_path=None, trained_model_path=None):
         """
         Fine-tune SAM 2 model (instead of the original SAM).
         Valid values for 'sam_checkpoint' are: 'tiny', 'small', 'base_plus', or 'large'.
@@ -248,21 +248,247 @@ class RFITraining:
         print(f"\nTraining SAM 2 model...")
 
 
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.2) # 500 , 250, gamma = 0.1
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # 500 , 250, gamma = 0.1
+        accumulation_steps = 4  # Number of steps to accumulate gradients before updating
+
+        for epoch in range(1, num_epochs + 1):
+            epoch_losses = []
+
+            for step, batch in tqdm(enumerate(train_dataloader)):
+
+                single_image = batch["image"]  # shape [3, H, W]
+                ground_truth_mask = np.logical_not(batch["ground_truth_mask"])
+
+                np_image = single_image.cpu().numpy()
+
+                if np_image.shape[0] == 3:
+                    np_image = np.transpose(np_image, (1, 2, 0))  # 
+                    
+                #input_points = np.array(get_peak_points(np_image[:,:,0], min_distance=min_point_distance))
+
+                rows, cols = np.where(ground_truth_mask > 0)
+                coords = np.stack((rows, cols), axis=-1)
+                np.random.shuffle(coords)
+                coords = coords[:num_points]
+
+                input_points = coords
+                input_labels = np.ones((input_points.shape[0],), dtype=int)
+
+                bounding_box = get_bounding_box(ground_truth_mask.cpu().numpy())
+                bounding_box = [float(coord) for coord in bounding_box]
+                bounding_box_tensor = torch.tensor([bounding_box], device=self.device).float().unsqueeze(0)
+
+                with torch.cuda.amp.autocast():
+                    predictor.set_image(np_image)
+                    mask_input, unnorm_coords, labels, unnorm_box = predictor._prep_prompts(input_points, input_labels, box=bounding_box_tensor, mask_logits=None, normalize_coords=True)
+                    if unnorm_coords is None or labels is None or unnorm_coords.shape[0] == 0 or labels.shape[0] == 0:
+                        continue
+
+                    sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
+                        points=(unnorm_coords, labels),
+                        boxes=unnorm_box,
+                        masks=None
+                    )
+
+                    batched_mode = unnorm_coords.shape[0] > 1
+                    high_res_features = [feat_level[-1].unsqueeze(0) for feat_level in predictor._features["high_res_feats"]]
+                    low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
+                        image_embeddings=predictor._features["image_embed"][-1].unsqueeze(0),
+                        image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=True,
+                        repeat_image=batched_mode,
+                        high_res_features=high_res_features,
+                    )
+
+                    prd_masks = predictor._transforms.postprocess_masks(
+                        low_res_masks, predictor._orig_hw[-1]
+                    )
+
+                    gt_mask = ground_truth_mask.cuda()
+                    prd_mask = torch.sigmoid(prd_masks[:, 0])
+                    prd_mask = prd_mask.squeeze(0)
+
+                    seg_loss = (-gt_mask * torch.log(prd_mask + 0.000001) - (1 - gt_mask) * torch.log((1 - prd_mask) + 0.00001)).mean()
+
+                    #print('seg_loss:', seg_loss)
+
+                    inter = (gt_mask * (prd_mask > 0.5)).sum()
+
+                    iou = inter / (gt_mask.sum() + (prd_mask > 0.5).sum() - inter)
+                    score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
+                    loss = seg_loss + score_loss * 0.05
+
+                    #print(iou.shape)
+
+                    loss = loss / accumulation_steps
+
+                    #print(loss)
+
+                # Check for NaN before backprop
+                total_loss = seg_loss + 0.05 * (torch.abs(prd_scores[:, 0] - iou).mean())
+                if torch.isnan(total_loss):
+                    print("NaN encountered. Skipping this batch.")
+                    continue  # skip update
+
+                scaler.scale(loss).backward()
+
+                # Clip gradients
+                torch.nn.utils.clip_grad_norm_(predictor.model.parameters(), max_norm=1.0)
+
+                step = epoch
+
+                if (step + 1) % accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+
+                scheduler.step()
+
+                #mean_iou = mean_iou * 0.99 + 0.01 * np.mean(iou.cpu().detach().numpy())
+
+                #print(mean_iou)
+
+                #print("Step " + str(step) + ":\t", "Accuracy (IoU) = ", mean_iou)
+
+                epoch_losses.append(loss.item())
+
+            # End of epoch
+            #print(f"EPOCH: {epoch}")
+            #print(f"Accuracy (IoU): {mean(epoch_losses)}")
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {mean(epoch_losses)}")
+            ave_meanloss.append(mean(epoch_losses))
+
+        self.ave_meanloss = ave_meanloss
+
+        # Build file name for saving
+        params = self.RFIDataset.dataset_params
+        stretch = params["stretch"]
+        flag_sigma = params["flag_sigma"]
+        patch_method = params["patch_method"]
+        patch_size = params["patch_size"]
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = (
+            f"model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_size-{patch_size}_"
+            f"sam2-{sam_checkpoint}_epochs{num_epochs}_{timestamp}.pth"
+        )
+
+        # Save the trained model
+        if trained_model_path:
+            try:
+                torch.save(predictor.model.state_dict(), trained_model_path)
+            except:
+                print("Model path not found. Saving model to default directory.")
+                method_dir = os.path.join(self.directory, 'models')
+                if not os.path.exists(method_dir):
+                    os.makedirs(method_dir)
+                torch.save(predictor.model.state_dict(), os.path.join(method_dir, filename))
+        else:
+            method_dir = os.path.join(self.directory, 'models')
+            if not os.path.exists(method_dir):
+                os.makedirs(method_dir)
+            torch.save(predictor.model.state_dict(), os.path.join(method_dir, filename))
+
+        # Plot if required
+        if plot:
+            plt.clf()
+            fig, ax = plt.subplots(figsize=(10, 5), dpi=300)
+            ax.plot(
+                self.ave_meanloss,
+                label=(
+                    f"Sigma {flag_sigma} {stretch} — "
+                    f"Epoch {num_epochs} Patches {len(self.RFIDataset.patched_data_norm_only)}"
+                ),
+                color="blue"
+            )
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Accuracy (IoU)")
+            ax.set_title("Accuracy (IoU) vs Epoch")
+            plt.legend()
+
+            filename = (
+                f"loss_plot_model_stretch-{stretch}_sigma-{flag_sigma}_patch-{patch_method}_"
+                f"size-{patch_size}_sam2-{sam_checkpoint}_{timestamp}.png"
+            )
+            fig.savefig(os.path.join(method_dir, filename))
+            plt.show()
+
+    def train_sam2_old(self, num_epochs=3, batch_size=4, sam_checkpoint='small', min_point_distance = 16, step_size = 20, gamma = 0.2, num_points=128, plot=True, model_path=None, trained_model_path=None):
+        """
+        Fine-tune SAM 2 model (instead of the original SAM).
+        Valid values for 'sam_checkpoint' are: 'tiny', 'small', 'base_plus', or 'large'.
+        """
+
+        # Map user input to valid SAM 2 checkpoints and config files
+        checkpoint_config_map = {
+            "tiny":      ("sam2_hiera_tiny.pt",      "sam2_hiera_t.yaml"),
+            "small":     ("sam2_hiera_small.pt",     "sam2_hiera_s.yaml"),
+            "base_plus": ("sam2_hiera_base_plus.pt","sam2_hiera_b+.yaml"),
+            "large":     ("sam2_hiera_large.pt",     "sam2_hiera_l.yaml")
+        }
+
+        if sam_checkpoint not in checkpoint_config_map:
+            raise ValueError("Invalid SAM2 checkpoint. Use 'tiny', 'small', 'base_plus', or 'large'.")
+
+        sam2_ckpt, sam2_cfg = checkpoint_config_map[sam_checkpoint]
+
+        # Build SAM 2 model
+        sam2_model = build_sam2(self.sam2_cfg, self.sam2_ckpt, device=self.device)
+        predictor = SAM2ImagePredictor(sam2_model)
+
+        # Make sure we only compute (or allow) gradients for the parts we want to train.
+        # For SAM 2, we might typically train the mask decoder + prompt encoder.
+        predictor.model.sam_mask_decoder.train(True)
+        predictor.model.sam_prompt_encoder.train(True)
+
+        scaler = torch.cuda.amp.GradScaler()
+
+        FINE_TUNED_MODEL_NAME = "fine_tuned_sam2"
+        # Optionally load a pre-trained state
+        if model_path:
+            predictor.model.load_state_dict(torch.load(model_path))
+
+        # Create dataset and dataloader with minimal changes to existing structure.
+        train_dataset = SAM2Dataset(dataset=self.RFIDataset.dataset)  # Removed the processor usage
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        self.train_dataloader = train_dataloader
+
+        # Define an optimizer (Adam is kept from the original code, but you could use AdamW)
+        # optimizer = Adam(predictor.model.parameters(), lr=1e-5, weight_decay=0)
+        optimizer = torch.optim.AdamW(params=predictor.model.parameters(),lr=0.0001,weight_decay=1e-4) #1e-5, weight_decay = 4e-5
+        scaler = torch.cuda.amp.GradScaler()
+        # Example segmentation loss
+        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+
+        # Store average mean loss for each epoch
+        ave_meanloss = []
+
+        # Set model to training mode
+        predictor.model.to(self.device)
+
+        print(f"\nTraining SAM 2 model...")
+
+
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # 500 , 250, gamma = 0.1
         accumulation_steps = 4  # Number of steps to accumulate gradients before updating
 
 
         for epoch in range(1, num_epochs + 1):
             epoch_losses = []
 
-            for batch in tqdm(train_dataloader):
+            with torch.cuda.amp.autocast():
 
-                for i in range(batch["image"].shape[0]):
+                for batch in tqdm(train_dataloader):
+
+                    #print(f"Batch: {batch}")
                     # Retrieve data from the batch
                     # Minimal changes: we still get `image`, `ground_truth_mask`, and `input_boxes`.
                     # In your original code, `image` is a PIL Image, so convert to numpy if needed.
-                    single_image = batch["image"][i]  # shape [3, H, W]
-                    ground_truth_mask = batch["ground_truth_mask"][i]
+                    single_image = batch["image"]  # shape [3, H, W]
+                    ground_truth_mask = batch["ground_truth_mask"]
                     # bounding_box = batch["input_boxes"][i]  # The bounding box prompt
 
                     # image_convert_grayscale = single_image[0]
@@ -271,13 +497,28 @@ class RFITraining:
                     
                     # Convert PIL image to NumPy array (RGB)
                     np_image = single_image.cpu().numpy()
-    
-                    input_points = np.array(get_peak_points(np_image[:,:,0], min_distance=min_point_distance))
+
+                    #input_points = np.array(get_peak_points(np_image[:,:,0], min_distance=min_point_distance))
+
+                    rows, cols = np.where(ground_truth_mask > 0)
+                    coords = np.stack((rows, cols), axis=-1)
+                    np.random.shuffle(coords)
+                    coords = coords[:num_points]
+
+                    input_points = coords
+
+                    print(f"Point coordinates: {input_points.shape}")
+
                     input_labels = np.ones((input_points.shape[0],), dtype=int)
                     # np_image = np.array(pil_image)
                     #print(f"Image shape: {np_image.shape}")
 
                     bounding_box = get_bounding_box(ground_truth_mask.cpu().numpy())
+
+                    print(f"Image shape: {np_image.shape}")
+                    print(f"Ground truth mask shape: {ground_truth_mask.shape}")
+                    print(f"Point coordinates: {input_points.shape}")
+
 
                     # print(f"Image shape: {single_image.shape}")
                     # print(f"Ground truth mask shape: {ground_truth_mask.shape}")
@@ -329,11 +570,10 @@ class RFITraining:
 
                     gt_mask = ground_truth_mask.cuda()
 
-                    #print(gt_mask.shape)
 
                     prd_mask = torch.sigmoid(prd_masks[:, 0])
 
-                    #print(prd_mask)
+                    self.prd_mask = prd_mask
 
                     seg_loss = (-gt_mask * torch.log(prd_mask + 0.000001) - (1 - gt_mask) * torch.log((1 - prd_mask) + 0.00001)).mean()
 
@@ -350,40 +590,72 @@ class RFITraining:
                     elif prd_mask.ndim == 3:  # shape [N, H, W]
                         prd_mask = prd_mask.unsqueeze(1)  # shape [N, 1, H, W]
 
+                    print(gt_mask.shape)
+                    print(prd_mask.shape)
+
+                    # # Clamp prd_mask to avoid log(0) or log(1 - 0)
+                    # prd_mask = torch.clamp(prd_mask, 1e-7, 1 - 1e-7)
+
+                    # # Compute seg_loss
+                    # seg_loss = (-gt_mask * torch.log(prd_mask) 
+                    #             - (1 - gt_mask) * torch.log(1 - prd_mask)).mean()
+
+                    # # Avoid zero denominators in IoU
+                    # inter = (gt_mask * (prd_mask > 0.5)).sum(dim=[1,2,3])
+                    # den = gt_mask.sum(dim=[1,2,3]) + (prd_mask > 0.5).sum(dim=[1,2,3]) - inter
+                    # den = torch.clamp(den, min=1e-7)  # prevents divide-by-zero
+                    # iou = inter / den
+
+                    # print(iou)
+
+                    # # Check for NaN before backprop
+                    # total_loss = seg_loss + 0.05 * (torch.abs(prd_scores[:, 0] - iou).mean())
+                    # if torch.isnan(total_loss):
+                    #     print("NaN encountered. Skipping this batch.")
+                    #     continue  # skip update
+
                     inter = (gt_mask * (prd_mask > 0.5)).sum(1).sum(1)
+
+                    #print(inter)
+
                     iou = inter / (gt_mask.sum(1).sum(1) + (prd_mask > 0.5).sum(1).sum(1) - inter)
+
+                    #print(iou)
+
                     score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
                     loss = seg_loss + score_loss * 0.05
 
                     # Apply gradient accumulation
                     loss = loss / accumulation_steps
+                    print(loss)
+
                     scaler.scale(loss).backward()
 
                     # Clip gradients
                     torch.nn.utils.clip_grad_norm_(predictor.model.parameters(), max_norm=1.0)
 
-                    step = epoch
+            step = epoch
 
-                    if step % accumulation_steps == 0:
-                        scaler.step(optimizer)
-                        scaler.update()
-                        predictor.model.zero_grad()
+            if step % accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                predictor.model.zero_grad()
 
-                    scheduler.step()
+            scheduler.step()
 
-                    if step % 10 == 0:
-                        FINE_TUNED_MODEL = FINE_TUNED_MODEL_NAME + "_" + str(step) + ".torch"
-                        torch.save(predictor.model.state_dict(), FINE_TUNED_MODEL)
+            if step % step_size == 0:
+                FINE_TUNED_MODEL = FINE_TUNED_MODEL_NAME + "_" + str(step) + ".torch"
+                torch.save(predictor.model.state_dict(), FINE_TUNED_MODEL)
 
-                    if step == 1:
-                        mean_iou = 0
+            if step == 1:
+                mean_iou = 0
 
-                    mean_iou = mean_iou * 0.99 + 0.01 * np.mean(iou.cpu().detach().numpy())
+            mean_iou = mean_iou * 0.99 + 0.01 * np.mean(iou.cpu().detach().numpy())
 
-                    if step % 100 == 0:
-                        print("Step " + str(step) + ":\t", "Accuracy (IoU) = ", mean_iou)
+            if step % 100 == 0:
+                print("Step " + str(step) + ":\t", "Accuracy (IoU) = ", mean_iou)
 
-                    epoch_losses.append(mean_iou)
+            epoch_losses.append(mean_iou)
 
             # End of epoch
             print(f"EPOCH: {epoch}")
