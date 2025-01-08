@@ -191,7 +191,7 @@ class RFITraining:
     ################
 
     # Adapted from https://www.datacamp.com/tutorial/sam2-fine-tuning
-    def train_sam2(self, num_epochs=3, batch_size=4, sam_checkpoint='small', min_point_distance = 16, step_size = 20, gamma = 0.2, num_points=128, plot=True, model_path=None, trained_model_path=None):
+    def train_sam2(self, num_epochs=3, batch_size=4, sam_checkpoint='small', min_point_distance = 16, step_size = 20, gamma = 0.2, num_points=128, threshold=0.95, plot=True, model_path=None, trained_model_path=None):
         """
         Fine-tune SAM 2 model (instead of the original SAM).
         Valid values for 'sam_checkpoint' are: 'tiny', 'small', 'base_plus', or 'large'.
@@ -237,7 +237,7 @@ class RFITraining:
         optimizer = torch.optim.AdamW(params=predictor.model.parameters(),lr=0.0001,weight_decay=1e-4) #1e-5, weight_decay = 4e-5
         scaler = torch.cuda.amp.GradScaler()
         # Example segmentation loss
-        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+        #seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
 
         # Store average mean loss for each epoch
         ave_meanloss = []
@@ -253,6 +253,9 @@ class RFITraining:
 
         for epoch in range(1, num_epochs + 1):
             epoch_losses = []
+
+            predictor.model.train()
+            optimizer.zero_grad()
 
             for step, batch in tqdm(enumerate(train_dataloader)):
 
@@ -270,9 +273,17 @@ class RFITraining:
                 coords = np.stack((rows, cols), axis=-1)
                 np.random.shuffle(coords)
                 coords = coords[:num_points]
+                coords_xy = coords[:, [1, 0]]
 
                 input_points = coords
                 input_labels = np.ones((input_points.shape[0],), dtype=int)
+
+                # fig, ax = plt.subplots(1,2, figsize=(10,5))
+                # ax[0].imshow(np_image)
+                # ax[0].scatter(input_points[:, 1], input_points[:, 0], c='r', s=10)
+                # ax[1].imshow(ground_truth_mask)
+                # ax[1].scatter(input_points[:, 1], input_points[:, 0], c='r', s=10)
+                # plt.show()
 
                 bounding_box = get_bounding_box(ground_truth_mask.cpu().numpy())
                 bounding_box = [float(coord) for coord in bounding_box]
@@ -280,8 +291,9 @@ class RFITraining:
 
                 with torch.cuda.amp.autocast():
                     predictor.set_image(np_image)
-                    mask_input, unnorm_coords, labels, unnorm_box = predictor._prep_prompts(input_points, input_labels, box=bounding_box_tensor, mask_logits=None, normalize_coords=True)
+                    mask_input, unnorm_coords, labels, unnorm_box = predictor._prep_prompts(input_points, input_labels, box=bounding_box_tensor, mask_logits=None, normalize_coords=False)
                     if unnorm_coords is None or labels is None or unnorm_coords.shape[0] == 0 or labels.shape[0] == 0:
+                        print("No valid points found. Skipping this batch.")
                         continue
 
                     sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
@@ -310,6 +322,15 @@ class RFITraining:
                     prd_mask = torch.sigmoid(prd_masks[:, 0])
                     prd_mask = prd_mask.squeeze(0)
 
+                    prd_mask = 1 - prd_mask
+                    # prd_mask = (prd_mask > threshold)
+
+                    # gt_mask = gt_mask.float()
+                    # prd_mask = prd_mask.float()
+                    
+                    self.gt_mask = gt_mask
+                    self.prd_mask = prd_mask
+
                     seg_loss = (-gt_mask * torch.log(prd_mask + 0.000001) - (1 - gt_mask) * torch.log((1 - prd_mask) + 0.00001)).mean()
 
                     #print('seg_loss:', seg_loss)
@@ -337,12 +358,15 @@ class RFITraining:
                     # Clip gradients
                     torch.nn.utils.clip_grad_norm_(predictor.model.parameters(), max_norm=1.0)
 
-            step = epoch
+                step = epoch
 
-            if (step + 1) % accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+                if (step + 1) % accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+
+                epoch_losses.append(loss.item())
+
 
             scheduler.step()
 
@@ -352,7 +376,6 @@ class RFITraining:
 
                 #print("Step " + str(step) + ":\t", "Accuracy (IoU) = ", mean_iou)
 
-            epoch_losses.append(loss.item())
 
             # End of epoch
             #print(f"EPOCH: {epoch}")
@@ -414,7 +437,7 @@ class RFITraining:
             )
             fig.savefig(os.path.join(method_dir, filename))
             plt.show()
-            
+
 
 class SAMDataset(TorchDataset):
     """
