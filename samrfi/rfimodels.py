@@ -255,10 +255,14 @@ class RFIModels:
         if save:    
             np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
 
-    def run_model_sam2(self, threshold=0.95, patch_size=1024, num_points=256, point_threshold=1, save=False):
+    def run_model_sam2(self, threshold=0.95, patch_size=1024, num_points=256, point_threshold=1, reuse_logics=False, save=False):
 
         pol_flags_list = []
         pol_logits_list = []
+
+        counter = 0
+
+        master_logits = None
 
         for baseline in tqdm(range(self.RadioRFI.rfi_antenna_data.shape[0])):
 
@@ -274,31 +278,25 @@ class RFIModels:
 
                 patches, original_shape, padded_shape = create_patches(single_data, patch_size=patch_size)
 
+                if reuse_logics:
+                    if counter > 0:
+                        logits_reuse, original_shapel, padded_shapel = create_patches(master_logits, patch_size=patch_size)
+                        logits_reuse = np.array(logits_reuse)
+
                 self.patches = patches
 
                 patch_flags = []
                 patch_logits = []
 
-                for patch in patches:
-
-                    #single_patch = Image.fromarray(patch).convert("RGB")
+                for idx, patch in enumerate(patches):
 
                     single_patch = np.stack([patch] * 3, axis=-1) #(3, 1024, 1024)
 
-                    # print(single_patch)
-                    # print(single_patch.dtype)
-                
                     single_patch = single_patch.astype(np.float32)
 
                     bbox = np.array(get_bounding_box(patch))
+
                     # From https://www.datacamp.com/tutorial/sam2-fine-tuning
-
-                    #self.input_points = get_points(patch, num_samples)
-
-                    
-                    # self.bbox = bbox
-                    # self.input_points = get_peak_points(patch, min_distance=8)
-                    # self.point_labels = np.ones(self.input_points.shape[0], dtype=int)
 
                     rows, cols = np.where(patch > point_threshold)
                     coords = np.stack((rows, cols), axis=-1)
@@ -315,33 +313,52 @@ class RFIModels:
                     # plt.show()
 
                     bounding_box = np.array(get_bounding_box(patch))
+
                     # bounding_box = [float(coord) for coord in bounding_box]
                     # bounding_box_tensor = torch.tensor([bounding_box], device=self.device).float().unsqueeze(0)
-                    
-                    # print(self.input_points.shape)
-                    # print(self.point_labels.shape)
 
                     with torch.no_grad():
 
                         self.sam2_predictor.set_image(single_patch)
 
-                        masks, scores, logits = self.sam2_predictor.predict(
-                            point_coords=self.input_points,
-                            point_labels=self.point_labels,
-                            box=bounding_box,
-                            multimask_output=False,
-                        )
+                        if reuse_logics:
+                            if counter > 0:
 
-                    
-                    #print(self.logits_first.shape)
+                                logit_resue_tensor = torch.tensor(logits_reuse[idx,:,:])
+                                logit_resue_tensor = logit_resue_tensor.unsqueeze(0)
 
+                                masks, scores, logits = self.sam2_predictor.predict(
+                                    point_coords=self.input_points,
+                                    point_labels=self.point_labels,
+                                    box=bounding_box,
+                                    mask_input=logit_resue_tensor,
+                                    multimask_output=False,
+                                )
+                            
+                            else:
+                                masks, scores, logits = self.sam2_predictor.predict(
+                                    point_coords=self.input_points,
+                                    point_labels=self.point_labels,
+                                    box=bounding_box,
+                                    multimask_output=False,
+                                )
+
+                        else:
+                            masks, scores, logits = self.sam2_predictor.predict(
+                                point_coords=self.input_points,
+                                point_labels=self.point_labels,
+                                box=bounding_box,
+                                multimask_output=False,
+                            )
+                        
                     self.test_masks = masks
-                    #patch_flags.append(masks[0])
 
                     binary_mask = (masks[0] > threshold).astype(np.uint8)
 
                     patch_flags.append(binary_mask)
                     patch_logits.append(logits[0])
+                    
+                counter += 1
 
                 master_flag = reconstruct_image(patch_flags, original_shape, padded_shape, patch_size=patch_size)
                 master_logits = reconstruct_image(patch_logits, original_shape, padded_shape, patch_size=patch_size)
