@@ -84,7 +84,7 @@ class RadioRFIMetricsCalculator:
 
         return self.metrics_results
 
-    def test_realdata(self, save=True,):
+    def test_realdata(self, change_res_scale=False, save=True,):
 
         rfi_per = []
         rfi_scr = []
@@ -119,18 +119,26 @@ class RadioRFIMetricsCalculator:
 
                 if save:
                     fig, ax = plt.subplots(3,1, figsize=(20, 16),dpi=175)
-                    # norm1 = ImageNormalize(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, interval=ZScaleInterval())
+                    norm1 = ImageNormalize(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, interval=ZScaleInterval())
                     # norm2 = ImageNormalize(self.RadioRFI.flags[i,j,:,:].T, interval=ZScaleInterval())
 
                     residual = np.where(np.logical_not(self.RadioRFI.flags[i,j,:,:].T), self.RadioRFI.rfi_antenna_data[i,j,:,:].T, 0)
 
-                    # norm3 = ImageNormalize(residual, interval=ZScaleInterval())
+                    norm3 = ImageNormalize(residual, interval=ZScaleInterval())
 
                     # im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto')
                     # im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, norm=norm2, aspect='auto')
-                    im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, vmin=0, vmax=1, aspect='auto', cmap='coolwarm')
+                    if change_res_scale:
+                        im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, vmin=0, vmax=1, aspect='auto', cmap='coolwarm')
+                    else:
+                        im1 = ax[0].imshow(self.RadioRFI.rfi_antenna_data[i,j,:,:].T, norm=norm1, aspect='auto', cmap='coolwarm')
+
                     im2 = ax[1].imshow(self.RadioRFI.flags[i,j,:,:].T, cmap='gray', aspect='auto')
-                    im3 = ax[2].imshow(residual, vmin=0, vmax=1, cmap='coolwarm', aspect='auto')
+
+                    if change_res_scale:
+                        im3 = ax[2].imshow(residual, vmin=0, vmax=1, cmap='coolwarm', aspect='auto')
+                    else:
+                        im3 = ax[2].imshow(residual, norm=norm3, cmap='coolwarm', aspect='auto')
 
                     ax[0].set_title('Baseline')
                     ax[1].set_title('Flags')

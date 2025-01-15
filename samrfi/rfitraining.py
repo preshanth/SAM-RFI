@@ -427,8 +427,8 @@ class RFITraining:
                 color="blue"
             )
             ax.set_xlabel("Epoch")
-            ax.set_ylabel("Accuracy (IoU)")
-            ax.set_title("Accuracy (IoU) vs Epoch")
+            ax.set_ylabel("Mean Loss")
+            ax.set_title("Mean Loss vs Epoch")
             plt.legend()
 
             filename = (

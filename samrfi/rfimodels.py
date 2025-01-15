@@ -255,7 +255,7 @@ class RFIModels:
         if save:    
             np.save(f"{self.RadioRFI.directory}/flags.npy",baseline_flags)
 
-    def run_model_sam2(self, threshold=0.95, patch_size=1024, num_points=256, point_threshold=1, reuse_logics=False, save=False):
+    def run_model_sam2(self, threshold=0.95, patch_size=1024, num_points=256, point_threshold=1, reuse_logits=False, multimask_output=False, save=False):
 
         pol_flags_list = []
         pol_logits_list = []
@@ -278,7 +278,7 @@ class RFIModels:
 
                 patches, original_shape, padded_shape = create_patches(single_data, patch_size=patch_size)
 
-                if reuse_logics:
+                if reuse_logits:
                     if counter > 0:
                         logits_reuse, original_shapel, padded_shapel = create_patches(master_logits, patch_size=patch_size)
                         logits_reuse = np.array(logits_reuse)
@@ -321,7 +321,7 @@ class RFIModels:
 
                         self.sam2_predictor.set_image(single_patch)
 
-                        if reuse_logics:
+                        if reuse_logits:
                             if counter > 0:
 
                                 logit_resue_tensor = torch.tensor(logits_reuse[idx,:,:])
@@ -332,7 +332,7 @@ class RFIModels:
                                     point_labels=self.point_labels,
                                     box=bounding_box,
                                     mask_input=logit_resue_tensor,
-                                    multimask_output=False,
+                                    multimask_output=multimask_output,
                                 )
                             
                             else:
@@ -340,7 +340,7 @@ class RFIModels:
                                     point_coords=self.input_points,
                                     point_labels=self.point_labels,
                                     box=bounding_box,
-                                    multimask_output=False,
+                                    multimask_output=multimask_output,
                                 )
 
                         else:
@@ -348,13 +348,30 @@ class RFIModels:
                                 point_coords=self.input_points,
                                 point_labels=self.point_labels,
                                 box=bounding_box,
-                                multimask_output=False,
+                                multimask_output=multimask_output,
                             )
                         
                     self.test_masks = masks
+                    self.test_scores = scores
+                    self.test_logits = logits
+
+                    np_masks = np.array(masks[:,0])
+
+                    if multimask_output:
+                        # From https://www.datacamp.com/tutorial/sam2-fine-tuning
+
+                        # print(scores)
+                        # print(scores.shape)
+                        # print(np.argsort(scores))
+
+                        masks = masks[np.argsort(scores)][::-1]
+                        logits = logits[np.argsort(scores)][::-1]
+
+                        # print(masks.shape)
+                        # print(logits.shape)
+                        ########
 
                     binary_mask = (masks[0] > threshold).astype(np.uint8)
-
                     patch_flags.append(binary_mask)
                     patch_logits.append(logits[0])
                     

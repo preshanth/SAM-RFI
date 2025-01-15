@@ -1,0 +1,1 @@
+Flagdata operation on calib_phase_tfcrop_twice.ms took 673.59 seconds on tfcrop.
