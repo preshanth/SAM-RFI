@@ -1,0 +1,41 @@
+# H200 Training Configuration  
+# Optimized for speed within 2-hour time constraint
+
+model:
+  version: "sam2"
+  variant: "large"  # Can use larger variant on H200
+  image_size: 1024
+
+training:
+  batch_size: 4           # Larger batch size for H200
+  gradient_accumulation: 4 # Still use accumulation
+  mixed_precision: true    # FP16 to maximize throughput
+  max_epochs: 50          # Target 2-hour training window
+  learning_rate: 2e-4     # Higher learning rate for faster convergence
+  weight_decay: 1e-2
+  warmup_steps: 50        # Shorter warmup
+  
+  # Speed optimization settings
+  gradient_checkpointing: false  # Disable to maximize speed
+  dataloader_num_workers: 8      # More workers for faster data loading
+  pin_memory: true
+  compile_model: true            # Use torch.compile for speed
+  
+hardware:
+  target_gpu: "H200"
+  memory_limit: "141GB"
+  time_limit: "2hours"
+  
+optimizer:
+  name: "AdamW"
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+scheduler:
+  name: "cosine"
+  warmup_ratio: 0.05  # Shorter warmup ratio
+
+logging:
+  log_every_n_steps: 5
+  save_every_n_epochs: 5
+  validate_every_n_epochs: 2  # More frequent validation

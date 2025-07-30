@@ -1,0 +1,40 @@
+# V100 Training Configuration
+# Optimized for 16GB memory constraint, flexible time
+
+model:
+  version: "sam2"
+  variant: "small"  # Use smaller variant for V100
+  image_size: 1024
+
+training:
+  batch_size: 1           # Small batch size for V100 (16GB)
+  gradient_accumulation: 8 # Simulate larger batch
+  mixed_precision: true    # FP16 to save memory
+  max_epochs: 200         # V100 can run for days
+  learning_rate: 1e-4
+  weight_decay: 1e-2
+  warmup_steps: 100
+  
+  # Memory optimization settings
+  gradient_checkpointing: true
+  dataloader_num_workers: 2
+  pin_memory: true
+  
+hardware:
+  target_gpu: "V100"
+  memory_limit: "16GB"
+  time_limit: "flexible"
+  
+optimizer:
+  name: "AdamW"
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+scheduler:
+  name: "cosine"
+  warmup_ratio: 0.1
+
+logging:
+  log_every_n_steps: 10
+  save_every_n_epochs: 10
+  validate_every_n_epochs: 5
