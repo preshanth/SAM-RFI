@@ -1,14 +1,30 @@
 """
 SAM-RFI Datasets Module
 
-HuggingFace-compatible dataset creation and management.
+Dataset handling, synthetic data generation, and HuggingFace integration.
 """
 
+# Core synthetic data generation (always available)
+from .synthetic_ms import ObservationConfig, RFIConfig, SyntheticVisibilityGenerator
+from .ms_writer import MSWriter
+from .generator import SyntheticDatasetGenerator
+
+# HuggingFace integration (optional)
 try:
     from .rfi_dataset import RFIDatasetCreator
+
     HF_AVAILABLE = True
 except ImportError:
     RFIDatasetCreator = None
     HF_AVAILABLE = False
 
-__all__ = ['RFIDatasetCreator'] if HF_AVAILABLE else []
+__all__ = [
+    "ObservationConfig",
+    "RFIConfig",
+    "SyntheticVisibilityGenerator",
+    "MSWriter",
+    "SyntheticDatasetGenerator",
+]
+
+if HF_AVAILABLE:
+    __all__.append("RFIDatasetCreator")
