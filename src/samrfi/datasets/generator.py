@@ -127,24 +127,23 @@ class SyntheticDatasetGenerator:
         # Inject RFI
         corrupted_vis, rfi_mask = vis_gen.inject_rfi(clean_vis)
         
-        # Create measurement sets
-        ms_writer = MSWriter(obs_config)
+        # Create measurement sets - fresh MSWriter instance for each MS
         
         # Clean MS (no RFI)
         clean_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_clean.ms"
-        ms_writer.create_measurement_set(
+        MSWriter(obs_config).create_measurement_set(
             str(clean_ms_path), clean_vis, include_rfi_flags=False
         )
         
         # Corrupted MS (with RFI, no flags)
         corrupted_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_corrupted.ms"
-        ms_writer.create_measurement_set(
+        MSWriter(obs_config).create_measurement_set(
             str(corrupted_ms_path), corrupted_vis, include_rfi_flags=False
         )
         
         # Ground truth MS (with RFI flags)
         truth_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_truth.ms"
-        ms_writer.create_measurement_set(
+        MSWriter(obs_config).create_measurement_set(
             str(truth_ms_path), corrupted_vis, rfi_mask, include_rfi_flags=True
         )
         

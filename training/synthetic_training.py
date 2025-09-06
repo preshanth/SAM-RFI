@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 try:
     from samrfi.datasets import (
-        SyntheticDatasetGenerator, 
+        SimulatedMS, 
         ObservationConfig, 
         RFIConfig
     )
@@ -177,7 +177,8 @@ def create_synthetic_datasets(output_dir: str, num_train: int = 500, num_val: in
         channels_per_spw=512,  # 1024 total channels
         start_frequency=1.4e9,  # L-band
         total_duration=1024.0,  # 1024 seconds for 1024 time steps
-        integration_time=1.0    # 1s integration → 1024 time steps
+        integration_time=1.0,   # 1s integration → 1024 time steps
+        thermal_noise_sigma=1e-3  # Thermal noise level
     )
     
     # Different RFI scenarios targeting ~20% total RFI
@@ -208,9 +209,6 @@ def create_synthetic_datasets(output_dir: str, num_train: int = 500, num_val: in
         )
     ]
     
-    # Initialize dataset generator
-    generator = SyntheticDatasetGenerator(str(output_path / 'synthetic_ms'))
-    
     # Fixed MS file counts for consistent dataset size
     # 27 antennas = 351 baselines per MS
     baselines_per_ms = 27 * (27 - 1) // 2  # 351 baselines
@@ -223,23 +221,83 @@ def create_synthetic_datasets(output_dir: str, num_train: int = 500, num_val: in
     logger.info(f"Generating {num_train_ms} training MS files ({actual_train_baselines} baselines)")
     logger.info(f"Generating {num_val_ms} validation MS files ({actual_val_baselines} baselines)")
     
-    # Generate training dataset
-    logger.info("Generating training dataset...")
-    train_metadata = generator.generate_training_dataset(
-        dataset_name='sam_rfi_train',
-        num_observations=num_train_ms,
-        obs_config=obs_config,
-        rfi_configs=rfi_configs
-    )
+    # Create directories for dataset structure
+    ms_dir = output_path / 'synthetic_ms' / 'measurement_sets'
+    gt_dir = output_path / 'synthetic_ms' / 'ground_truth'
+    ms_dir.mkdir(exist_ok=True, parents=True)
+    gt_dir.mkdir(exist_ok=True, parents=True)
     
-    # Generate validation dataset
+    # Initialize SimulatedMS
+    simulator = SimulatedMS(obs_config)
+    
+    # Generate training MS files
+    logger.info("Generating training dataset...")
+    train_observations = []
+    for i in range(num_train_ms):
+        rfi_config = rfi_configs[i % len(rfi_configs)]
+        obs_name = f"sam_rfi_train_obs_{i:03d}"
+        ms_path = ms_dir / f"{obs_name}.ms"
+        
+        # Create ground truth directory for .npy files
+        gt_path = gt_dir / obs_name
+        gt_path.mkdir(exist_ok=True)
+        
+        logger.info(f"Creating training MS {i+1}/{num_train_ms}: {ms_path.name}")
+        simulator.create_ms_with_rfi(
+            str(ms_path), 
+            rfi_config=rfi_config, 
+            include_rfi_flags=True,
+            save_training_data=True,
+            training_data_dir=str(gt_path)
+        )
+        
+        train_observations.append({
+            'observation_name': obs_name,
+            'ms_path': str(ms_path),
+            'ground_truth_dir': str(gt_path)
+        })
+    
+    # Generate validation MS files  
     logger.info("Generating validation dataset...")
-    val_metadata = generator.generate_training_dataset(
-        dataset_name='sam_rfi_val',
-        num_observations=num_val_ms,
-        obs_config=obs_config,
-        rfi_configs=rfi_configs
-    )
+    val_observations = []
+    for i in range(num_val_ms):
+        rfi_config = rfi_configs[i % len(rfi_configs)]
+        obs_name = f"sam_rfi_val_obs_{i:03d}"
+        ms_path = ms_dir / f"{obs_name}.ms"
+        
+        # Create ground truth directory for .npy files
+        gt_path = gt_dir / obs_name
+        gt_path.mkdir(exist_ok=True)
+        
+        logger.info(f"Creating validation MS {i+1}/{num_val_ms}: {ms_path.name}")
+        simulator.create_ms_with_rfi(
+            str(ms_path), 
+            rfi_config=rfi_config, 
+            include_rfi_flags=True,
+            save_training_data=True,
+            training_data_dir=str(gt_path)
+        )
+        
+        val_observations.append({
+            'observation_name': obs_name,
+            'ms_path': str(ms_path),
+            'ground_truth_dir': str(gt_path)
+        })
+    
+    # Create metadata in expected format
+    train_metadata = {
+        'dataset_name': 'sam_rfi_train',
+        'creation_time': datetime.now().isoformat(),
+        'num_observations': num_train_ms,
+        'observations': train_observations
+    }
+    
+    val_metadata = {
+        'dataset_name': 'sam_rfi_val', 
+        'creation_time': datetime.now().isoformat(),
+        'num_observations': num_val_ms,
+        'observations': val_observations
+    }
     
     # Combine metadata with baseline counting
     combined_metadata = {
@@ -455,11 +513,48 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
     logger.info(f"Estimated training time: {time_estimate['estimated_hours']:.2f} hours")
     logger.info(f"Total steps: {time_estimate['total_steps']}")
     
-    # Setup model (this would use the actual SAM2 model)
-    # trainer.setup_model(sam_adapter, len(train_dataset))
+    # Setup model for training
+    trainer.setup_model(sam_adapter, len(train_dataset))
     
     logger.info("SAM2 training pipeline ready!")
-    logger.info("To complete setup: provide SAM2 checkpoint path and run training loop")
+    logger.info("Starting training...")
+    
+    # Create output directory for checkpoints
+    checkpoint_dir = Path(output_dir) / 'checkpoints'
+    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    
+    # Training loop
+    num_epochs = config['training']['max_epochs']
+    best_val_loss = float('inf')
+    
+    for epoch in range(num_epochs):
+        logger.info(f"Epoch {epoch+1}/{num_epochs}")
+        
+        # Training phase
+        train_result = trainer.train_epoch(train_loader, epoch)
+        train_loss = train_result["loss"]
+        logger.info(f"Training loss: {train_loss:.4f}")
+        
+        # Validation phase
+        val_result = trainer.validate(val_loader)
+        val_loss = val_result["loss"]
+        logger.info(f"Validation loss: {val_loss:.4f}")
+        
+        # Save checkpoint
+        if (epoch + 1) % config['logging']['save_every_n_epochs'] == 0:
+            checkpoint_path = checkpoint_dir / f'sam_rfi_epoch_{epoch+1:03d}.pt'
+            trainer.save_checkpoint(str(checkpoint_path), epoch+1, train_loss, val_loss)
+            logger.info(f"Checkpoint saved: {checkpoint_path}")
+        
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_checkpoint_path = checkpoint_dir / 'best_model.pt'
+            trainer.save_checkpoint(str(best_checkpoint_path), epoch+1, train_loss, val_loss)
+            logger.info(f"New best model saved: {best_checkpoint_path}")
+    
+    logger.info(f"Training completed! Best validation loss: {best_val_loss:.4f}")
+    logger.info(f"Model checkpoints saved in: {checkpoint_dir}")
 
 
 def demonstrate_training_pipeline(config: Dict, train_loader: DataLoader, 

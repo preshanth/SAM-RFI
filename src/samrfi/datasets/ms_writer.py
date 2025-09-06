@@ -47,6 +47,25 @@ class MSWriter:
         self.qa = quanta()
         self.mysu = simutil.simutil()
 
+    def __del__(self):
+        """Destructor to cleanup CASA tools"""
+        try:
+            if hasattr(self, 'sm'):
+                self.sm.close()
+                self.sm.done()
+            if hasattr(self, 'tb'):
+                self.tb.close()
+                self.tb.done()
+            if hasattr(self, 'me'):
+                self.me.done()
+            if hasattr(self, 'qa'):
+                self.qa.done()
+            # mysu doesn't have done() method
+            import gc
+            gc.collect()
+        except:
+            pass  # Ignore cleanup errors
+
     def create_measurement_set(
         self,
         ms_path: str,
@@ -186,8 +205,9 @@ class MSWriter:
             stoptime=f'{obs_duration}s'
         )
 
-        # Close simulator
+        # Close and destroy simulator
         self.sm.close()
+        self.sm.done()
 
         # Unflag everything initially
         flagdata(vis=ms_path, mode='unflag')

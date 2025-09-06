@@ -45,6 +45,7 @@ class ObservationConfig:
 
     # Data configuration
     polarizations: List[str] = None  # ['XX', 'XY', 'YX', 'YY']
+    thermal_noise_sigma: float = 1e-3  # Thermal noise level per visibility
 
     def __post_init__(self):
         if self.polarizations is None:

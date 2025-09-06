@@ -71,6 +71,26 @@ class GPUOptimizedTrainer:
                 "compile_model", True
             )
             logger.info("H200 optimizations: no checkpointing, model compilation")
+            
+        elif self.gpu_type == "GTX1080Ti":
+            # GTX1080Ti: Memory-constrained consumer GPU
+            self.enable_gradient_checkpointing = self.config.get("training", {}).get(
+                "gradient_checkpointing", True
+            )
+            self.use_mixed_precision = self.config.get("training", {}).get(
+                "mixed_precision", True
+            )
+            self.compile_model = self.config.get("training", {}).get(
+                "compile_model", False
+            )
+            logger.info("GTX1080Ti optimizations: gradient checkpointing, mixed precision")
+        
+        else:
+            # Default settings for unknown GPUs
+            self.enable_gradient_checkpointing = True
+            self.use_mixed_precision = True
+            self.compile_model = False
+            logger.info(f"Default optimizations for {self.gpu_type}: gradient checkpointing, mixed precision")
 
         # Initialize mixed precision scaler
         if self.use_mixed_precision:
@@ -80,11 +100,17 @@ class GPUOptimizedTrainer:
         """Setup model, optimizer, and scheduler"""
         self.model = sam_adapter.model
 
-        # Enable gradient checkpointing if needed
-        if self.enable_gradient_checkpointing and hasattr(
-            self.model, "gradient_checkpointing_enable"
-        ):
-            self.model.gradient_checkpointing_enable()
+        # Enable gradient checkpointing if needed (skip for SAM2)
+        if (self.enable_gradient_checkpointing and 
+            hasattr(self.model, "gradient_checkpointing_enable") and 
+            "Sam2Model" not in str(type(self.model))):
+            try:
+                self.model.gradient_checkpointing_enable()
+                logger.info("Gradient checkpointing enabled")
+            except Exception as e:
+                logger.warning(f"Could not enable gradient checkpointing: {e}")
+        elif "Sam2Model" in str(type(self.model)):
+            logger.info("Skipping gradient checkpointing (not supported by SAM2)")
 
         # Compile model for H200 speed optimization
         if self.compile_model and hasattr(torch, "compile"):
@@ -98,10 +124,10 @@ class GPUOptimizedTrainer:
         optimizer_config = self.config.get("optimizer", {})
         self.optimizer = AdamW(
             self.model.parameters(),
-            lr=self.config["training"]["learning_rate"],
-            weight_decay=self.config["training"]["weight_decay"],
+            lr=float(self.config["training"]["learning_rate"]),
+            weight_decay=float(self.config["training"]["weight_decay"]),
             betas=optimizer_config.get("betas", [0.9, 0.999]),
-            eps=optimizer_config.get("eps", 1e-8),
+            eps=float(optimizer_config.get("eps", 1e-8)),
         )
 
         # Setup scheduler
@@ -144,6 +170,8 @@ class GPUOptimizedTrainer:
             # Update weights after accumulation
             if (batch_idx + 1) % gradient_accumulation == 0:
                 if self.use_mixed_precision:
+                    # Unscale gradients before clipping (if needed)
+                    self.scaler.unscale_(self.optimizer)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
@@ -226,6 +254,16 @@ class GPUOptimizedTrainer:
             # Must complete within 2 hours
             seconds_per_step = 0.2  # Faster due to better hardware
             estimated_hours = min((total_steps * seconds_per_step) / 3600, 2.0)
+            
+        elif self.gpu_type == "GTX1080Ti":
+            # Consumer GPU - moderate speed
+            seconds_per_step = 0.8  # Slower than H200, faster than V100
+            estimated_hours = (total_steps * seconds_per_step) / 3600
+            
+        else:
+            # Default estimate for unknown GPUs
+            seconds_per_step = 1.0
+            estimated_hours = (total_steps * seconds_per_step) / 3600
 
         return {
             "estimated_hours": estimated_hours,
