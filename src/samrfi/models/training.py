@@ -59,14 +59,18 @@ class GPUOptimizedTrainer:
         if self.gpu_type == "V100":
             # V100: Memory-constrained but time-flexible
             self.enable_gradient_checkpointing = True
-            self.use_mixed_precision = True
+            self.use_mixed_precision = self.config.get("training", {}).get(
+                "mixed_precision", True
+            )
             self.compile_model = False  # May use extra memory
             logger.info("V100 optimizations: gradient checkpointing, mixed precision")
 
         elif self.gpu_type == "H200":
             # H200: Time-constrained but memory-rich
             self.enable_gradient_checkpointing = False
-            self.use_mixed_precision = True
+            self.use_mixed_precision = self.config.get("training", {}).get(
+                "mixed_precision", True
+            )
             self.compile_model = self.config.get("training", {}).get(
                 "compile_model", True
             )
@@ -88,7 +92,9 @@ class GPUOptimizedTrainer:
         else:
             # Default settings for unknown GPUs
             self.enable_gradient_checkpointing = True
-            self.use_mixed_precision = True
+            self.use_mixed_precision = self.config.get("training", {}).get(
+                "mixed_precision", True
+            )
             self.compile_model = False
             logger.info(f"Default optimizations for {self.gpu_type}: gradient checkpointing, mixed precision")
 
