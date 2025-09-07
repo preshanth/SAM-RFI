@@ -757,14 +757,16 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
         # Save checkpoint
         if (epoch + 1) % config['logging']['save_every_n_epochs'] == 0:
             checkpoint_path = checkpoint_dir / f'sam_rfi_epoch_{epoch+1:03d}.pt'
-            trainer.save_checkpoint(str(checkpoint_path), epoch+1, train_loss, val_loss)
+            metrics = {'train_loss': train_loss, 'val_loss': val_loss}
+            trainer.save_checkpoint(str(checkpoint_path), epoch+1, metrics)
             logger.info(f"Checkpoint saved: {checkpoint_path}")
         
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_checkpoint_path = checkpoint_dir / 'best_model.pt'
-            trainer.save_checkpoint(str(best_checkpoint_path), epoch+1, train_loss, val_loss)
+            metrics = {'train_loss': train_loss, 'val_loss': val_loss}
+            trainer.save_checkpoint(str(best_checkpoint_path), epoch+1, metrics)
             logger.info(f"New best model saved: {best_checkpoint_path}")
     
     logger.info(f"Training completed! Best validation loss: {best_val_loss:.4f}")
