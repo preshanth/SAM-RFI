@@ -9,7 +9,7 @@ model:
 training:
   batch_size: 1           # Small batch size for V100 (16GB)
   gradient_accumulation: 8 # Simulate larger batch
-  mixed_precision: true    # FP16 to save memory
+  mixed_precision: false   # Disable mixed precision to avoid scaler issues
   max_epochs: 200         # V100 can run for days
   learning_rate: 1e-4
   weight_decay: 1e-2

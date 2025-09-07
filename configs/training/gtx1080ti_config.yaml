@@ -10,7 +10,7 @@ model:
 training:
   batch_size: 1              # Small batch for 11GB VRAM
   gradient_accumulation: 8   # Accumulate to effective batch size of 8
-  mixed_precision: false     # Disable for now to avoid scaler issues
+  mixed_precision: false     # Disabled - causes scaler issues
   max_epochs: 10            # Few epochs for quick testing
   learning_rate: 1e-4       # Conservative learning rate
   weight_decay: 1e-3

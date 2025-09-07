@@ -9,7 +9,7 @@ model:
 training:
   batch_size: 4           # Larger batch size for H200
   gradient_accumulation: 4 # Still use accumulation
-  mixed_precision: true    # FP16 to maximize throughput
+  mixed_precision: false   # Disabled - causes scaler issues
   max_epochs: 50          # Target 2-hour training window
   learning_rate: 2e-4     # Higher learning rate for faster convergence
   weight_decay: 1e-2
