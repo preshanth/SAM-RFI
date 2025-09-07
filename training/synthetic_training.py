@@ -165,7 +165,9 @@ class RFISyntheticDataset(Dataset):
     """
     
     def __init__(self, observations: List[Dict], image_size: int = 1024, 
-                 channel_swap_seed: int = None, is_validation: bool = False):
+                 channel_swap_seed: int = None, is_validation: bool = False,
+                 loading_strategy: str = "eager", cache_observations: int = 2, 
+                 memory_budget_gb: float = 64):
         """
         Initialize dataset
         
@@ -174,11 +176,22 @@ class RFISyntheticDataset(Dataset):
             image_size: Target image size (should match natural tile size)  
             channel_swap_seed: Seed for channel randomization (None = random)
             is_validation: If True, use fixed channel order for consistency
+            loading_strategy: "eager" (load all), "lazy" (load on-demand), "hybrid" (cache recent)
+            cache_observations: For hybrid mode, number of observations to cache
+            memory_budget_gb: Auto-switch to lazy if estimated dataset size exceeds this
         """
         self.observations = observations
         self.image_size = image_size
         self.is_validation = is_validation
-        self.samples = []
+        self.loading_strategy = loading_strategy
+        self.cache_observations = cache_observations
+        self.memory_budget_gb = memory_budget_gb
+        
+        # Storage for different loading modes
+        self.samples = []  # For eager loading
+        self.sample_metadata = []  # For lazy loading
+        self.observation_cache = {}  # For hybrid loading
+        self.cache_access_order = []  # LRU cache for hybrid
         
         # Set up channel selection
         self.available_channels = ['real2', 'log_amp', 'phase', 'imag2']
@@ -190,11 +203,52 @@ class RFISyntheticDataset(Dataset):
         else:
             self.rng = np.random.RandomState()
         
-        # Load all samples
-        for obs_meta in observations:
-            self._load_observation(obs_meta)
+        # Auto-select strategy based on memory budget
+        estimated_size_gb = self._estimate_dataset_size()
+        if estimated_size_gb > memory_budget_gb and loading_strategy == "eager":
+            logger.warning(f"Dataset size ({estimated_size_gb:.1f}GB) exceeds budget ({memory_budget_gb}GB), switching to lazy loading")
+            self.loading_strategy = "lazy"
         
-        logger.info(f"Loaded {len(self.samples)} samples ({'validation' if is_validation else 'training'} mode)")
+        # Initialize based on loading strategy
+        if self.loading_strategy == "eager":
+            self._load_all_observations()
+            logger.info(f"Loaded {len(self.samples)} samples in eager mode ({'validation' if is_validation else 'training'})")
+        else:  # lazy or hybrid
+            self._index_all_observations()
+            logger.info(f"Indexed {len(self.sample_metadata)} samples in {self.loading_strategy} mode ({'validation' if is_validation else 'training'})")
+    
+    def _estimate_dataset_size(self) -> float:
+        """Estimate dataset size in GB"""
+        try:
+            # Check first observation to get size estimate
+            if not self.observations:
+                return 0.0
+            
+            first_obs = self.observations[0]
+            ground_truth_dir = Path(first_obs['ground_truth_dir'])
+            vis_path = ground_truth_dir / 'corrupted_visibilities.npy'
+            
+            if vis_path.exists():
+                # Get shape using memory mapping
+                vis_shape = np.load(vis_path, mmap_mode='r').shape
+                # Each complex64 = 8 bytes, multiply by 2 arrays (vis + mask)
+                size_per_obs_gb = (np.prod(vis_shape) * 8 * 2) / (1024**3)
+                total_size_gb = size_per_obs_gb * len(self.observations)
+                logger.info(f"Estimated dataset size: {total_size_gb:.1f}GB ({size_per_obs_gb:.1f}GB per observation)")
+                return total_size_gb
+        except Exception as e:
+            logger.warning(f"Could not estimate dataset size: {e}")
+        return 0.0
+    
+    def _load_all_observations(self):
+        """Load all observations into memory (eager mode)"""
+        for obs_meta in self.observations:
+            self._load_observation(obs_meta)
+    
+    def _index_all_observations(self):
+        """Index all observations without loading data (lazy/hybrid mode)"""
+        for obs_meta in self.observations:
+            self._index_observation(obs_meta)
     
     def _load_observation(self, obs_meta: Dict):
         """Load samples from a single observation"""
@@ -236,15 +290,112 @@ class RFISyntheticDataset(Dataset):
             logger.error(f"Failed to load {ground_truth_dir}: {e}")
             raise
     
+    def _index_observation(self, obs_meta: Dict):
+        """Index samples from a single observation (don't load data)"""
+        ground_truth_dir = Path(obs_meta['ground_truth_dir'])
+        
+        try:
+            # Check that files exist and get shape information
+            vis_path = ground_truth_dir / 'corrupted_visibilities.npy'
+            mask_path = ground_truth_dir / 'rfi_mask.npy'
+            
+            if not vis_path.exists() or not mask_path.exists():
+                raise FileNotFoundError(f"Missing data files in {ground_truth_dir}")
+            
+            # Get shape without loading full array (memory map)
+            vis_shape = np.load(vis_path, mmap_mode='r').shape
+            num_baselines, num_times, num_channels, num_pols = vis_shape
+            
+            # Sample 4 combinations per baseline instead of all 24
+            combinations_per_baseline = 4
+            
+            for baseline_idx in range(num_baselines):
+                for pol_idx in range(num_pols):
+                    for combo_idx in range(combinations_per_baseline):
+                        # Store metadata for lazy loading
+                        sample_meta = {
+                            'vis_path': str(vis_path),
+                            'mask_path': str(mask_path),
+                            'baseline_idx': baseline_idx,
+                            'pol_idx': pol_idx,
+                            'combo_idx': combo_idx,
+                            'original_shape': (num_times, num_channels),
+                            'observation': obs_meta['ms_path']
+                        }
+                        self.sample_metadata.append(sample_meta)
+        
+        except Exception as e:
+            logger.error(f"Failed to index {ground_truth_dir}: {e}")
+            raise
+    
+    def _load_sample_data(self, sample_meta: Dict):
+        """Load single sample data on-demand"""
+        vis_path = sample_meta['vis_path']
+        mask_path = sample_meta['mask_path']
+        baseline_idx = sample_meta['baseline_idx']
+        pol_idx = sample_meta['pol_idx']
+        
+        if self.loading_strategy == "hybrid":
+            # Check cache first
+            observation_key = vis_path  # Use file path as cache key
+            
+            if observation_key in self.observation_cache:
+                # Update access order for LRU
+                self.cache_access_order.remove(observation_key)
+                self.cache_access_order.append(observation_key)
+                
+                # Get from cache
+                cached_data = self.observation_cache[observation_key]
+                vis_data = cached_data['vis'][baseline_idx, :, :, pol_idx]
+                mask_data = cached_data['mask'][baseline_idx, :, :, pol_idx]
+            else:
+                # Load full observation and cache it
+                vis_full = np.load(vis_path)
+                mask_full = np.load(mask_path)
+                
+                # Add to cache
+                self.observation_cache[observation_key] = {
+                    'vis': vis_full,
+                    'mask': mask_full
+                }
+                self.cache_access_order.append(observation_key)
+                
+                # Evict oldest if cache is full
+                while len(self.observation_cache) > self.cache_observations:
+                    oldest_key = self.cache_access_order.pop(0)
+                    del self.observation_cache[oldest_key]
+                
+                vis_data = vis_full[baseline_idx, :, :, pol_idx]
+                mask_data = mask_full[baseline_idx, :, :, pol_idx]
+        else:
+            # Pure lazy loading - load only what we need
+            vis_full = np.load(vis_path, mmap_mode='r')
+            mask_full = np.load(mask_path, mmap_mode='r')
+            
+            vis_data = vis_full[baseline_idx, :, :, pol_idx].copy()
+            mask_data = mask_full[baseline_idx, :, :, pol_idx].copy().astype(np.float32)
+        
+        return vis_data, mask_data
+    
     def __len__(self):
-        return len(self.samples)
+        if self.loading_strategy == "eager":
+            return len(self.samples)
+        else:
+            return len(self.sample_metadata)
     
     def __getitem__(self, idx):
-        sample = self.samples[idx]
+        if self.loading_strategy == "eager":
+            # Use pre-loaded data
+            sample = self.samples[idx]
+            complex_vis = sample['complex_vis']
+            mask = sample['mask']
+        else:
+            # Load data on-demand (lazy or hybrid)
+            sample_meta = self.sample_metadata[idx]
+            complex_vis, mask = self._load_sample_data(sample_meta)
         
+        # Continue with existing processing
         # Get complex visibility data
-        complex_vis = sample['complex_vis']  # [time, frequency]
-        mask = sample['mask']  # [time, frequency]
         
         # Resize to target image size if needed  
         if complex_vis.shape != (self.image_size, self.image_size):
@@ -662,11 +813,17 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
     # Get channel swap seed from config (None = random)
     channel_swap_seed = config.get('training', {}).get('channel_swap_seed', None)
     
+    # Get dataset configuration
+    dataset_config = config.get('dataset', {})
+    
     train_dataset = RFISyntheticDataset(
         observations=dataset_metadata['training_set']['observations'],
         image_size=config['model']['image_size'],
         channel_swap_seed=channel_swap_seed,
-        is_validation=False
+        is_validation=False,
+        loading_strategy=dataset_config.get('loading_strategy', 'eager'),
+        cache_observations=dataset_config.get('cache_observations', 2),
+        memory_budget_gb=dataset_config.get('memory_budget_gb', 64)
     )
     
     logger.info("Loading val dataset with {} observations...".format(
@@ -677,7 +834,10 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
         observations=dataset_metadata['validation_set']['observations'],
         image_size=config['model']['image_size'],
         channel_swap_seed=channel_swap_seed,  # Fixed seed for validation consistency
-        is_validation=True
+        is_validation=True,
+        loading_strategy=dataset_config.get('loading_strategy', 'eager'),
+        cache_observations=dataset_config.get('cache_observations', 2),
+        memory_budget_gb=dataset_config.get('memory_budget_gb', 64)
     )
     
     # Create data loaders

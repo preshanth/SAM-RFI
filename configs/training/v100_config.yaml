@@ -1,13 +1,13 @@
-# V100 Training Configuration
-# Optimized for 16GB memory constraint, flexible time
+# V100 Training Configuration  
+# Optimized for 32GB memory, flexible time
 
 model:
   version: "sam2"
-  variant: "small"  # Use smaller variant for V100
+  variant: "large"  # Use large variant for V100-32GB
   image_size: 1024
 
 training:
-  batch_size: 1           # Small batch size for V100 (16GB)
+  batch_size: 2           # Increased batch size for V100 (32GB)
   gradient_accumulation: 8 # Simulate larger batch
   mixed_precision: false   # Disable mixed precision to avoid scaler issues
   max_epochs: 200         # V100 can run for days
@@ -22,10 +22,15 @@ training:
   
   # Channel swapping for data augmentation
   channel_swap_seed: 42  # Set to null for random
+
+dataset:
+  loading_strategy: "eager"  # "eager", "lazy", or "hybrid"
+  cache_observations: 2      # For hybrid: cache N recent observations  
+  memory_budget_gb: 64       # Auto-switch to lazy if dataset exceeds this
   
 hardware:
   target_gpu: "V100"
-  memory_limit: "16GB"
+  memory_limit: "32GB"
   time_limit: "flexible"
   
 optimizer:
