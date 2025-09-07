@@ -334,21 +334,49 @@ class SimulatedMS:
         # RFI amplitudes: 10^3 to 10^6 times noise level from config
         base_noise_level = self.obs_config.thermal_noise_sigma
         
-        # 1. Broadband RFI with polynomial frequency variation (25% occupancy)
+        # 1. Broadband RFI with polynomial frequency variation (15% occupancy, non-overlapping)
         if rfi_config.broadband_probability > 0:
-            # Generate broadband events covering portions of the band
-            n_broadband_events = np.random.randint(3, 8)  # Multiple events
+            # Track occupied frequency ranges to prevent overlap
+            occupied_freq_ranges = []
             
-            for _ in range(n_broadband_events):
-                # Random frequency range (portion of band)
-                freq_start = np.random.randint(0, nchan//2)
-                freq_width = np.random.randint(nchan//8, nchan//3)  # 12.5% to 33% of band
-                freq_end = min(freq_start + freq_width, nchan)
+            # Calculate target broadband occupancy: 15% of total data
+            target_broadband_occupancy = 0.15
+            current_occupancy = 0.0
+            n_broadband_events = np.random.randint(2, 5)  # Fewer events for 15% target
+            
+            for event_idx in range(n_broadband_events):
+                if current_occupancy >= target_broadband_occupancy:
+                    break
+                    
+                # Find non-overlapping frequency range
+                max_attempts = 20
+                for attempt in range(max_attempts):
+                    freq_start = np.random.randint(0, nchan//2)
+                    freq_width = np.random.randint(nchan//16, nchan//8)  # Smaller events: 6.25% to 12.5%
+                    freq_end = min(freq_start + freq_width, nchan)
+                    
+                    # Check for overlap with existing events
+                    overlap = False
+                    for existing_start, existing_end in occupied_freq_ranges:
+                        if not (freq_end <= existing_start or freq_start >= existing_end):
+                            overlap = True
+                            break
+                    
+                    if not overlap:
+                        occupied_freq_ranges.append((freq_start, freq_end))
+                        break
+                else:
+                    # Could not find non-overlapping range, skip this event
+                    continue
                 
-                # Random time range
-                time_start = np.random.randint(0, ntime//2)
-                time_width = np.random.randint(ntime//4, ntime)
+                # Random time range (reduced coverage)
+                time_start = np.random.randint(0, ntime//3)
+                time_width = np.random.randint(ntime//6, ntime//2)  # Shorter duration
                 time_end = min(time_start + time_width, ntime)
+                
+                # Calculate occupancy contribution
+                event_occupancy = ((freq_end - freq_start) * (time_end - time_start)) / (nchan * ntime)
+                current_occupancy += event_occupancy
                 
                 # Polynomial amplitude variation across frequency
                 freq_indices = np.arange(freq_end - freq_start)
@@ -376,8 +404,8 @@ class SimulatedMS:
                         rfi_array[t, f, :] = amp * np.exp(1j * phase)
                         rfi_mask[t, f, :] = True
         
-        # 2. Narrowband persistent lines (10-20 lines)
-        n_narrowband = getattr(rfi_config, 'narrowband_lines', 15)
+        # 2. Narrowband persistent lines (increased for 30% total target)
+        n_narrowband = getattr(rfi_config, 'narrowband_lines', 20)  # Increased from 15
         for _ in range(n_narrowband):
             freq_idx = np.random.randint(0, nchan)
             amplitude = np.random.uniform(50.0, 500.0) * base_noise_level
@@ -387,8 +415,8 @@ class SimulatedMS:
             rfi_array[:, freq_idx, :] = amplitude * np.exp(1j * phase)
             rfi_mask[:, freq_idx, :] = True
         
-        # 3. Transient pulses and repeated bursts
-        n_transients = getattr(rfi_config, 'transient_events', 8)
+        # 3. Transient pulses and repeated bursts (increased for 30% total target)  
+        n_transients = getattr(rfi_config, 'transient_events', 12)  # Increased from 8
         for _ in range(n_transients):
             # Single pulse or repeated bursts
             is_repeated = np.random.random() < 0.5
@@ -448,8 +476,8 @@ class SimulatedMS:
                 rfi_array[t:t_end, freq_idx, :] = amplitude * np.exp(1j * phase)
                 rfi_mask[t:t_end, freq_idx, :] = True
         
-        # 5. Satellite RFI (frequency drifting over time)
-        n_satellites = getattr(rfi_config, 'satellite_passes', 2)
+        # 5. Satellite RFI (frequency drifting over time) (increased for 30% total target)
+        n_satellites = getattr(rfi_config, 'satellite_passes', 4)  # Increased from 2
         for _ in range(n_satellites):
             # Linear frequency drift
             t_start = np.random.randint(0, ntime//4)

@@ -20,6 +20,9 @@ training:
   dataloader_num_workers: 2
   pin_memory: true
   
+  # Channel swapping for data augmentation
+  channel_swap_seed: 42  # Set to null for random
+  
 hardware:
   target_gpu: "V100"
   memory_limit: "16GB"

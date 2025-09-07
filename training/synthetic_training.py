@@ -50,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class RFISyntheticDataset(Dataset):
+class RFISyntheticDatasetAmplitudeOnly(Dataset):
     """
     PyTorch Dataset for synthetic RFI training data
     Compatible with SAM2 training requirements
@@ -155,6 +155,206 @@ class RFISyntheticDataset(Dataset):
         from scipy.ndimage import zoom
         
         zoom_factors = (target_shape[0] / data.shape[0], target_shape[1] / data.shape[1])
+        return zoom(data, zoom_factors, order=1)
+
+
+class RFISyntheticDataset(Dataset):
+    """
+    PyTorch Dataset for synthetic RFI training data with complex channels
+    Uses random channel swapping for data augmentation
+    """
+    
+    def __init__(self, observations: List[Dict], image_size: int = 1024, 
+                 channel_swap_seed: int = None, is_validation: bool = False):
+        """
+        Initialize dataset
+        
+        Args:
+            observations: List of observation metadata
+            image_size: Target image size (should match natural tile size)  
+            channel_swap_seed: Seed for channel randomization (None = random)
+            is_validation: If True, use fixed channel order for consistency
+        """
+        self.observations = observations
+        self.image_size = image_size
+        self.is_validation = is_validation
+        self.samples = []
+        
+        # Set up channel selection
+        self.available_channels = ['real2', 'log_amp', 'phase', 'imag2']
+        self.validation_channels = ['real2', 'log_amp', 'phase']  # Fixed order for validation
+        
+        # Set up random seed for channel swapping
+        if channel_swap_seed is not None:
+            self.rng = np.random.RandomState(channel_swap_seed)
+        else:
+            self.rng = np.random.RandomState()
+        
+        # Load all samples
+        for obs_meta in observations:
+            self._load_observation(obs_meta)
+        
+        logger.info(f"Loaded {len(self.samples)} samples ({'validation' if is_validation else 'training'} mode)")
+    
+    def _load_observation(self, obs_meta: Dict):
+        """Load samples from a single observation"""
+        ground_truth_dir = Path(obs_meta['ground_truth_dir'])
+        
+        try:
+            # Load complex visibility data (not amplitude!)
+            corrupted_vis = np.load(ground_truth_dir / 'corrupted_visibilities.npy')
+            rfi_mask = np.load(ground_truth_dir / 'rfi_mask.npy')
+            
+            # Extract samples from each baseline and polarization
+            num_baselines, num_times, num_channels, num_pols = corrupted_vis.shape
+            
+            # Sample 4 combinations per baseline instead of all 24
+            combinations_per_baseline = 4
+            
+            for baseline_idx in range(num_baselines):
+                for pol_idx in range(num_pols):
+                    # Store complex visibility data directly
+                    vis_data = corrupted_vis[baseline_idx, :, :, pol_idx]  # Keep complex!
+                    mask_data = rfi_mask[baseline_idx, :, :, pol_idx]
+                    
+                    # Create multiple samples with different channel combinations
+                    for combo_idx in range(combinations_per_baseline):
+                        sample = {
+                            'complex_vis': vis_data.copy(),  # [time, frequency] complex
+                            'mask': mask_data.copy().astype(np.float32),
+                            'metadata': {
+                                'observation': obs_meta['ms_path'],
+                                'baseline': baseline_idx,
+                                'polarization': pol_idx,
+                                'combination': combo_idx,
+                                'original_shape': vis_data.shape
+                            }
+                        }
+                        self.samples.append(sample)
+        
+        except Exception as e:
+            logger.error(f"Failed to load {ground_truth_dir}: {e}")
+            raise
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        
+        # Get complex visibility data
+        complex_vis = sample['complex_vis']  # [time, frequency]
+        mask = sample['mask']  # [time, frequency]
+        
+        # Resize to target image size if needed  
+        if complex_vis.shape != (self.image_size, self.image_size):
+            complex_vis = self._resize_complex_data(complex_vis, (self.image_size, self.image_size))
+            mask = self._resize_data(mask, (self.image_size, self.image_size))
+        
+        # Extract all channel types
+        channels = self._extract_all_channels(complex_vis)
+        
+        # Select RGB channels
+        if self.is_validation:
+            # Fixed channels for validation consistency
+            selected_channels = self.validation_channels
+        else:
+            # Random sampling for training augmentation
+            selected_channels = self.rng.choice(
+                self.available_channels, size=3, replace=False
+            ).tolist()
+        
+        # Create RGB image
+        rgb_image = self._create_rgb_from_channels(channels, selected_channels)
+        
+        # Convert to tensors
+        image = torch.from_numpy(rgb_image).float()
+        mask = torch.from_numpy(mask).float()
+        
+        return {
+            'image': image,
+            'mask': mask,
+            'metadata': {
+                **sample['metadata'],
+                'channels_used': selected_channels
+            }
+        }
+    
+    def _extract_all_channels(self, complex_data):
+        """Extract all channel types from complex visibility data"""
+        channels = {}
+        channels['real'] = np.real(complex_data)
+        channels['imag'] = np.imag(complex_data)
+        channels['amplitude'] = np.abs(complex_data)
+        channels['phase'] = np.angle(complex_data)  # Wrapped phase [-π, π]
+        channels['real2'] = np.real(complex_data) ** 2
+        channels['imag2'] = np.imag(complex_data) ** 2
+        channels['log_amp'] = np.log10(np.abs(complex_data) + 1e-10)
+        return channels
+    
+    def _normalize_channel_log(self, data, channel_name):
+        """Log-scale normalization for a single channel"""
+        if channel_name in ['real', 'imag']:
+            # Sign-preserving log for real/imaginary
+            sign = np.sign(data)
+            log_data = np.log10(np.abs(data) + 1e-10)
+            log_data = sign * log_data
+            data_min, data_max = log_data.min(), log_data.max()
+            if data_max > data_min:
+                return (log_data - data_min) / (data_max - data_min)
+            return np.zeros_like(log_data)
+        
+        elif channel_name == 'phase':
+            # Phase is already bounded [-π, π], normalize to [0, 1]
+            return (data + np.pi) / (2 * np.pi)
+        
+        elif channel_name in ['amplitude', 'real2', 'imag2']:
+            # Positive-only channels, regular log normalization
+            log_data = np.log10(data + 1e-10)
+            data_min, data_max = log_data.min(), log_data.max()
+            if data_max > data_min:
+                return (log_data - data_min) / (data_max - data_min)
+            return np.zeros_like(log_data)
+        
+        elif channel_name == 'log_amp':
+            # Already in log space
+            data_min, data_max = data.min(), data.max()
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+        
+        return data
+    
+    def _create_rgb_from_channels(self, channels_dict, selected_channels):
+        """Create RGB image from selected channels"""
+        r_data = self._normalize_channel_log(channels_dict[selected_channels[0]], selected_channels[0])
+        g_data = self._normalize_channel_log(channels_dict[selected_channels[1]], selected_channels[1])
+        b_data = self._normalize_channel_log(channels_dict[selected_channels[2]], selected_channels[2])
+        
+        # Stack as RGB channels [3, H, W]
+        rgb_array = np.stack([r_data, g_data, b_data], axis=0)
+        return rgb_array
+    
+    def _resize_complex_data(self, data: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
+        """Resize complex data to target shape using interpolation"""
+        from scipy.ndimage import zoom
+        
+        current_shape = data.shape
+        zoom_factors = (target_shape[0] / current_shape[0], target_shape[1] / current_shape[1])
+        
+        # Resize real and imaginary parts separately
+        real_resized = zoom(np.real(data), zoom_factors, order=1)
+        imag_resized = zoom(np.imag(data), zoom_factors, order=1)
+        
+        return real_resized + 1j * imag_resized
+        
+    def _resize_data(self, data: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
+        """Resize data to target shape using interpolation"""
+        from scipy.ndimage import zoom
+        
+        current_shape = data.shape
+        zoom_factors = (target_shape[0] / current_shape[0], target_shape[1] / current_shape[1])
+        
         return zoom(data, zoom_factors, order=1)
 
 
@@ -453,17 +653,31 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
     memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
     logger.info(f"Training on: {gpu_name} ({memory_gb:.1f}GB)")
     
-    # Create datasets
+    # Create datasets with complex data and channel swapping
     logger.info("Creating PyTorch datasets...")
+    logger.info("Loading train dataset with {} observations...".format(
+        len(dataset_metadata['training_set']['observations'])
+    ))
+    
+    # Get channel swap seed from config (None = random)
+    channel_swap_seed = config.get('training', {}).get('channel_swap_seed', None)
+    
     train_dataset = RFISyntheticDataset(
-        dataset_metadata, 
-        split='train', 
-        image_size=config['model']['image_size']
+        observations=dataset_metadata['training_set']['observations'],
+        image_size=config['model']['image_size'],
+        channel_swap_seed=channel_swap_seed,
+        is_validation=False
     )
+    
+    logger.info("Loading val dataset with {} observations...".format(
+        len(dataset_metadata['validation_set']['observations'])
+    ))
+    
     val_dataset = RFISyntheticDataset(
-        dataset_metadata, 
-        split='val', 
-        image_size=config['model']['image_size']
+        observations=dataset_metadata['validation_set']['observations'],
+        image_size=config['model']['image_size'],
+        channel_swap_seed=channel_swap_seed,  # Fixed seed for validation consistency
+        is_validation=True
     )
     
     # Create data loaders
@@ -537,7 +751,7 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
         
         # Validation phase
         val_result = trainer.validate(val_loader)
-        val_loss = val_result["loss"]
+        val_loss = val_result["val_loss"]
         logger.info(f"Validation loss: {val_loss:.4f}")
         
         # Save checkpoint
@@ -646,7 +860,7 @@ def main():
         
         # Summary
         logger.info("="*60)
-        logger.info("PIPELINE COMPLETED!")
+        logger.info("PIPELINE COMPLETED - DEMO/TESTING PHASE")
         logger.info("="*60)
         
         output_path = Path(args.output_dir)
@@ -657,10 +871,11 @@ def main():
         logger.info(f"  Training log: synthetic_training.log")
         
         logger.info("\nNext steps:")
-        logger.info("1. Install SAM2 dependencies if not already installed")
-        logger.info("2. Configure SAM2 checkpoint path in the training config")
-        logger.info("3. Run training: python synthetic_training.py --skip-dataset --skip-viz")
-        logger.info("4. Monitor GPU memory usage during training")
+        logger.info("1. Implement proper SAM2 loss function in GPUOptimizedTrainer")
+        logger.info("2. Add validation metrics (IoU, precision, recall)")
+        logger.info("3. Test with real radio telescope data")
+        logger.info("4. Benchmark against RFLAG performance")
+        logger.info("\nNOTE: This is a demonstration with placeholder loss functions.")
         
         # Show dataset statistics
         baseline_counts = dataset_metadata['baseline_counts']
