@@ -453,9 +453,9 @@ class GPUOptimizedTrainer:
             intersection = (gt_mask * (predicted_mask > 0.5)).sum()
             union = gt_mask.sum() + (predicted_mask > 0.5).sum() - intersection
             actual_iou = intersection / (union + eps)
-            score_loss = torch.abs(predicted_score - actual_iou)
+            score_loss = torch.abs(predicted_score - actual_iou).mean()  # Ensure scalar
             
-            # Combine losses
+            # Combine losses (both should be scalars now)
             sample_loss = seg_loss + 0.05 * score_loss
             total_loss = total_loss + sample_loss
         
@@ -463,7 +463,8 @@ class GPUOptimizedTrainer:
         if batch_size > 0:
             total_loss = total_loss / batch_size
         
-        return total_loss
+        # Ensure the returned loss is a scalar tensor
+        return total_loss.squeeze()
     
     def _tensor_to_pil(self, tensor):
         """Convert tensor [3, H, W] to PIL Image"""
