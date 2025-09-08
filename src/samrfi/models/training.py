@@ -152,6 +152,7 @@ class GPUOptimizedTrainer:
     def train_epoch(self, dataloader: DataLoader, epoch: int) -> Dict[str, float]:
         """Train for one epoch"""
         self.model.train()
+        self.current_epoch = epoch  # Track current epoch for logging
 
         total_loss = 0.0
         num_batches = len(dataloader)
@@ -182,9 +183,13 @@ class GPUOptimizedTrainer:
                 loss = loss / gradient_accumulation
                 loss.backward()
             
-            # Log data loading time
-            if self.enable_profiling and batch_idx % self.profiling_frequency == 0:
-                logger.info(f"Data Loading: {data_time*1000:.1f}ms")
+            # Log data loading time (epoch-aware)
+            if self.enable_profiling:
+                data_log_freq = self.profiling_frequency
+                if epoch > 0:
+                    data_log_freq = data_log_freq * 20
+                if batch_idx % data_log_freq == 0:
+                    logger.info(f"Data Loading: {data_time*1000:.1f}ms")
 
             # Update weights after accumulation
             if (batch_idx + 1) % gradient_accumulation == 0:
@@ -204,8 +209,14 @@ class GPUOptimizedTrainer:
 
             total_loss += loss.item() * gradient_accumulation
 
-            # Logging
-            if batch_idx % self.config["logging"]["log_every_n_steps"] == 0:
+            # Reduced logging frequency during training
+            log_frequency = self.config["logging"]["log_every_n_steps"]
+            
+            # Log much less frequently after first epoch
+            if epoch > 0:
+                log_frequency = log_frequency * 10  # 10x less frequent after epoch 0
+            
+            if batch_idx % log_frequency == 0:
                 elapsed = time.time() - start_time
                 self.log_training_progress(
                     epoch,
@@ -452,78 +463,90 @@ class GPUOptimizedTrainer:
         if self.enable_profiling:
             loss_time = time.time() - loss_start
         
-        # Log timing breakdown
-        if (self.enable_profiling and hasattr(self, 'global_step') and 
-            self.global_step % self.profiling_frequency == 0):
-            total_time = prompt_time + processor_time + device_time + forward_time + loss_time
-            logger.info(f"PROFILING - Step {self.global_step}:")
-            logger.info(f"  Prompt Gen:     {prompt_time*1000:.1f}ms ({prompt_time/total_time*100:.1f}%)")
-            logger.info(f"  SAM2 Processor: {processor_time*1000:.1f}ms ({processor_time/total_time*100:.1f}%)")
-            logger.info(f"  Device Move:    {device_time*1000:.1f}ms ({device_time/total_time*100:.1f}%)")
-            logger.info(f"  Forward Pass:   {forward_time*1000:.1f}ms ({forward_time/total_time*100:.1f}%)")
-            logger.info(f"  Loss Compute:   {loss_time*1000:.1f}ms ({loss_time/total_time*100:.1f}%)")
-            logger.info(f"  TOTAL:          {total_time*1000:.1f}ms")
+        # Log timing breakdown (epoch-aware frequency)
+        if (self.enable_profiling and hasattr(self, 'global_step')):
+            # Determine current epoch (approximate)
+            current_epoch = getattr(self, 'current_epoch', 0)
+            profiling_freq = self.profiling_frequency
+            
+            # Reduce profiling frequency after epoch 0
+            if current_epoch > 0:
+                profiling_freq = profiling_freq * 20  # Much less frequent profiling
+            
+            if self.global_step % profiling_freq == 0:
+                total_time = prompt_time + processor_time + device_time + forward_time + loss_time
+                logger.info(f"PROFILING - Step {self.global_step}:")
+                logger.info(f"  Prompt Gen:     {prompt_time*1000:.1f}ms ({prompt_time/total_time*100:.1f}%)")
+                logger.info(f"  SAM2 Processor: {processor_time*1000:.1f}ms ({processor_time/total_time*100:.1f}%)")
+                logger.info(f"  Device Move:    {device_time*1000:.1f}ms ({device_time/total_time*100:.1f}%)")
+                logger.info(f"  Forward Pass:   {forward_time*1000:.1f}ms ({forward_time/total_time*100:.1f}%)")
+                logger.info(f"  Loss Compute:   {loss_time*1000:.1f}ms ({loss_time/total_time*100:.1f}%)")
+                logger.info(f"  TOTAL:          {total_time*1000:.1f}ms")
         
         return loss
     
     def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, eps: float = 1e-6) -> torch.Tensor:
-        """Compute loss for batch of SAM2 predictions"""
+        """Vectorized batch loss computation"""
+        import torch.nn.functional as F
+        
         pred_masks = outputs.pred_masks  # [batch, num_masks, H, W]
         iou_scores = outputs.iou_scores  # [batch, num_masks]
         
         batch_size = pred_masks.shape[0]
-        total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
-        for i in range(batch_size):
-            # Select best mask for each sample
-            sample_pred_masks = pred_masks[i]  # [num_masks, H, W]
-            sample_iou_scores = iou_scores[i]  # [num_masks]
-            
-            if sample_pred_masks.shape[0] == 1:
-                best_mask_idx = 0
-            else:
-                best_mask_idx = torch.argmax(sample_iou_scores)
-            
-            predicted_mask = sample_pred_masks[best_mask_idx]  # [H, W]
-            predicted_score = sample_iou_scores[best_mask_idx]  # scalar
-            gt_mask = gt_masks[i].float()  # [H, W]
-            
-            # Handle dimension mismatches
-            if predicted_mask.dim() == 3 and predicted_mask.shape[0] == 1:
-                predicted_mask = predicted_mask.squeeze(0)
-            elif predicted_mask.dim() == 3:
-                predicted_mask = predicted_mask[0]
-            
-            # Resize if needed
-            if predicted_mask.shape != gt_mask.shape:
-                predicted_mask = torch.nn.functional.interpolate(
-                    predicted_mask.unsqueeze(0).unsqueeze(0),
-                    size=gt_mask.shape,
-                    mode='bilinear',
-                    align_corners=False
-                ).squeeze()
-            
-            # Apply sigmoid to get probabilities
-            predicted_mask = torch.sigmoid(predicted_mask)
-            predicted_score = torch.sigmoid(predicted_score)
-            
-            # Binary Cross-Entropy Loss
-            seg_loss = (-gt_mask * torch.log(predicted_mask + eps) - 
-                       (1 - gt_mask) * torch.log(1 - predicted_mask + eps)).mean()
-            
-            # Score Loss (IoU prediction accuracy)
-            intersection = (gt_mask * (predicted_mask > 0.5)).sum()
-            union = gt_mask.sum() + (predicted_mask > 0.5).sum() - intersection
-            actual_iou = intersection / (union + eps)
-            score_loss = torch.abs(predicted_score - actual_iou).mean()  # Ensure scalar
-            
-            # Combine losses (both should be scalars)
-            sample_loss = seg_loss + 0.05 * score_loss
-            total_loss = total_loss + sample_loss
+        # Vectorized best mask selection
+        if pred_masks.shape[1] == 1:
+            # Single mask case - use index 0 for all samples
+            best_mask_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        else:
+            # Multiple masks - select best IoU score for each sample
+            best_mask_indices = torch.argmax(iou_scores, dim=1)  # [batch]
         
-        # Average over valid samples and ensure scalar output
-        final_loss = total_loss / batch_size if batch_size > 0 else total_loss
-        return final_loss.squeeze()  # Ensure scalar for backward()
+        # Vectorized mask and score extraction
+        batch_indices = torch.arange(batch_size, device=self.device)
+        predicted_masks = pred_masks[batch_indices, best_mask_indices]  # [batch, H, W]
+        predicted_scores = iou_scores[batch_indices, best_mask_indices]  # [batch]
+        
+        # Handle dimension mismatches (vectorized)
+        if predicted_masks.dim() == 4 and predicted_masks.shape[1] == 1:
+            predicted_masks = predicted_masks.squeeze(1)  # [batch, H, W]
+        elif predicted_masks.dim() == 4:
+            predicted_masks = predicted_masks[:, 0]  # Take first channel if multiple
+        
+        # Ensure gt_masks is float
+        gt_masks = gt_masks.float()  # [batch, H, W]
+        
+        # Check if resize needed (should be same size already)
+        if predicted_masks.shape[-2:] != gt_masks.shape[-2:]:
+            predicted_masks = F.interpolate(
+                predicted_masks.unsqueeze(1),  # [batch, 1, H, W]
+                size=gt_masks.shape[-2:],
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(1)  # [batch, H, W]
+        
+        # Apply sigmoid (vectorized)
+        predicted_masks = torch.sigmoid(predicted_masks)  # [batch, H, W]
+        predicted_scores = torch.sigmoid(predicted_scores)  # [batch]
+        
+        # Vectorized Binary Cross-Entropy Loss
+        seg_loss = F.binary_cross_entropy(predicted_masks, gt_masks, reduction='mean')
+        
+        # Vectorized IoU computation
+        predicted_binary = (predicted_masks > 0.5).float()  # [batch, H, W]
+        
+        # Compute intersection and union for each sample
+        intersection = (gt_masks * predicted_binary).sum(dim=(1, 2))  # [batch]
+        union = gt_masks.sum(dim=(1, 2)) + predicted_binary.sum(dim=(1, 2)) - intersection  # [batch]
+        actual_iou = intersection / (union + eps)  # [batch]
+        
+        # Vectorized score loss
+        score_loss = torch.abs(predicted_scores - actual_iou).mean()
+        
+        # Combined loss
+        total_loss = seg_loss + 0.05 * score_loss
+        
+        return total_loss
     
     def _tensor_to_pil(self, tensor):
         """Convert tensor [3, H, W] to PIL Image (deprecated - use direct tensor processing)"""
