@@ -128,7 +128,7 @@ class SAM2Adapter(SAMAdapter):
         logger.info(f"SAM2 model loaded via transformers on {self.device}")
     
     def _load_from_local(self, local_model_path: str) -> None:
-        """Load model from local directory"""
+        """Load model from local directory with fallback logic"""
         from pathlib import Path
         
         model_path = Path(local_model_path)
@@ -137,16 +137,50 @@ class SAM2Adapter(SAMAdapter):
         
         logger.info(f"Loading SAM2 {self.variant} from local path: {local_model_path}")
         
-        # Try to load using transformers from local directory
-        try:
-            self.model = Sam2Model.from_pretrained(str(model_path)).to(self.device)
-            self.processor = Sam2Processor.from_pretrained(str(model_path))
-            self.is_loaded = True
-            logger.info(f"SAM2 model loaded from local path on {self.device}")
-        except Exception as e:
-            logger.error(f"Failed to load from local path with transformers: {e}")
-            # Could add fallback to official SAM2 loading here
-            raise
+        # Try to load using transformers from local directory first
+        if USE_TRANSFORMERS:
+            try:
+                self.model = Sam2Model.from_pretrained(str(model_path)).to(self.device)
+                self.processor = Sam2Processor.from_pretrained(str(model_path))
+                self.is_loaded = True
+                logger.info(f"SAM2 model loaded from local path via transformers on {self.device}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to load from local path with transformers: {e}")
+        
+        # Fallback to official SAM2 loading if transformers failed
+        if USE_OFFICIAL_SAM2:
+            try:
+                # Look for the official SAM2 checkpoint file
+                pt_files = list(model_path.glob("*.pt"))
+                config_files = list(model_path.glob("*.yaml"))
+                
+                if not pt_files:
+                    raise FileNotFoundError(f"No .pt checkpoint file found in {model_path}")
+                
+                checkpoint_path = str(pt_files[0])  # Use first .pt file found
+                
+                # Use local config if available, otherwise use default
+                if config_files:
+                    config_path = str(config_files[0])
+                else:
+                    config_path = self._get_config_file_path()
+                
+                logger.info(f"Falling back to official SAM2 loading")
+                logger.info(f"Checkpoint: {checkpoint_path}")
+                logger.info(f"Config: {config_path}")
+                
+                self.model = build_sam2(config_path, checkpoint_path, device=self.device)
+                self.predictor = SAM2ImagePredictor(self.model)
+                self.is_loaded = True
+                logger.info(f"SAM2 model loaded from local path via official SAM2 on {self.device}")
+                return
+                
+            except Exception as e:
+                logger.error(f"Failed to load from local path with official SAM2: {e}")
+        
+        # If both methods failed, raise the error
+        raise RuntimeError(f"Failed to load SAM2 model from {local_model_path} using both transformers and official SAM2 methods")
     
     def _load_from_official_sam2(self, checkpoint_path: str = None, config: Dict[str, Any] = None) -> None:
         """Load using official SAM2 repository"""
