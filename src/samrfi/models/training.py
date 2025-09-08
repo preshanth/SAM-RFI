@@ -493,10 +493,14 @@ class GPUOptimizedTrainer:
         """Vectorized batch loss computation"""
         import torch.nn.functional as F
         
-        pred_masks = outputs.pred_masks  # [batch, num_masks, H, W]
-        iou_scores = outputs.iou_scores  # [batch, num_masks]
+        pred_masks = outputs.pred_masks  # SAM2: [batch, 1, num_masks, H, W]
+        iou_scores = outputs.iou_scores  # SAM2: [batch, num_masks]
         
         batch_size = pred_masks.shape[0]
+        
+        # Handle SAM2's extra dimension: [batch, 1, num_masks, H, W] -> [batch, num_masks, H, W]
+        if pred_masks.dim() == 5 and pred_masks.shape[1] == 1:
+            pred_masks = pred_masks.squeeze(1)  # Remove extra dimension
         
         # Vectorized best mask selection
         if pred_masks.shape[1] == 1:
