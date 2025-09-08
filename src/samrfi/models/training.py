@@ -418,14 +418,25 @@ class GPUOptimizedTrainer:
             predicted_mask = pred_masks[0, best_mask_idx]  # [H, W]
             predicted_score = iou_scores[0, best_mask_idx]  # scalar
             
-            # Resize predicted mask to match ground truth if needed
+            # Handle predicted mask dimensions and resize if needed
+            # predicted_mask might be [H, W] or [C, H, W] depending on SAM2 output
+            if predicted_mask.dim() == 3:
+                # If [C, H, W], take first channel or average
+                if predicted_mask.shape[0] == 1:
+                    predicted_mask = predicted_mask.squeeze(0)  # [H, W]
+                else:
+                    # Multiple channels - take the first one (or could average)
+                    predicted_mask = predicted_mask[0]  # [H, W]
+            
+            # Now predicted_mask should be [H, W]
             if predicted_mask.shape != single_mask.shape:
+                # Add batch and channel dims for interpolation: [H, W] -> [1, 1, H, W]
                 predicted_mask = torch.nn.functional.interpolate(
                     predicted_mask.unsqueeze(0).unsqueeze(0),
                     size=single_mask.shape,
                     mode='bilinear',
                     align_corners=False
-                ).squeeze()
+                ).squeeze()  # Back to [H, W]
             
             # Apply sigmoid to get probabilities
             predicted_mask = torch.sigmoid(predicted_mask)
