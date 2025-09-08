@@ -406,8 +406,15 @@ class GPUOptimizedTrainer:
             pred_masks = outputs.pred_masks  # [1, num_masks, H, W]
             iou_scores = outputs.iou_scores  # [1, num_masks]
             
-            # Use best mask (highest IoU score)
-            best_mask_idx = torch.argmax(iou_scores[0])
+            # Handle single or multiple masks
+            num_masks = pred_masks.shape[1]
+            if num_masks == 1:
+                # Single mask case
+                best_mask_idx = 0
+            else:
+                # Multiple masks - use best one
+                best_mask_idx = torch.argmax(iou_scores[0])
+            
             predicted_mask = pred_masks[0, best_mask_idx]  # [H, W]
             predicted_score = iou_scores[0, best_mask_idx]  # scalar
             
