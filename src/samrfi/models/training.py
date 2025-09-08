@@ -64,10 +64,10 @@ class GPUOptimizedTrainer:
             # V100: Memory-constrained but time-flexible
             self.enable_gradient_checkpointing = True
             self.use_mixed_precision = self.config.get("training", {}).get(
-                "mixed_precision", True
+                "mixed_precision", False  # Default to False for safety
             )
             self.compile_model = False  # May use extra memory
-            logger.info("V100 optimizations: gradient checkpointing, mixed precision")
+            logger.info(f"V100 optimizations: gradient checkpointing, mixed_precision={self.use_mixed_precision}")
 
         elif self.gpu_type == "H200":
             # H200: Time-constrained but memory-rich
@@ -525,15 +525,17 @@ class GPUOptimizedTrainer:
                 align_corners=False
             ).squeeze(1)  # [batch, H, W]
         
-        # Apply sigmoid (vectorized)
-        predicted_masks = torch.sigmoid(predicted_masks)  # [batch, H, W]
+        # Use logits directly (don't apply sigmoid before BCE)
+        # predicted_masks are logits from SAM2 model
+        predicted_logits = predicted_masks  # [batch, H, W] - keep as logits
         predicted_scores = torch.sigmoid(predicted_scores)  # [batch]
         
-        # Vectorized Binary Cross-Entropy Loss
-        seg_loss = F.binary_cross_entropy(predicted_masks, gt_masks, reduction='mean')
+        # Safe autocast: Use binary_cross_entropy_with_logits
+        seg_loss = F.binary_cross_entropy_with_logits(predicted_logits, gt_masks, reduction='mean')
         
-        # Vectorized IoU computation
-        predicted_binary = (predicted_masks > 0.5).float()  # [batch, H, W]
+        # Vectorized IoU computation (apply sigmoid to logits for threshold)
+        predicted_probs = torch.sigmoid(predicted_logits)  # [batch, H, W] 
+        predicted_binary = (predicted_probs > 0.5).float()  # [batch, H, W]
         
         # Compute intersection and union for each sample
         intersection = (gt_masks * predicted_binary).sum(dim=(1, 2))  # [batch]
