@@ -1,0 +1,64 @@
+# H200 Training Configuration - Optimized for Maximum Performance  
+# Leverages 80GB VRAM and fast H200 compute without mixed precision
+# Target: 2-hour training window with maximum throughput
+
+model:
+  version: "sam2"
+  variant: "large"  # Can handle larger variant with 80GB VRAM
+  local_model_path: "/home/nemo/Software/SAM-RFI/models/sam2-large"  # Path to downloaded model
+  image_size: 1024
+
+training:
+  batch_size: 16            # Aggressive batch size (4x V100 optimized)
+  gradient_accumulation: 2  # Minimal accumulation (effective batch 32)
+  mixed_precision: false    # Disabled due to compatibility issues
+  max_epochs: 50           # Target 2-hour training window
+  learning_rate: 3e-4      # Higher LR for larger batch size
+  weight_decay: 1e-2
+  warmup_steps: 50         # Short warmup for time-constrained training
+  
+  # H200 speed optimizations
+  gradient_checkpointing: false  # Disabled - prioritize speed over memory
+  dataloader_num_workers: 8      # High parallelism for data loading
+  pin_memory: true
+  compile_model: true            # Enable torch.compile for H200 acceleration
+  
+  # Channel swapping for data augmentation
+  channel_swap_seed: 42
+
+dataset:
+  loading_strategy: "eager"    # Load everything into memory (80GB available)
+  cache_observations: 8        # Aggressive caching with large memory
+  memory_budget_gb: 192        # Much higher budget for H200 system RAM
+  
+hardware:
+  target_gpu: "H200"
+  memory_limit: "80GB"         # H200 VRAM
+  time_limit: "2hours"
+  
+optimizer:
+  name: "AdamW"
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+scheduler:
+  name: "cosine"
+  warmup_ratio: 0.05  # Short warmup for time-constrained training
+
+logging:
+  log_every_n_steps: 10        # Reasonable frequency for high throughput
+  save_every_n_epochs: 5       # Regular checkpoints
+  validate_every_n_epochs: 2   # Frequent validation for convergence monitoring
+  
+validation:
+  batch_size: 8               # Large validation batches
+  patch_size: 1024
+  max_patches: 200
+
+# H200 Performance Optimizations:
+# - Batch size 16 vs V100's 6 (2.7x larger batches)
+# - Eager loading with 192GB memory budget
+# - torch.compile enabled for H200 acceleration  
+# - 8 dataloader workers for maximum I/O parallelism
+# - Expected throughput: 15-20+ samples/sec (vs V100's 4-5)
+# - Target: Complete 50 epochs in ~2 hours

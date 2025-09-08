@@ -1,0 +1,61 @@
+# V100 Training Configuration - Optimized for Speed
+# Targets 28GB/32GB VRAM utilization without mixed precision
+# Expected ~4-5x performance improvement over base config
+
+model:
+  version: "sam2"
+  variant: "large"  # Use large variant for V100-32GB
+  local_model_path: "/home/nemo/Software/SAM-RFI/models/sam2-large"  # Path to downloaded model
+  image_size: 1024
+
+training:
+  batch_size: 6             # Increased from 2 -> 6 (utilize more VRAM)
+  gradient_accumulation: 4  # Reduced from 8 -> 4 (maintain effective batch 24)
+  mixed_precision: false    # Disabled due to compatibility issues
+  max_epochs: 50            # Reduced for faster iteration (was 200)
+  learning_rate: 1e-4
+  weight_decay: 1e-2
+  warmup_steps: 100
+  
+  # Memory optimization settings
+  gradient_checkpointing: false  # Disabled for speed (memory not constrained)
+  dataloader_num_workers: 4      # Increased from 2 -> 4 (parallel I/O)
+  pin_memory: true
+  
+  # Channel swapping for data augmentation
+  channel_swap_seed: 42  # Set to null for random
+
+dataset:
+  loading_strategy: "hybrid"   # Changed from "eager" for better memory balance
+  cache_observations: 4        # Increased from 2 -> 4 (more caching)
+  memory_budget_gb: 96         # Increased from 64 -> 96 (allow larger datasets)
+  
+hardware:
+  target_gpu: "V100"
+  memory_limit: "32GB"
+  time_limit: "flexible"
+  
+optimizer:
+  name: "AdamW"
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+scheduler:
+  name: "cosine"
+  warmup_ratio: 0.1
+
+logging:
+  log_every_n_steps: 25        # Reduced from 50 -> 25 (more frequent with faster training)
+  save_every_n_epochs: 5       # More frequent saves (was 10)
+  validate_every_n_epochs: 2   # More frequent validation (was 5)
+  
+validation:
+  batch_size: 2  # Increased from 1 -> 2 (faster validation)
+  patch_size: 512
+  max_patches: 100
+
+# Performance notes:
+# - Expected speedup: 3-4x (primarily from batch_size increase)
+# - VRAM target: ~28GB/32GB (87% utilization)  
+# - Without mixed precision, relying on batch size and I/O optimizations
+# - Reduced epochs for faster experimentation

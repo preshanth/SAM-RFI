@@ -350,124 +350,126 @@ class GPUOptimizedTrainer:
         return input_points, input_labels, bounding_box
     
     def _compute_sam2_loss(self, images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
-        """Compute loss using actual SAM2 model forward pass"""
+        """Compute loss using optimized batch SAM2 processing"""
         batch_size, channels, height, width = images.shape
         eps = 1e-6
         
-        # Get SAM2 adapter for model and processor access
-        from samrfi.adapters.sam2_adapter import SAM2Adapter
-        
         # Access model and processor from training setup
-        sam2_model = self.model  # This should be the loaded SAM2 model
+        sam2_model = self.model
         sam2_processor = getattr(self, 'processor', None)
         
         if sam2_processor is None:
-            # Fallback: try to get processor from adapter
             raise RuntimeError("SAM2 processor not available. Check training setup.")
         
+        # Prepare batch data structures
+        batch_points = []
+        batch_labels = []
+        batch_boxes = []
+        valid_indices = []
+        
+        # Generate prompts for all samples
+        for i in range(batch_size):
+            mask_np = masks[i].cpu().numpy()
+            input_points, input_labels, input_boxes = self._generate_prompts_from_mask(mask_np)
+            
+            if input_points is not None:
+                batch_points.append([input_points.tolist()])
+                batch_labels.append([input_labels.tolist()])
+                batch_boxes.append([input_boxes] if input_boxes else None)
+                valid_indices.append(i)
+        
+        if not valid_indices:
+            # No valid RFI samples in batch
+            return torch.tensor(0.0, device=self.device, requires_grad=True)
+        
+        # Get valid images and scale to [0,255] range for SAM2 processor
+        valid_images = images[valid_indices]  # [N, 3, H, W]
+        
+        # Check if images are in [0,1] range and scale to [0,255]
+        if valid_images.max() <= 1.0:
+            valid_images = valid_images * 255.0
+        
+        # Process entire batch through SAM2 processor (no PIL conversion!)
+        inputs = sam2_processor(
+            images=valid_images,  # Direct tensor input
+            input_points=batch_points,
+            input_labels=batch_labels,
+            input_boxes=batch_boxes,
+            return_tensors="pt"
+        )
+        
+        # Move inputs to device
+        for key in inputs:
+            if torch.is_tensor(inputs[key]):
+                inputs[key] = inputs[key].to(self.device)
+        
+        # Single forward pass for entire batch
+        with torch.set_grad_enabled(True):
+            outputs = sam2_model(**inputs)
+        
+        # Compute batch loss
+        return self._compute_batch_loss(outputs, masks[valid_indices], valid_indices, eps)
+    
+    def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, eps: float = 1e-6) -> torch.Tensor:
+        """Compute loss for batch of SAM2 predictions"""
+        pred_masks = outputs.pred_masks  # [batch, num_masks, H, W]
+        iou_scores = outputs.iou_scores  # [batch, num_masks]
+        
+        batch_size = pred_masks.shape[0]
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
         for i in range(batch_size):
-            # Get single image and mask
-            single_image = images[i]  # [3, H, W]
-            single_mask = masks[i]    # [H, W]
+            # Select best mask for each sample
+            sample_pred_masks = pred_masks[i]  # [num_masks, H, W]
+            sample_iou_scores = iou_scores[i]  # [num_masks]
             
-            # Generate prompts from ground truth mask
-            mask_np = single_mask.cpu().numpy()
-            input_points, input_labels, input_boxes = self._generate_prompts_from_mask(mask_np)
-            
-            if input_points is None:
-                # No RFI in this sample, skip
-                continue
-                
-            # Prepare inputs for SAM2
-            # Convert image from [3, H, W] to PIL format for processor
-            image_pil = self._tensor_to_pil(single_image)
-            
-            # Process inputs through SAM2 processor
-            inputs = sam2_processor(
-                images=image_pil,
-                input_points=[[input_points.tolist()]],  # Nested list format
-                input_labels=[[input_labels.tolist()]],
-                input_boxes=[[input_boxes]] if input_boxes else None,
-                return_tensors="pt"
-            )
-            
-            # Move inputs to device
-            for key in inputs:
-                if torch.is_tensor(inputs[key]):
-                    inputs[key] = inputs[key].to(self.device)
-            
-            # Forward pass through SAM2
-            with torch.set_grad_enabled(True):
-                outputs = sam2_model(**inputs)
-            
-            # Extract predictions
-            pred_masks = outputs.pred_masks  # [1, num_masks, H, W]
-            iou_scores = outputs.iou_scores  # [1, num_masks]
-            
-            # Handle single or multiple masks
-            num_masks = pred_masks.shape[1]
-            if num_masks == 1:
-                # Single mask case
+            if sample_pred_masks.shape[0] == 1:
                 best_mask_idx = 0
             else:
-                # Multiple masks - use best one
-                best_mask_idx = torch.argmax(iou_scores[0])
+                best_mask_idx = torch.argmax(sample_iou_scores)
             
-            predicted_mask = pred_masks[0, best_mask_idx]  # [H, W]
-            predicted_score = iou_scores[0, best_mask_idx]  # scalar
+            predicted_mask = sample_pred_masks[best_mask_idx]  # [H, W]
+            predicted_score = sample_iou_scores[best_mask_idx]  # scalar
+            gt_mask = gt_masks[i].float()  # [H, W]
             
-            # Handle predicted mask dimensions and resize if needed
-            # predicted_mask might be [H, W] or [C, H, W] depending on SAM2 output
-            if predicted_mask.dim() == 3:
-                # If [C, H, W], take first channel or average
-                if predicted_mask.shape[0] == 1:
-                    predicted_mask = predicted_mask.squeeze(0)  # [H, W]
-                else:
-                    # Multiple channels - take the first one (or could average)
-                    predicted_mask = predicted_mask[0]  # [H, W]
+            # Handle dimension mismatches
+            if predicted_mask.dim() == 3 and predicted_mask.shape[0] == 1:
+                predicted_mask = predicted_mask.squeeze(0)
+            elif predicted_mask.dim() == 3:
+                predicted_mask = predicted_mask[0]
             
-            # Now predicted_mask should be [H, W]
-            if predicted_mask.shape != single_mask.shape:
-                # Add batch and channel dims for interpolation: [H, W] -> [1, 1, H, W]
+            # Resize if needed
+            if predicted_mask.shape != gt_mask.shape:
                 predicted_mask = torch.nn.functional.interpolate(
                     predicted_mask.unsqueeze(0).unsqueeze(0),
-                    size=single_mask.shape,
+                    size=gt_mask.shape,
                     mode='bilinear',
                     align_corners=False
-                ).squeeze()  # Back to [H, W]
+                ).squeeze()
             
             # Apply sigmoid to get probabilities
             predicted_mask = torch.sigmoid(predicted_mask)
             predicted_score = torch.sigmoid(predicted_score)
             
-            # Compute losses for this sample
-            gt_mask = single_mask.float()
-            
             # Binary Cross-Entropy Loss
             seg_loss = (-gt_mask * torch.log(predicted_mask + eps) - 
                        (1 - gt_mask) * torch.log(1 - predicted_mask + eps)).mean()
             
-            # Score Loss (compare predicted IoU score with actual IoU)
+            # Score Loss (IoU prediction accuracy)
             intersection = (gt_mask * (predicted_mask > 0.5)).sum()
             union = gt_mask.sum() + (predicted_mask > 0.5).sum() - intersection
             actual_iou = intersection / (union + eps)
-            score_loss = torch.abs(predicted_score - actual_iou).mean()  # Ensure scalar
+            score_loss = torch.abs(predicted_score - actual_iou)
             
-            # Combine losses (both should be scalars now)
+            # Combine losses
             sample_loss = seg_loss + 0.05 * score_loss
             total_loss = total_loss + sample_loss
         
-        # Average loss across batch
-        if batch_size > 0:
-            total_loss = total_loss / batch_size
-        
-        # Ensure the returned loss is a scalar tensor
-        return total_loss.squeeze()
+        # Average over valid samples
+        return total_loss / batch_size if batch_size > 0 else total_loss
     
     def _tensor_to_pil(self, tensor):
-        """Convert tensor [3, H, W] to PIL Image"""
+        """Convert tensor [3, H, W] to PIL Image (deprecated - use direct tensor processing)"""
         # Convert from [3, H, W] to [H, W, 3] and scale to 0-255
         image_np = tensor.permute(1, 2, 0).cpu().numpy()
         image_np = (image_np * 255).astype('uint8')
