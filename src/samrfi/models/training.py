@@ -19,7 +19,11 @@ try:
     from torch.utils.data import DataLoader
     from torch.optim import AdamW
     from torch.optim.lr_scheduler import CosineAnnealingLR
-    from torch.cuda.amp import GradScaler, autocast
+    from torch.cuda.amp import GradScaler
+    try:
+        from torch.amp import autocast  # New syntax
+    except ImportError:
+        from torch.cuda.amp import autocast  # Fallback for older PyTorch
 
     TORCH_AVAILABLE = True
 except ImportError as e:
@@ -172,7 +176,7 @@ class GPUOptimizedTrainer:
 
             # Forward pass with mixed precision
             if self.use_mixed_precision:
-                with autocast():
+                with autocast(device_type='cuda'):
                     loss = self.compute_loss(images, masks)
                     loss = loss / gradient_accumulation  # Scale loss for accumulation
 
@@ -542,7 +546,17 @@ class GPUOptimizedTrainer:
         union = gt_masks.sum(dim=(1, 2)) + predicted_binary.sum(dim=(1, 2)) - intersection  # [batch]
         actual_iou = intersection / (union + eps)  # [batch]
         
-        # Vectorized score loss
+        # Vectorized score loss (ensure tensor sizes match)
+        # Debug shapes if mismatch occurs
+        if predicted_scores.shape != actual_iou.shape:
+            logger.error(f"Shape mismatch: predicted_scores {predicted_scores.shape} vs actual_iou {actual_iou.shape}")
+            logger.error(f"batch_size: {batch_size}, valid_indices: {valid_indices}")
+            logger.error(f"pred_masks.shape: {pred_masks.shape}")
+            # Ensure both tensors have same size
+            min_size = min(predicted_scores.shape[0], actual_iou.shape[0])
+            predicted_scores = predicted_scores[:min_size]
+            actual_iou = actual_iou[:min_size]
+            
         score_loss = torch.abs(predicted_scores - actual_iou).mean()
         
         # Combined loss
@@ -572,7 +586,7 @@ class GPUOptimizedTrainer:
                 masks = batch["mask"].to(self.device, non_blocking=True)
 
                 if self.use_mixed_precision:
-                    with autocast():
+                    with autocast(device_type='cuda'):
                         loss = self.compute_loss(images, masks)
                 else:
                     loss = self.compute_loss(images, masks)
