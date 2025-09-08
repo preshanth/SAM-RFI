@@ -462,7 +462,7 @@ class GPUOptimizedTrainer:
         if self.enable_profiling:
             loss_start = time.time()
             
-        loss = self._compute_batch_loss(outputs, masks[valid_indices], valid_indices, eps)
+        loss = self._compute_batch_loss(outputs, masks[valid_indices], valid_indices, images[valid_indices], eps)
         
         if self.enable_profiling:
             loss_time = time.time() - loss_start
@@ -489,7 +489,7 @@ class GPUOptimizedTrainer:
         
         return loss
     
-    def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, eps: float = 1e-6) -> torch.Tensor:
+    def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, images: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         """Hybrid per-mask training approach: individual losses for training, union for inference"""
         import torch.nn.functional as F
         
