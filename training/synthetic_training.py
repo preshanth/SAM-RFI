@@ -393,6 +393,8 @@ class RFISyntheticDataset(Dataset):
             # Load data on-demand (lazy or hybrid)
             sample_meta = self.sample_metadata[idx]
             complex_vis, mask = self._load_sample_data(sample_meta)
+            # Create sample dict for metadata access
+            sample = {'metadata': sample_meta}
         
         # Continue with existing processing
         # Get complex visibility data
