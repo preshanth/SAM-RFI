@@ -458,20 +458,19 @@ class GPUOptimizedTrainer:
         if self.enable_profiling:
             forward_time = time.time() - forward_start
         
-        # 4x256 Tiling: Process images as 256x256 tiles for true high-resolution
+        # 4x256 Tiling: Process as 256x256 tiles for true high-resolution
         if self.enable_profiling:
             tiling_start = time.time()
             
-        # For now, use the original post-processing as placeholder
-        # TODO: Implement actual 4x256 tiling in separate function
-        full_res_masks = sam2_processor.post_process_masks(
-            outputs.pred_masks,
-            inputs["original_sizes"], 
-            inputs["reshaped_input_sizes"]
+        # Tile the images and process each tile through SAM2
+        tiled_outputs = self._process_with_tiling(
+            valid_images, batch_points, batch_labels, batch_boxes, 
+            sam2_processor, sam2_model
         )
         
-        # Replace low-res masks with full-res masks in outputs
-        outputs.pred_masks = full_res_masks
+        # Replace outputs with tiled results
+        outputs.pred_masks = tiled_outputs.pred_masks
+        outputs.iou_scores = tiled_outputs.iou_scores
         
         if self.enable_profiling:
             tiling_time = time.time() - tiling_start
@@ -601,6 +600,94 @@ class GPUOptimizedTrainer:
         logger.debug(f"Per-mask training: {num_masks} masks, avg_seg_loss: {avg_seg_loss:.4f}, avg_score_loss: {avg_score_loss:.4f}, gaussianity_loss: {gaussianity_loss:.4f}")
         
         return total_loss
+    
+    def _process_with_tiling(self, images, batch_points, batch_labels, batch_boxes, processor, model):
+        """Process images using tiling strategy for high-resolution processing"""
+        batch_size, channels, height, width = images.shape
+        tile_size = height // 2  # Split into 2x2 grid
+        
+        # Create tiles: [batch, channels, tile_size, tile_size] for each of 4 tiles
+        tiles = []
+        tile_coords = [(0, 0), (0, tile_size), (tile_size, 0), (tile_size, tile_size)]
+        
+        for y, x in tile_coords:
+            tile = images[:, :, y:y+tile_size, x:x+tile_size]  # [batch, channels, tile_size, tile_size]
+            tiles.append(tile)
+        
+        # Stack all tiles: [batch*4, channels, tile_size, tile_size]
+        tiled_images = torch.cat(tiles, dim=0)
+        
+        # Scale prompts for tiles (simplified - use same prompts for all tiles)
+        tiled_points = batch_points * 4 if batch_points else None  # Replicate for 4 tiles
+        tiled_labels = batch_labels * 4 if batch_labels else None
+        tiled_boxes = batch_boxes * 4 if batch_boxes else None
+        
+        # Process tiled images
+        tiled_inputs = processor(
+            images=tiled_images,
+            input_points=tiled_points,
+            input_labels=tiled_labels, 
+            input_boxes=tiled_boxes,
+            return_tensors="pt"
+        )
+        
+        # Move to device
+        for key in tiled_inputs:
+            if torch.is_tensor(tiled_inputs[key]):
+                tiled_inputs[key] = tiled_inputs[key].to(self.device)
+        
+        # Forward pass on tiles
+        with torch.set_grad_enabled(True):
+            tiled_outputs = model(**tiled_inputs)
+        
+        # Reconstruct full-size masks from tiles
+        pred_masks = self._reconstruct_from_tiles(tiled_outputs.pred_masks, batch_size, height, width)
+        iou_scores = self._reconstruct_scores_from_tiles(tiled_outputs.iou_scores, batch_size)
+        
+        # Create output structure
+        class TiledOutputs:
+            def __init__(self, pred_masks, iou_scores):
+                self.pred_masks = pred_masks
+                self.iou_scores = iou_scores
+        
+        return TiledOutputs(pred_masks, iou_scores)
+    
+    def _reconstruct_from_tiles(self, tiled_masks, batch_size, height, width):
+        """Reconstruct full-size masks from 4 tiles"""
+        tile_size = height // 2
+        num_tiles = 4
+        
+        # tiled_masks: [batch*4, point_batch, num_masks, tile_size, tile_size]
+        _, point_batch, num_masks, _, _ = tiled_masks.shape
+        
+        # Reshape to separate batch and tiles: [batch, 4, point_batch, num_masks, tile_size, tile_size]  
+        reshaped = tiled_masks.view(batch_size, num_tiles, point_batch, num_masks, tile_size, tile_size)
+        
+        # Initialize full mask
+        full_masks = torch.zeros(batch_size, point_batch, num_masks, height, width, 
+                                device=tiled_masks.device, dtype=tiled_masks.dtype)
+        
+        # Place tiles back into full mask
+        tile_coords = [(0, 0), (0, tile_size), (tile_size, 0), (tile_size, tile_size)]
+        for i, (y, x) in enumerate(tile_coords):
+            full_masks[:, :, :, y:y+tile_size, x:x+tile_size] = reshaped[:, i, :, :, :, :]
+        
+        return full_masks
+    
+    def _reconstruct_scores_from_tiles(self, tiled_scores, batch_size):
+        """Reconstruct IoU scores from tiles by averaging"""
+        num_tiles = 4
+        
+        # tiled_scores: [batch*4, point_batch, num_masks]
+        _, point_batch, num_masks = tiled_scores.shape
+        
+        # Reshape: [batch, 4, point_batch, num_masks]
+        reshaped = tiled_scores.view(batch_size, num_tiles, point_batch, num_masks)
+        
+        # Average scores across tiles
+        averaged_scores = reshaped.mean(dim=1)  # [batch, point_batch, num_masks]
+        
+        return averaged_scores
     
     def _compute_gaussianity_loss(self, pred_masks: torch.Tensor, gt_masks: torch.Tensor, images: torch.Tensor) -> torch.Tensor:
         """Compute gaussianity loss on union of masks using real residuals - vectorized for speed"""
