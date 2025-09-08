@@ -105,6 +105,7 @@ class GPUOptimizedTrainer:
     def setup_model(self, sam_adapter, dataset_size: int):
         """Setup model, optimizer, and scheduler"""
         self.model = sam_adapter.model
+        self.processor = getattr(sam_adapter, 'processor', None)
 
         # Enable gradient checkpointing if needed (skip for SAM2)
         if (self.enable_gradient_checkpointing and 
@@ -219,14 +220,18 @@ class GPUOptimizedTrainer:
         if self.model is None:
             raise RuntimeError("Model not initialized. Call setup_model() first.")
         
-        # Import SAM2 components
+        # Use SAM2 transformers approach (primary) or official SAM2 (fallback)
+        if hasattr(self, 'processor') and self.processor is not None:
+            # Use transformers SAM2 approach
+            return self._compute_sam2_loss(images, masks)
+        
+        # Fallback to official SAM2 if available
         try:
             from sam2 import SAM2ImagePredictor
             import numpy as np
         except ImportError:
-            # Fallback to transformers if official SAM2 not available
-            logger.warning("Official SAM2 not available, using simplified loss")
-            return self._compute_simplified_loss(images, masks)
+            # Final fallback - this should not happen in normal operation
+            raise RuntimeError("Neither transformers processor nor official SAM2 available")
         
         total_loss = 0.0
         batch_size = images.shape[0]
@@ -344,32 +349,112 @@ class GPUOptimizedTrainer:
         
         return input_points, input_labels, bounding_box
     
-    def _compute_simplified_loss(self, images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
-        """Simplified loss for when SAM2 predictor is not available"""
-        # Basic segmentation loss using model direct forward pass
-        # This is a fallback - actual SAM2 training should use the prompt-based approach above
-        
+    def _compute_sam2_loss(self, images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        """Compute loss using actual SAM2 model forward pass"""
         batch_size, channels, height, width = images.shape
         eps = 1e-6
         
-        # For now, use dummy predictions
-        # TODO: Replace with actual model forward pass when model interface is clarified
-        predicted_masks = torch.sigmoid(torch.randn(batch_size, 1, height, width, device=self.device))
-        predicted_scores = torch.sigmoid(torch.randn(batch_size, 1, device=self.device))
+        # Get SAM2 adapter for model and processor access
+        from samrfi.adapters.sam2_adapter import SAM2Adapter
         
-        gt_masks = masks.unsqueeze(1).float()
+        # Access model and processor from training setup
+        sam2_model = self.model  # This should be the loaded SAM2 model
+        sam2_processor = getattr(self, 'processor', None)
         
-        # Binary Cross-Entropy Loss
-        seg_loss = (-gt_masks * torch.log(predicted_masks + eps) - 
-                   (1 - gt_masks) * torch.log(1 - predicted_masks + eps)).mean()
+        if sam2_processor is None:
+            # Fallback: try to get processor from adapter
+            raise RuntimeError("SAM2 processor not available. Check training setup.")
         
-        # Score Loss
-        intersection = (gt_masks * (predicted_masks > 0.5)).sum()
-        union = gt_masks.sum() + (predicted_masks > 0.5).sum() - intersection
-        iou = intersection / (union + eps)
-        score_loss = torch.abs(predicted_scores[:, 0] - iou).mean()
+        total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
         
-        return seg_loss + 0.05 * score_loss
+        for i in range(batch_size):
+            # Get single image and mask
+            single_image = images[i]  # [3, H, W]
+            single_mask = masks[i]    # [H, W]
+            
+            # Generate prompts from ground truth mask
+            mask_np = single_mask.cpu().numpy()
+            input_points, input_labels, input_boxes = self._generate_prompts_from_mask(mask_np)
+            
+            if input_points is None:
+                # No RFI in this sample, skip
+                continue
+                
+            # Prepare inputs for SAM2
+            # Convert image from [3, H, W] to PIL format for processor
+            image_pil = self._tensor_to_pil(single_image)
+            
+            # Process inputs through SAM2 processor
+            inputs = sam2_processor(
+                images=image_pil,
+                input_points=[[input_points.tolist()]],  # Nested list format
+                input_labels=[[input_labels.tolist()]],
+                input_boxes=[[input_boxes]] if input_boxes else None,
+                return_tensors="pt"
+            )
+            
+            # Move inputs to device
+            for key in inputs:
+                if torch.is_tensor(inputs[key]):
+                    inputs[key] = inputs[key].to(self.device)
+            
+            # Forward pass through SAM2
+            with torch.set_grad_enabled(True):
+                outputs = sam2_model(**inputs)
+            
+            # Extract predictions
+            pred_masks = outputs.pred_masks  # [1, num_masks, H, W]
+            iou_scores = outputs.iou_scores  # [1, num_masks]
+            
+            # Use best mask (highest IoU score)
+            best_mask_idx = torch.argmax(iou_scores[0])
+            predicted_mask = pred_masks[0, best_mask_idx]  # [H, W]
+            predicted_score = iou_scores[0, best_mask_idx]  # scalar
+            
+            # Resize predicted mask to match ground truth if needed
+            if predicted_mask.shape != single_mask.shape:
+                predicted_mask = torch.nn.functional.interpolate(
+                    predicted_mask.unsqueeze(0).unsqueeze(0),
+                    size=single_mask.shape,
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze()
+            
+            # Apply sigmoid to get probabilities
+            predicted_mask = torch.sigmoid(predicted_mask)
+            predicted_score = torch.sigmoid(predicted_score)
+            
+            # Compute losses for this sample
+            gt_mask = single_mask.float()
+            
+            # Binary Cross-Entropy Loss
+            seg_loss = (-gt_mask * torch.log(predicted_mask + eps) - 
+                       (1 - gt_mask) * torch.log(1 - predicted_mask + eps)).mean()
+            
+            # Score Loss (compare predicted IoU score with actual IoU)
+            intersection = (gt_mask * (predicted_mask > 0.5)).sum()
+            union = gt_mask.sum() + (predicted_mask > 0.5).sum() - intersection
+            actual_iou = intersection / (union + eps)
+            score_loss = torch.abs(predicted_score - actual_iou)
+            
+            # Combine losses
+            sample_loss = seg_loss + 0.05 * score_loss
+            total_loss = total_loss + sample_loss
+        
+        # Average loss across batch
+        if batch_size > 0:
+            total_loss = total_loss / batch_size
+        
+        return total_loss
+    
+    def _tensor_to_pil(self, tensor):
+        """Convert tensor [3, H, W] to PIL Image"""
+        # Convert from [3, H, W] to [H, W, 3] and scale to 0-255
+        image_np = tensor.permute(1, 2, 0).cpu().numpy()
+        image_np = (image_np * 255).astype('uint8')
+        
+        from PIL import Image
+        return Image.fromarray(image_np)
 
     def validate(self, dataloader: DataLoader) -> Dict[str, float]:
         """Validate model performance"""
