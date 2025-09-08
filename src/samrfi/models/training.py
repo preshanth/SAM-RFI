@@ -502,18 +502,20 @@ class GPUOptimizedTrainer:
         if pred_masks.dim() == 5 and pred_masks.shape[1] == 1:
             pred_masks = pred_masks.squeeze(1)  # Remove extra dimension
         
-        # Vectorized best mask selection
-        if pred_masks.shape[1] == 1:
-            # Single mask case - use index 0 for all samples
-            best_mask_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
-        else:
-            # Multiple masks - select best IoU score for each sample
-            best_mask_indices = torch.argmax(iou_scores, dim=1)  # [batch]
+        # Debug shapes after processing
+        logger.debug(f"After squeeze - pred_masks: {pred_masks.shape}, iou_scores: {iou_scores.shape}")
         
-        # Vectorized mask and score extraction
-        batch_indices = torch.arange(batch_size, device=self.device)
-        predicted_masks = pred_masks[batch_indices, best_mask_indices]  # [batch, H, W]
-        predicted_scores = iou_scores[batch_indices, best_mask_indices]  # [batch]
+        # Combine all masks instead of selecting best one
+        # For RFI detection, we want union of all detected segments
+        if pred_masks.shape[1] == 1:
+            # Single mask case - just squeeze the mask dimension
+            predicted_masks = pred_masks.squeeze(1)  # [batch, H, W]
+            predicted_scores = iou_scores.squeeze(1)  # [batch] 
+        else:
+            # Multiple masks - take maximum across all masks (union)
+            # This captures RFI in any segment detected by SAM2
+            predicted_masks = pred_masks.max(dim=1)[0]  # [batch, H, W] - max logits
+            predicted_scores = iou_scores.max(dim=1)[0]  # [batch] - max scores
         
         # Handle dimension mismatches (vectorized)
         if predicted_masks.dim() == 4 and predicted_masks.shape[1] == 1:
