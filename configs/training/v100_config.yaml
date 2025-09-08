@@ -4,6 +4,7 @@
 model:
   version: "sam2"
   variant: "large"  # Use large variant for V100-32GB
+  local_model_path: ""  # Path to local model directory (empty = download from HuggingFace)
   image_size: 1024
 
 training:

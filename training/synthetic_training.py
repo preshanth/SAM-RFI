@@ -867,9 +867,14 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
         )
         logger.info(f"SAM2 adapter initialized: {sam_adapter.version}")
         
-        # Auto-download and load SAM2 model from HuggingFace
-        logger.info("Loading SAM2 model (will auto-download from HuggingFace if needed)...")
-        sam_adapter.load_model()  # Auto-download if no checkpoint specified
+        # Load SAM2 model (local path or HuggingFace)
+        local_model_path = config['model'].get('local_model_path', '')
+        if local_model_path:
+            logger.info(f"Loading SAM2 model from local path: {local_model_path}")
+        else:
+            logger.info("Loading SAM2 model (will auto-download from HuggingFace if needed)...")
+        
+        sam_adapter.load_model(local_model_path=local_model_path if local_model_path else None)
         logger.info("SAM2 model loaded successfully!")
         
     except Exception as e:

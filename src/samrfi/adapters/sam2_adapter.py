@@ -90,16 +90,20 @@ class SAM2Adapter(SAMAdapter):
     def input_size(self) -> int:
         return self._input_size
 
-    def load_model(self, checkpoint_path: str = None, config: Dict[str, Any] = None) -> None:
+    def load_model(self, checkpoint_path: str = None, config: Dict[str, Any] = None, 
+                   local_model_path: str = None) -> None:
         """
-        Load SAM2 model (tries transformers first, falls back to official SAM2)
+        Load SAM2 model (local path > transformers > official SAM2)
 
         Args:
             checkpoint_path: Optional checkpoint path for official SAM2
             config: Configuration dict (optional)
+            local_model_path: Path to local model directory (overrides HuggingFace)
         """
         try:
-            if USE_TRANSFORMERS:
+            if local_model_path:
+                self._load_from_local(local_model_path)
+            elif USE_TRANSFORMERS:
                 self._load_from_transformers()
             elif USE_OFFICIAL_SAM2:
                 self._load_from_official_sam2(checkpoint_path, config)
@@ -122,6 +126,27 @@ class SAM2Adapter(SAMAdapter):
         self.is_loaded = True
         
         logger.info(f"SAM2 model loaded via transformers on {self.device}")
+    
+    def _load_from_local(self, local_model_path: str) -> None:
+        """Load model from local directory"""
+        from pathlib import Path
+        
+        model_path = Path(local_model_path)
+        if not model_path.exists():
+            raise FileNotFoundError(f"Local model path does not exist: {local_model_path}")
+        
+        logger.info(f"Loading SAM2 {self.variant} from local path: {local_model_path}")
+        
+        # Try to load using transformers from local directory
+        try:
+            self.model = Sam2Model.from_pretrained(str(model_path)).to(self.device)
+            self.processor = Sam2Processor.from_pretrained(str(model_path))
+            self.is_loaded = True
+            logger.info(f"SAM2 model loaded from local path on {self.device}")
+        except Exception as e:
+            logger.error(f"Failed to load from local path with transformers: {e}")
+            # Could add fallback to official SAM2 loading here
+            raise
     
     def _load_from_official_sam2(self, checkpoint_path: str = None, config: Dict[str, Any] = None) -> None:
         """Load using official SAM2 repository"""
