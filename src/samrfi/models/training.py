@@ -458,6 +458,24 @@ class GPUOptimizedTrainer:
         if self.enable_profiling:
             forward_time = time.time() - forward_start
         
+        # 4x256 Tiling: Process images as 256x256 tiles for true high-resolution
+        if self.enable_profiling:
+            tiling_start = time.time()
+            
+        # For now, use the original post-processing as placeholder
+        # TODO: Implement actual 4x256 tiling in separate function
+        full_res_masks = sam2_processor.post_process_masks(
+            outputs.pred_masks,
+            inputs["original_sizes"], 
+            inputs["reshaped_input_sizes"]
+        )
+        
+        # Replace low-res masks with full-res masks in outputs
+        outputs.pred_masks = full_res_masks
+        
+        if self.enable_profiling:
+            tiling_time = time.time() - tiling_start
+        
         # Loss Computation
         if self.enable_profiling:
             loss_start = time.time()
@@ -478,12 +496,13 @@ class GPUOptimizedTrainer:
                 profiling_freq = profiling_freq * 20  # Much less frequent profiling
             
             if self.global_step % profiling_freq == 0:
-                total_time = prompt_time + processor_time + device_time + forward_time + loss_time
+                total_time = prompt_time + processor_time + device_time + forward_time + tiling_time + loss_time
                 logger.info(f"PROFILING - Step {self.global_step}:")
                 logger.info(f"  Prompt Gen:     {prompt_time*1000:.1f}ms ({prompt_time/total_time*100:.1f}%)")
                 logger.info(f"  SAM2 Processor: {processor_time*1000:.1f}ms ({processor_time/total_time*100:.1f}%)")
                 logger.info(f"  Device Move:    {device_time*1000:.1f}ms ({device_time/total_time*100:.1f}%)")
                 logger.info(f"  Forward Pass:   {forward_time*1000:.1f}ms ({forward_time/total_time*100:.1f}%)")
+                logger.info(f"  Tiling:         {tiling_time*1000:.1f}ms ({tiling_time/total_time*100:.1f}%)")
                 logger.info(f"  Loss Compute:   {loss_time*1000:.1f}ms ({loss_time/total_time*100:.1f}%)")
                 logger.info(f"  TOTAL:          {total_time*1000:.1f}ms")
         
