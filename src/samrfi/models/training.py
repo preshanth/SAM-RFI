@@ -498,20 +498,10 @@ class GPUOptimizedTrainer:
         
         batch_size = pred_masks.shape[0]
         
-        # DEBUG: Log initial SAM2 output shapes
-        logger.error(f"INITIAL SAM2 OUTPUT SHAPES:")
-        logger.error(f"  pred_masks.shape: {pred_masks.shape}")
-        logger.error(f"  iou_scores.shape: {iou_scores.shape}")
-        logger.error(f"  gt_masks.shape: {gt_masks.shape}")
-        logger.error(f"  batch_size: {batch_size}")
-        logger.error(f"  valid_indices: {valid_indices}")
-        
-        # Handle SAM2's extra dimension: [batch, 1, num_masks, H, W] -> [batch, num_masks, H, W]
-        if pred_masks.dim() == 5 and pred_masks.shape[1] == 1:
-            pred_masks = pred_masks.squeeze(1)  # Remove extra dimension
-        
-        # Debug shapes after processing
-        logger.error(f"After squeeze - pred_masks: {pred_masks.shape}, iou_scores: {iou_scores.shape}")
+        # SAM2 outputs have shape:
+        # pred_masks: [batch_size, point_batch_size, num_masks, H, W] 
+        # iou_scores: [batch_size, point_batch_size, num_masks]
+        # We keep the original dimensions and handle them properly in indexing
         
         # Ensure gt_masks is float
         gt_masks = gt_masks.float()  # [batch, H, W]
@@ -519,15 +509,18 @@ class GPUOptimizedTrainer:
         # HYBRID APPROACH: Compute individual losses for each mask during training
         # This preserves learning signals for different RFI morphologies
         
-        num_masks = pred_masks.shape[1]  # Number of masks per sample
+        # SAM2 shape: [batch_size, point_batch_size, num_masks, H, W]
+        num_masks = pred_masks.shape[2]  # Number of masks per sample (3rd dimension)
         mask_losses = []
         mask_score_losses = []
         
         # Compute loss for each mask individually
         for mask_idx in range(num_masks):
-            # Extract individual mask predictions
-            current_pred_masks = pred_masks[:, mask_idx, :, :]  # [batch, H, W]
-            current_iou_scores = iou_scores[:, mask_idx]  # [batch]
+            # Extract individual mask predictions with proper dimension handling
+            # SAM2 shape: [batch_size, point_batch_size, num_masks, H, W]
+            current_pred_masks = pred_masks[:, 0, mask_idx, :, :]  # [batch, H, W] 
+            # SAM2 shape: [batch_size, point_batch_size, num_masks]
+            current_iou_scores = iou_scores[:, 0, mask_idx]  # [batch]
             
             # Handle dimension mismatches
             if current_pred_masks.dim() == 4 and current_pred_masks.shape[1] == 1:
@@ -561,24 +554,12 @@ class GPUOptimizedTrainer:
             # Score loss for this mask
             current_scores = torch.sigmoid(current_iou_scores)  # [batch]
             
-            # DEBUG: Log all tensor shapes before the error
-            logger.error(f"MASK {mask_idx} DEBUG SHAPES:")
-            logger.error(f"  current_iou_scores.shape: {current_iou_scores.shape}")
-            logger.error(f"  current_scores.shape: {current_scores.shape}")
-            logger.error(f"  actual_iou.shape: {actual_iou.shape}")
-            logger.error(f"  intersection.shape: {intersection.shape}")
-            logger.error(f"  union.shape: {union.shape}")
-            logger.error(f"  predicted_binary.shape: {predicted_binary.shape}")
-            logger.error(f"  gt_masks.shape: {gt_masks.shape}")
-            logger.error(f"  current_pred_masks.shape: {current_pred_masks.shape}")
-            
-            # Ensure tensor sizes match
+            # Ensure tensor sizes match (should be correct now with proper indexing)
             if current_scores.shape != actual_iou.shape:
-                logger.error(f"Mask {mask_idx} shape mismatch: predicted_scores {current_scores.shape} vs actual_iou {actual_iou.shape}")
+                logger.debug(f"Mask {mask_idx} shape mismatch: predicted_scores {current_scores.shape} vs actual_iou {actual_iou.shape}")
                 min_size = min(current_scores.shape[0], actual_iou.shape[0])
                 current_scores = current_scores[:min_size]
                 actual_iou = actual_iou[:min_size]
-                logger.error(f"After fix - current_scores.shape: {current_scores.shape}, actual_iou.shape: {actual_iou.shape}")
             
             mask_score_loss = torch.abs(current_scores - actual_iou).mean()
             
@@ -613,9 +594,10 @@ class GPUOptimizedTrainer:
         overall_weight = gaussianity_config.get('weight', 0.1)
         measures_config = gaussianity_config.get('measures', {})
         
-        # Compute union of all masks: [batch, num_masks, H, W] -> [batch, H, W]
+        # Compute union of all masks: [batch, point_batch, num_masks, H, W] -> [batch, H, W]
         # Take max across all masks (union for comprehensive RFI detection)
-        union_masks = pred_masks.max(dim=1)[0]  # [batch, H, W]
+        # First take point_batch_size=0, then max across num_masks dimension
+        union_masks = pred_masks[:, 0, :, :, :].max(dim=1)[0]  # [batch, H, W]
         union_probs = torch.sigmoid(union_masks)  # Convert logits to probabilities
         union_binary = (union_probs > 0.5).float()  # Threshold to binary mask
         
