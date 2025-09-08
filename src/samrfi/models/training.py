@@ -574,7 +574,7 @@ class GPUOptimizedTrainer:
         
         # GAUSSIANITY LOSS: Compute on union of all masks
         # The combined RFI removal should leave Gaussian residuals
-        gaussianity_loss = self._compute_gaussianity_loss(pred_masks, gt_masks)
+        gaussianity_loss = self._compute_gaussianity_loss(pred_masks, gt_masks, images)
         
         # Combined loss with configurable weights
         total_loss = avg_seg_loss + 0.05 * avg_score_loss + gaussianity_loss
@@ -583,8 +583,8 @@ class GPUOptimizedTrainer:
         
         return total_loss
     
-    def _compute_gaussianity_loss(self, pred_masks: torch.Tensor, gt_masks: torch.Tensor) -> torch.Tensor:
-        """Compute gaussianity loss on union of masks - vectorized for speed"""
+    def _compute_gaussianity_loss(self, pred_masks: torch.Tensor, gt_masks: torch.Tensor, images: torch.Tensor) -> torch.Tensor:
+        """Compute gaussianity loss on union of masks using real residuals - vectorized for speed"""
         
         # Check if gaussianity loss is enabled in config
         if not hasattr(self, 'config') or not self.config.get('loss', {}).get('gaussianity', {}).get('enabled', False):
@@ -601,21 +601,22 @@ class GPUOptimizedTrainer:
         union_probs = torch.sigmoid(union_masks)  # Convert logits to probabilities
         union_binary = (union_probs > 0.5).float()  # Threshold to binary mask
         
-        # For training, we need original complex data to compute residuals
-        # Since we don't have access to original data here, we'll use a proxy:
-        # Assume the residual after perfect RFI removal should be Gaussian
-        # We'll test the complement of the predicted RFI regions
-        clean_regions = 1.0 - union_binary  # [batch, H, W] - regions predicted as clean
+        # Use real residuals: corrupted_data with our RFI removal applied
+        # The goal is to test if corrupted_data[union_mask == 0] is Gaussian
+        clean_regions = 1.0 - union_binary  # [batch, H, W] - regions we predict as clean
         
-        # Generate synthetic complex Gaussian data to test our assumption
-        # This is a proxy for the actual clean data residuals
-        batch_size, H, W = clean_regions.shape
+        # Extract real and imaginary parts from input images
+        # Assuming images are complex: [batch, 2, H, W] where dim 1 = [real, imag]
+        # OR [batch, 3, H, W] where we treat first 2 channels as real/imag
+        if images.shape[1] >= 2:
+            real_part = images[:, 0, :, :]  # [batch, H, W]
+            imag_part = images[:, 1, :, :]  # [batch, H, W] 
+        else:
+            # If only 1 channel, treat as real data
+            real_part = images[:, 0, :, :]  # [batch, H, W]
+            imag_part = torch.zeros_like(real_part)  # Zero imaginary part
         
-        # Create synthetic complex data (real + 1j * imaginary)
-        real_part = torch.randn(batch_size, H, W, device=pred_masks.device)
-        imag_part = torch.randn(batch_size, H, W, device=pred_masks.device)
-        
-        # Apply clean region mask to focus on areas we predict as clean
+        # Apply our RFI removal: keep only regions we predict as clean
         masked_real = real_part * clean_regions  # [batch, H, W]
         masked_imag = imag_part * clean_regions  # [batch, H, W]
         
