@@ -40,6 +40,10 @@ class GPUOptimizedTrainer:
         self.config = config
         self.gpu_type = config["hardware"]["target_gpu"]
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Profiling configuration
+        self.enable_profiling = config.get("logging", {}).get("enable_profiling", False)
+        self.profiling_frequency = config.get("logging", {}).get("profiling_frequency", 25)
 
         # Training state
         self.model = None
@@ -157,9 +161,13 @@ class GPUOptimizedTrainer:
         start_time = time.time()
 
         for batch_idx, batch in enumerate(dataloader):
+            # PROFILING: Data Loading Time (implicit in DataLoader iterator)
+            data_start = time.time()
+            
             # Move data to device
             images = batch["image"].to(self.device, non_blocking=True)
             masks = batch["mask"].to(self.device, non_blocking=True)
+            data_time = time.time() - data_start
 
             # Forward pass with mixed precision
             if self.use_mixed_precision:
@@ -173,6 +181,10 @@ class GPUOptimizedTrainer:
                 loss = self.compute_loss(images, masks)
                 loss = loss / gradient_accumulation
                 loss.backward()
+            
+            # Log data loading time
+            if self.enable_profiling and batch_idx % self.profiling_frequency == 0:
+                logger.info(f"Data Loading: {data_time*1000:.1f}ms")
 
             # Update weights after accumulation
             if (batch_idx + 1) % gradient_accumulation == 0:
@@ -350,7 +362,7 @@ class GPUOptimizedTrainer:
         return input_points, input_labels, bounding_box
     
     def _compute_sam2_loss(self, images: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
-        """Compute loss using optimized batch SAM2 processing"""
+        """Compute loss using optimized batch SAM2 processing with profiling"""
         batch_size, channels, height, width = images.shape
         eps = 1e-6
         
@@ -362,6 +374,9 @@ class GPUOptimizedTrainer:
             raise RuntimeError("SAM2 processor not available. Check training setup.")
         
         # Prepare batch data structures
+        if self.enable_profiling:
+            prompt_start = time.time()
+            
         batch_points = []
         batch_labels = []
         batch_boxes = []
@@ -378,6 +393,9 @@ class GPUOptimizedTrainer:
                 batch_boxes.append([input_boxes] if input_boxes else None)
                 valid_indices.append(i)
         
+        if self.enable_profiling:
+            prompt_time = time.time() - prompt_start
+        
         if not valid_indices:
             # No valid RFI samples in batch
             return torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -389,7 +407,10 @@ class GPUOptimizedTrainer:
         if valid_images.max() <= 1.0:
             valid_images = valid_images * 255.0
         
-        # Process entire batch through SAM2 processor (no PIL conversion!)
+        # SAM2 Processor
+        if self.enable_profiling:
+            processor_start = time.time()
+            
         inputs = sam2_processor(
             images=valid_images,  # Direct tensor input
             input_points=batch_points,
@@ -398,17 +419,52 @@ class GPUOptimizedTrainer:
             return_tensors="pt"
         )
         
+        if self.enable_profiling:
+            processor_time = time.time() - processor_start
+        
         # Move inputs to device
+        if self.enable_profiling:
+            device_start = time.time()
+            
         for key in inputs:
             if torch.is_tensor(inputs[key]):
                 inputs[key] = inputs[key].to(self.device)
+                
+        if self.enable_profiling:
+            device_time = time.time() - device_start
         
-        # Single forward pass for entire batch
+        # SAM2 Forward Pass
+        if self.enable_profiling:
+            forward_start = time.time()
+            
         with torch.set_grad_enabled(True):
             outputs = sam2_model(**inputs)
+            
+        if self.enable_profiling:
+            forward_time = time.time() - forward_start
         
-        # Compute batch loss
-        return self._compute_batch_loss(outputs, masks[valid_indices], valid_indices, eps)
+        # Loss Computation
+        if self.enable_profiling:
+            loss_start = time.time()
+            
+        loss = self._compute_batch_loss(outputs, masks[valid_indices], valid_indices, eps)
+        
+        if self.enable_profiling:
+            loss_time = time.time() - loss_start
+        
+        # Log timing breakdown
+        if (self.enable_profiling and hasattr(self, 'global_step') and 
+            self.global_step % self.profiling_frequency == 0):
+            total_time = prompt_time + processor_time + device_time + forward_time + loss_time
+            logger.info(f"PROFILING - Step {self.global_step}:")
+            logger.info(f"  Prompt Gen:     {prompt_time*1000:.1f}ms ({prompt_time/total_time*100:.1f}%)")
+            logger.info(f"  SAM2 Processor: {processor_time*1000:.1f}ms ({processor_time/total_time*100:.1f}%)")
+            logger.info(f"  Device Move:    {device_time*1000:.1f}ms ({device_time/total_time*100:.1f}%)")
+            logger.info(f"  Forward Pass:   {forward_time*1000:.1f}ms ({forward_time/total_time*100:.1f}%)")
+            logger.info(f"  Loss Compute:   {loss_time*1000:.1f}ms ({loss_time/total_time*100:.1f}%)")
+            logger.info(f"  TOTAL:          {total_time*1000:.1f}ms")
+        
+        return loss
     
     def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, eps: float = 1e-6) -> torch.Tensor:
         """Compute loss for batch of SAM2 predictions"""

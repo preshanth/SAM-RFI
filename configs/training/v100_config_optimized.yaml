@@ -48,6 +48,8 @@ logging:
   log_every_n_steps: 25        # Reduced from 50 -> 25 (more frequent with faster training)
   save_every_n_epochs: 5       # More frequent saves (was 10)
   validate_every_n_epochs: 2   # More frequent validation (was 5)
+  enable_profiling: true       # Enable detailed timing profiling
+  profiling_frequency: 25      # Log profiling info every N steps
   
 validation:
   batch_size: 2  # Increased from 1 -> 2 (faster validation)
