@@ -498,12 +498,20 @@ class GPUOptimizedTrainer:
         
         batch_size = pred_masks.shape[0]
         
+        # DEBUG: Log initial SAM2 output shapes
+        logger.error(f"INITIAL SAM2 OUTPUT SHAPES:")
+        logger.error(f"  pred_masks.shape: {pred_masks.shape}")
+        logger.error(f"  iou_scores.shape: {iou_scores.shape}")
+        logger.error(f"  gt_masks.shape: {gt_masks.shape}")
+        logger.error(f"  batch_size: {batch_size}")
+        logger.error(f"  valid_indices: {valid_indices}")
+        
         # Handle SAM2's extra dimension: [batch, 1, num_masks, H, W] -> [batch, num_masks, H, W]
         if pred_masks.dim() == 5 and pred_masks.shape[1] == 1:
             pred_masks = pred_masks.squeeze(1)  # Remove extra dimension
         
         # Debug shapes after processing
-        logger.debug(f"After squeeze - pred_masks: {pred_masks.shape}, iou_scores: {iou_scores.shape}")
+        logger.error(f"After squeeze - pred_masks: {pred_masks.shape}, iou_scores: {iou_scores.shape}")
         
         # Ensure gt_masks is float
         gt_masks = gt_masks.float()  # [batch, H, W]
@@ -553,12 +561,24 @@ class GPUOptimizedTrainer:
             # Score loss for this mask
             current_scores = torch.sigmoid(current_iou_scores)  # [batch]
             
+            # DEBUG: Log all tensor shapes before the error
+            logger.error(f"MASK {mask_idx} DEBUG SHAPES:")
+            logger.error(f"  current_iou_scores.shape: {current_iou_scores.shape}")
+            logger.error(f"  current_scores.shape: {current_scores.shape}")
+            logger.error(f"  actual_iou.shape: {actual_iou.shape}")
+            logger.error(f"  intersection.shape: {intersection.shape}")
+            logger.error(f"  union.shape: {union.shape}")
+            logger.error(f"  predicted_binary.shape: {predicted_binary.shape}")
+            logger.error(f"  gt_masks.shape: {gt_masks.shape}")
+            logger.error(f"  current_pred_masks.shape: {current_pred_masks.shape}")
+            
             # Ensure tensor sizes match
             if current_scores.shape != actual_iou.shape:
-                logger.debug(f"Mask {mask_idx} shape mismatch: predicted_scores {current_scores.shape} vs actual_iou {actual_iou.shape}")
+                logger.error(f"Mask {mask_idx} shape mismatch: predicted_scores {current_scores.shape} vs actual_iou {actual_iou.shape}")
                 min_size = min(current_scores.shape[0], actual_iou.shape[0])
                 current_scores = current_scores[:min_size]
                 actual_iou = actual_iou[:min_size]
+                logger.error(f"After fix - current_scores.shape: {current_scores.shape}, actual_iou.shape: {actual_iou.shape}")
             
             mask_score_loss = torch.abs(current_scores - actual_iou).mean()
             
