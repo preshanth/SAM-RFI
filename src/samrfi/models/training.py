@@ -604,7 +604,7 @@ class GPUOptimizedTrainer:
     def _process_with_tiling(self, images, batch_points, batch_labels, batch_boxes, processor, model):
         """Process images using tiling strategy for high-resolution processing"""
         batch_size, channels, height, width = images.shape
-        tile_size = height // 2  # Split into 2x2 grid
+        tile_size = 256  # SAM2 native resolution - split 1024x1024 into 4x256x256 tiles
         
         # Create tiles: [batch, channels, tile_size, tile_size] for each of 4 tiles
         tiles = []
@@ -664,7 +664,7 @@ class GPUOptimizedTrainer:
     
     def _reconstruct_from_tiles(self, tiled_masks, batch_size, height, width):
         """Reconstruct full-size masks from 4 tiles"""
-        tile_size = height // 2
+        tile_size = 256  # SAM2 native output resolution
         num_tiles = 4
         
         # tiled_masks: [batch*4, point_batch, num_masks, tile_size, tile_size]
