@@ -739,7 +739,7 @@ class GPUOptimizedTrainer:
         return loss
     
     def _compute_batch_loss(self, outputs, gt_masks: torch.Tensor, valid_indices: list, images: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        """Hybrid per-mask training approach: individual losses for training, union for inference"""
+        """Union-based training approach: compute union of all masks for single loss computation"""
         import torch.nn.functional as F
         
         pred_masks = outputs.pred_masks  # SAM2: [batch, 1, num_masks, H, W]
@@ -750,89 +750,56 @@ class GPUOptimizedTrainer:
         # SAM2 outputs have shape:
         # pred_masks: [batch_size, point_batch_size, num_masks, H, W] 
         # iou_scores: [batch_size, point_batch_size, num_masks]
-        # We keep the original dimensions and handle them properly in indexing
         
         # Ensure gt_masks is float
         gt_masks = gt_masks.float()  # [batch, H, W]
         
-        # HYBRID APPROACH: Compute individual losses for each mask during training
-        # This preserves learning signals for different RFI morphologies
+        # UNION APPROACH: Compute union of all masks for training and inference
+        # This provides a single coherent learning signal
         
-        # SAM2 shape: [batch_size, point_batch_size, num_masks, H, W]
-        num_masks = pred_masks.shape[2]  # Number of masks per sample (3rd dimension)
-        mask_losses = []
-        mask_score_losses = []
+        # Compute union of all masks: [batch, point_batch, num_masks, H, W] -> [batch, H, W]
+        # Take max across all masks (union for comprehensive RFI detection)
+        union_logits = pred_masks[:, 0, :, :, :].max(dim=1)[0]  # [batch, H, W]
         
-        # Compute loss for each mask individually
-        for mask_idx in range(num_masks):
-            # Extract individual mask predictions with proper dimension handling
-            # SAM2 shape: [batch_size, point_batch_size, num_masks, H, W]
-            current_pred_masks = pred_masks[:, 0, mask_idx, :, :]  # [batch, H, W] 
-            # SAM2 shape: [batch_size, point_batch_size, num_masks]
-            current_iou_scores = iou_scores[:, 0, mask_idx]  # [batch]
-            
-            # Handle dimension mismatches
-            if current_pred_masks.dim() == 4 and current_pred_masks.shape[1] == 1:
-                current_pred_masks = current_pred_masks.squeeze(1)  # [batch, H, W]
-            elif current_pred_masks.dim() == 4:
-                current_pred_masks = current_pred_masks[:, 0]  # Take first channel if multiple
-            
-            # Check if resize needed (should be same size already)
-            if current_pred_masks.shape[-2:] != gt_masks.shape[-2:]:
-                current_pred_masks = F.interpolate(
-                    current_pred_masks.unsqueeze(1),  # [batch, 1, H, W]
-                    size=gt_masks.shape[-2:],
-                    mode='bilinear',
-                    align_corners=False
-                ).squeeze(1)  # [batch, H, W]
-            
-            # Compute segmentation loss for this mask
-            # Use logits directly (don't apply sigmoid before BCE)
-            current_logits = current_pred_masks  # [batch, H, W] - keep as logits
-            mask_seg_loss = F.binary_cross_entropy_with_logits(current_logits, gt_masks, reduction='mean')
-            
-            # Compute IoU score loss for this mask
-            predicted_probs = torch.sigmoid(current_logits)  # [batch, H, W] 
-            predicted_binary = (predicted_probs > 0.5).float()  # [batch, H, W]
-            
-            # Compute intersection and union for each sample
-            intersection = (gt_masks * predicted_binary).sum(dim=(1, 2))  # [batch]
-            union = gt_masks.sum(dim=(1, 2)) + predicted_binary.sum(dim=(1, 2)) - intersection  # [batch]
-            actual_iou = intersection / (union + eps)  # [batch]
-            
-            # Score loss for this mask
-            current_scores = torch.sigmoid(current_iou_scores)  # [batch]
-            
-            # Ensure tensor sizes match (should be correct now with proper indexing)
-            if current_scores.shape != actual_iou.shape:
-                logger.debug(f"Mask {mask_idx} shape mismatch: predicted_scores {current_scores.shape} vs actual_iou {actual_iou.shape}")
-                min_size = min(current_scores.shape[0], actual_iou.shape[0])
-                current_scores = current_scores[:min_size]
-                actual_iou = actual_iou[:min_size]
-            
-            mask_score_loss = torch.abs(current_scores - actual_iou).mean()
-            
-            # Store individual mask losses
-            mask_losses.append(mask_seg_loss)
-            mask_score_losses.append(mask_score_loss)
+        # Handle dimension mismatches if needed
+        if union_logits.shape[-2:] != gt_masks.shape[-2:]:
+            union_logits = F.interpolate(
+                union_logits.unsqueeze(1),  # [batch, 1, H, W]
+                size=gt_masks.shape[-2:],
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(1)  # [batch, H, W]
         
-        # Average losses across all masks
-        # Each mask learns different RFI morphologies, so we preserve all learning signals
-        avg_seg_loss = torch.stack(mask_losses).mean()
-        avg_score_loss = torch.stack(mask_score_losses).mean()
+        # Compute segmentation loss on union
+        segmentation_loss = F.binary_cross_entropy_with_logits(union_logits, gt_masks, reduction='mean')
         
-        # GAUSSIANITY LOSS: Compute on union of all masks
+        # Compute IoU score loss on union
+        union_probs = torch.sigmoid(union_logits)  # [batch, H, W] 
+        union_binary = (union_probs > 0.5).float()  # [batch, H, W]
+        
+        # Compute intersection and union for each sample
+        intersection = (gt_masks * union_binary).sum(dim=(1, 2))  # [batch]
+        union_area = gt_masks.sum(dim=(1, 2)) + union_binary.sum(dim=(1, 2)) - intersection  # [batch]
+        actual_iou = intersection / (union_area + eps)  # [batch]
+        
+        # For IoU score prediction, use the max IoU score across all masks
+        max_iou_scores = iou_scores[:, 0, :].max(dim=1)[0]  # [batch] - max across masks
+        predicted_iou_scores = torch.sigmoid(max_iou_scores)  # [batch]
+        
+        iou_score_loss = torch.abs(predicted_iou_scores - actual_iou).mean()
+        
+        # GAUSSIANITY LOSS: Compute on union of all masks (final residual)
         # The combined RFI removal should leave Gaussian residuals
         gaussianity_loss = self._compute_gaussianity_loss(pred_masks, gt_masks, images)
         
-        # Combined loss with configurable weights
-        total_loss = avg_seg_loss + 0.05 * avg_score_loss + gaussianity_loss
+        # Combined loss with configurable weights - union approach
+        total_loss = segmentation_loss + 0.05 * iou_score_loss + gaussianity_loss
         
         # Store loss components for tracker (replaces verbose logging)
         self._last_loss_components = {
             "total": total_loss.item(),
-            "segmentation": avg_seg_loss.item(),
-            "iou": avg_score_loss.item(),
+            "segmentation": segmentation_loss.item(),
+            "iou": iou_score_loss.item(),
             "gaussianity": gaussianity_loss.item()
         }
         
