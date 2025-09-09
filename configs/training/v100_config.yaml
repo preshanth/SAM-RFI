@@ -45,21 +45,21 @@ scheduler:
 
 loss:
   gaussianity:
-    enabled: true
-    weight: 0.1  # Overall gaussianity loss weight
+    enabled: true  # Set to false to disable gaussianity loss for A/B testing
+    weight: 0.01  # REDUCED: Overall gaussianity loss weight (was 0.1)
     complex_data_mode: "separate"  # Test real/imaginary parts separately
     measures:
       skewness:
         enabled: true
-        weight: 1.0
+        weight: 0.3  # REDUCED: Individual component weight (was 1.0)
         target: 0.0  # Gaussian skewness target
       kurtosis:
         enabled: true
-        weight: 1.0
+        weight: 0.3  # REDUCED: Individual component weight (was 1.0)
         target: 3.0  # Gaussian kurtosis target (excess = 0)
       anderson_darling:
         enabled: true
-        weight: 2.0  # Higher weight as it's more comprehensive
+        weight: 0.4  # REDUCED: Individual component weight (was 2.0)
 
 logging:
   log_every_n_steps: 50

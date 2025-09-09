@@ -597,6 +597,27 @@ class GPUOptimizedTrainer:
         # Combined loss with configurable weights
         total_loss = avg_seg_loss + 0.05 * avg_score_loss + gaussianity_loss
         
+        # DETAILED LOSS COMPONENT LOGGING 
+        # Log detailed breakdown every 50 steps (or less frequently after epoch 0)
+        if hasattr(self, 'global_step'):
+            current_epoch = getattr(self, 'current_epoch', 0)
+            log_freq = 50 if current_epoch == 0 else 200  # Less frequent after epoch 0
+            
+            if self.global_step % log_freq == 0:
+                logger.info(f"LOSS BREAKDOWN - Step {self.global_step}:")
+                logger.info(f"  Segmentation Loss:  {avg_seg_loss:.6f}")
+                logger.info(f"  IoU Score Loss:     {avg_score_loss:.6f} (×0.05 = {0.05 * avg_score_loss:.6f})")
+                logger.info(f"  Gaussianity Loss:   {gaussianity_loss:.6f}")
+                logger.info(f"  TOTAL LOSS:         {total_loss:.6f}")
+                
+                # Log gaussianity components if available
+                if hasattr(self, '_last_gaussianity_components'):
+                    components = self._last_gaussianity_components
+                    logger.info(f"  Gaussianity Components:")
+                    logger.info(f"    Skewness (R/I):   {components['skewness_real']:.6f} / {components['skewness_imag']:.6f}")
+                    logger.info(f"    Kurtosis (R/I):   {components['kurtosis_real']:.6f} / {components['kurtosis_imag']:.6f}")
+                    logger.info(f"    Anderson-D (R/I): {components['anderson_darling_real']:.6f} / {components['anderson_darling_imag']:.6f}")
+        
         logger.debug(f"Per-mask training: {num_masks} masks, avg_seg_loss: {avg_seg_loss:.4f}, avg_score_loss: {avg_score_loss:.4f}, gaussianity_loss: {gaussianity_loss:.4f}")
         
         return total_loss
@@ -739,36 +760,39 @@ class GPUOptimizedTrainer:
         total_gaussianity_loss = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
         loss_count = 0
         
-        # SKEWNESS LOSS - vectorized across batch
+        # SKEWNESS LOSS - vectorized across batch (BOUNDED)
+        skew_loss_real = skew_loss_imag = skew_loss = torch.tensor(0.0, device=pred_masks.device)
         if measures_config.get('skewness', {}).get('enabled', False):
             skew_weight = measures_config['skewness'].get('weight', 1.0)
             skew_target = measures_config['skewness'].get('target', 0.0)
             
-            skew_loss_real = self._vectorized_skewness_loss(masked_real, skew_target)
-            skew_loss_imag = self._vectorized_skewness_loss(masked_imag, skew_target)
+            skew_loss_real = self._bounded_skewness_loss(masked_real, skew_target)
+            skew_loss_imag = self._bounded_skewness_loss(masked_imag, skew_target)
             skew_loss = (skew_loss_real + skew_loss_imag) / 2
             
             total_gaussianity_loss = total_gaussianity_loss + skew_weight * skew_loss
             loss_count += 1
         
-        # KURTOSIS LOSS - vectorized across batch  
+        # KURTOSIS LOSS - vectorized across batch (BOUNDED)
+        kurt_loss_real = kurt_loss_imag = kurt_loss = torch.tensor(0.0, device=pred_masks.device)
         if measures_config.get('kurtosis', {}).get('enabled', False):
             kurt_weight = measures_config['kurtosis'].get('weight', 1.0)
             kurt_target = measures_config['kurtosis'].get('target', 3.0)
             
-            kurt_loss_real = self._vectorized_kurtosis_loss(masked_real, kurt_target)
-            kurt_loss_imag = self._vectorized_kurtosis_loss(masked_imag, kurt_target)
+            kurt_loss_real = self._bounded_kurtosis_loss(masked_real, kurt_target)
+            kurt_loss_imag = self._bounded_kurtosis_loss(masked_imag, kurt_target)
             kurt_loss = (kurt_loss_real + kurt_loss_imag) / 2
             
             total_gaussianity_loss = total_gaussianity_loss + kurt_weight * kurt_loss
             loss_count += 1
             
-        # ANDERSON-DARLING LOSS - vectorized across batch
+        # ANDERSON-DARLING LOSS - vectorized across batch (BOUNDED)
+        ad_loss_real = ad_loss_imag = ad_loss = torch.tensor(0.0, device=pred_masks.device)
         if measures_config.get('anderson_darling', {}).get('enabled', False):
             ad_weight = measures_config['anderson_darling'].get('weight', 2.0)
             
-            ad_loss_real = self._vectorized_anderson_darling_loss(masked_real)
-            ad_loss_imag = self._vectorized_anderson_darling_loss(masked_imag)
+            ad_loss_real = self._bounded_anderson_darling_loss(masked_real)
+            ad_loss_imag = self._bounded_anderson_darling_loss(masked_imag)
             ad_loss = (ad_loss_real + ad_loss_imag) / 2
             
             total_gaussianity_loss = total_gaussianity_loss + ad_weight * ad_loss
@@ -779,6 +803,17 @@ class GPUOptimizedTrainer:
             final_loss = overall_weight * (total_gaussianity_loss / loss_count)
         else:
             final_loss = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
+        
+        # Store individual components for logging (store as attributes)
+        self._last_gaussianity_components = {
+            'skewness_real': float(skew_loss_real.detach()) if torch.is_tensor(skew_loss_real) else 0.0,
+            'skewness_imag': float(skew_loss_imag.detach()) if torch.is_tensor(skew_loss_imag) else 0.0,
+            'kurtosis_real': float(kurt_loss_real.detach()) if torch.is_tensor(kurt_loss_real) else 0.0,
+            'kurtosis_imag': float(kurt_loss_imag.detach()) if torch.is_tensor(kurt_loss_imag) else 0.0,
+            'anderson_darling_real': float(ad_loss_real.detach()) if torch.is_tensor(ad_loss_real) else 0.0,
+            'anderson_darling_imag': float(ad_loss_imag.detach()) if torch.is_tensor(ad_loss_imag) else 0.0,
+            'final_gaussianity': float(final_loss.detach())
+        }
             
         return final_loss
     
@@ -871,6 +906,29 @@ class GPUOptimizedTrainer:
         # Convert to loss (higher A² means less Gaussian, so we want to minimize A²)
         ad_loss = A_squared.mean()  # Scalar - average across batch
         return ad_loss
+    
+    def _bounded_skewness_loss(self, data: torch.Tensor, target: float = 0.0) -> torch.Tensor:
+        """Bounded skewness computation with tanh normalization to [-1,1]"""
+        raw_skew_loss = self._vectorized_skewness_loss(data, target)
+        # Use tanh to bound extreme skewness values to [-1,1] range
+        # Scale factor 2.0 gives good sensitivity around normal range
+        return torch.tanh(raw_skew_loss / 2.0)
+    
+    def _bounded_kurtosis_loss(self, data: torch.Tensor, target: float = 3.0) -> torch.Tensor:
+        """Bounded kurtosis computation with tanh normalization to [-1,1]"""
+        raw_kurt_loss = self._vectorized_kurtosis_loss(data, target)
+        # Use tanh to bound extreme kurtosis values to [-1,1] range
+        # Scale factor 5.0 allows for wider range before saturation
+        return torch.tanh(raw_kurt_loss / 5.0)
+    
+    def _bounded_anderson_darling_loss(self, data: torch.Tensor) -> torch.Tensor:
+        """Bounded Anderson-Darling with sigmoid normalization to [0,1]"""
+        raw_ad_loss = self._vectorized_anderson_darling_loss(data)
+        # Sigmoid normalization: maps typical AD values (0-10) to [0,1]
+        # Scale factor 5.0: maps 0→0.5, 5→0.88, 10→0.99
+        normalized_ad = torch.sigmoid(raw_ad_loss / 5.0)
+        # Center around 0 by subtracting 0.5, giving range [-0.5, 0.5]
+        return normalized_ad - 0.5
     
     def _tensor_to_pil(self, tensor):
         """Convert tensor [3, H, W] to PIL Image (deprecated - use direct tensor processing)"""
