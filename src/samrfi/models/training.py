@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import logging
 import time
+import json
 from datetime import datetime, timedelta
 
 try:
@@ -34,10 +35,220 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 
+class LossTracker:
+    """Silent loss tracking and post-training visualization"""
+    
+    def __init__(self, config: Dict[str, Any], output_dir: Path):
+        self.config = config
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configuration
+        logging_config = config.get("logging", {})
+        self.collect_metrics = logging_config.get("collect_metrics", True)
+        self.verbose_breakdown = logging_config.get("verbose_breakdown", False)
+        self.export_on_completion = logging_config.get("export_on_completion", True)
+        
+        # Data storage
+        self.history = {
+            "steps": [],
+            "epochs": [],
+            "timestamps": [],
+            "total_loss": [],
+            "segmentation_loss": [],
+            "iou_loss": [],
+            "gaussianity_loss": [],
+            "learning_rate": [],
+            "gradient_norm": []
+        }
+        
+        # Detailed gaussianity components (optional)
+        if self.verbose_breakdown:
+            self.history.update({
+                "skewness_real": [],
+                "skewness_imag": [],
+                "kurtosis_real": [],
+                "kurtosis_imag": [],
+                "anderson_real": [],
+                "anderson_imag": []
+            })
+        
+        self.start_time = time.time()
+        logger.info(f"LossTracker initialized - collect_metrics: {self.collect_metrics}")
+    
+    def record(self, step: int, epoch: int, losses: Dict[str, float], 
+               learning_rate: float = None, gradient_norm: float = None,
+               gaussianity_components: Dict[str, Dict[str, float]] = None):
+        """Record training metrics"""
+        if not self.collect_metrics:
+            return
+            
+        self.history["steps"].append(step)
+        self.history["epochs"].append(epoch)
+        self.history["timestamps"].append(time.time() - self.start_time)
+        self.history["total_loss"].append(losses.get("total", 0.0))
+        self.history["segmentation_loss"].append(losses.get("segmentation", 0.0))
+        self.history["iou_loss"].append(losses.get("iou", 0.0))
+        self.history["gaussianity_loss"].append(losses.get("gaussianity", 0.0))
+        self.history["learning_rate"].append(learning_rate or 0.0)
+        self.history["gradient_norm"].append(gradient_norm or 0.0)
+        
+        # Optional detailed components
+        if self.verbose_breakdown and gaussianity_components:
+            skew = gaussianity_components.get("skewness", {})
+            kurt = gaussianity_components.get("kurtosis", {})
+            anderson = gaussianity_components.get("anderson_darling", {})
+            
+            self.history["skewness_real"].append(skew.get("real", 0.0))
+            self.history["skewness_imag"].append(skew.get("imag", 0.0))
+            self.history["kurtosis_real"].append(kurt.get("real", 0.0))
+            self.history["kurtosis_imag"].append(kurt.get("imag", 0.0))
+            self.history["anderson_real"].append(anderson.get("real", 0.0))
+            self.history["anderson_imag"].append(anderson.get("imag", 0.0))
+    
+    def save_history(self):
+        """Save training history to JSON"""
+        if not self.collect_metrics:
+            return
+            
+        history_file = self.output_dir / "training_history.json"
+        
+        # Add metadata
+        metadata = {
+            "config": self.config,
+            "total_steps": len(self.history["steps"]),
+            "total_epochs": max(self.history["epochs"]) + 1 if self.history["epochs"] else 0,
+            "training_duration_hours": (time.time() - self.start_time) / 3600,
+            "final_losses": {
+                "total": self.history["total_loss"][-1] if self.history["total_loss"] else 0,
+                "segmentation": self.history["segmentation_loss"][-1] if self.history["segmentation_loss"] else 0,
+                "iou": self.history["iou_loss"][-1] if self.history["iou_loss"] else 0,
+                "gaussianity": self.history["gaussianity_loss"][-1] if self.history["gaussianity_loss"] else 0
+            }
+        }
+        
+        export_data = {
+            "metadata": metadata,
+            "history": self.history
+        }
+        
+        with open(history_file, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        
+        logger.info(f"Training history saved: {history_file}")
+        return history_file
+    
+    def generate_plots(self):
+        """Generate comprehensive training plots on completion"""
+        if not self.export_on_completion or not self.collect_metrics:
+            return
+            
+        try:
+            import matplotlib.pyplot as plt
+            import pandas as pd
+        except ImportError:
+            logger.warning("matplotlib/pandas not available - skipping plot generation")
+            return
+        
+        if not self.history["steps"]:
+            logger.warning("No training history to plot")
+            return
+        
+        plots_dir = self.output_dir / "training_plots"
+        plots_dir.mkdir(exist_ok=True)
+        
+        # Convert to pandas for easier plotting
+        df = pd.DataFrame(self.history)
+        
+        # 1. Loss Components Over Time
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 2, 1)
+        plt.plot(df["steps"], df["total_loss"], label="Total Loss", linewidth=2)
+        plt.plot(df["steps"], df["segmentation_loss"], label="Segmentation Loss", alpha=0.8)
+        plt.plot(df["steps"], df["iou_loss"], label="IoU Loss", alpha=0.8)
+        plt.plot(df["steps"], df["gaussianity_loss"], label="Gaussianity Loss", alpha=0.8)
+        plt.xlabel("Training Steps")
+        plt.ylabel("Loss")
+        plt.title("Loss Components Over Time")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # 2. Learning Rate Schedule
+        plt.subplot(2, 2, 2)
+        plt.plot(df["steps"], df["learning_rate"])
+        plt.xlabel("Training Steps")
+        plt.ylabel("Learning Rate")
+        plt.title("Learning Rate Schedule")
+        plt.grid(True, alpha=0.3)
+        
+        # 3. Gradient Norms
+        plt.subplot(2, 2, 3)
+        if any(df["gradient_norm"]):
+            plt.plot(df["steps"], df["gradient_norm"])
+            plt.xlabel("Training Steps")
+            plt.ylabel("Gradient Norm")
+            plt.title("Gradient Norms")
+            plt.grid(True, alpha=0.3)
+        else:
+            plt.text(0.5, 0.5, "Gradient norms not collected", 
+                    ha="center", va="center", transform=plt.gca().transAxes)
+        
+        # 4. Loss Per Epoch (smoothed)
+        plt.subplot(2, 2, 4)
+        epoch_losses = df.groupby("epochs")["total_loss"].mean()
+        plt.plot(epoch_losses.index, epoch_losses.values, 'o-')
+        plt.xlabel("Epoch")
+        plt.ylabel("Average Loss")
+        plt.title("Loss Per Epoch")
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(plots_dir / "training_overview.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # 5. Detailed Loss Components (separate plot)
+        plt.figure(figsize=(10, 6))
+        plt.plot(df["steps"], df["segmentation_loss"], label="Segmentation Loss", linewidth=2)
+        plt.plot(df["steps"], df["iou_loss"] * 20, label="IoU Loss (×20)", linewidth=2)  # Scale up for visibility
+        plt.plot(df["steps"], df["gaussianity_loss"] * 100, label="Gaussianity Loss (×100)", linewidth=2)
+        plt.xlabel("Training Steps")
+        plt.ylabel("Loss")
+        plt.title("Individual Loss Components")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.savefig(plots_dir / "loss_components.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Training plots saved to: {plots_dir}")
+        
+    def finalize(self):
+        """Called on training completion - save data and generate plots"""
+        if not self.collect_metrics:
+            return
+            
+        self.save_history()
+        if self.export_on_completion:
+            self.generate_plots()
+        
+        # Summary statistics
+        if self.history["total_loss"]:
+            final_loss = self.history["total_loss"][-1]
+            best_loss = min(self.history["total_loss"])
+            improvement = ((self.history["total_loss"][0] - final_loss) / 
+                          self.history["total_loss"][0] * 100)
+            
+            logger.info(f"Training Summary:")
+            logger.info(f"  Final Loss: {final_loss:.6f}")
+            logger.info(f"  Best Loss: {best_loss:.6f}")
+            logger.info(f"  Improvement: {improvement:.2f}%")
+            logger.info(f"  Total Steps: {len(self.history['steps'])}")
+            logger.info(f"  Duration: {(time.time() - self.start_time)/3600:.2f} hours")
+
+
 class GPUOptimizedTrainer:
     """Training pipeline optimized for V100/H200 constraints"""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], output_dir: Path = None):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch not available for training")
 
@@ -56,6 +267,11 @@ class GPUOptimizedTrainer:
         self.scaler = None
         self.current_epoch = 0
         self.global_step = 0
+        
+        # Initialize loss tracker
+        if output_dir is None:
+            output_dir = Path("training_output")
+        self.loss_tracker = LossTracker(config, output_dir)
 
         # Setup optimizations based on GPU type
         self.setup_memory_optimization()
@@ -213,10 +429,25 @@ class GPUOptimizedTrainer:
 
             total_loss += loss.item() * gradient_accumulation
 
-            # Reduced logging frequency during training
-            log_frequency = self.config["logging"]["log_every_n_steps"]
+            # Record loss in tracker (silently) and reduced console logging
+            current_lr = self.optimizer.param_groups[0]['lr'] if self.optimizer else 0.0
             
-            # Log much less frequently after first epoch
+            # Extract loss components for tracking
+            if hasattr(self, '_last_loss_components'):
+                loss_dict = self._last_loss_components
+            else:
+                loss_dict = {"total": loss.item() * gradient_accumulation}
+            
+            # Record in loss tracker
+            self.loss_tracker.record(
+                step=self.global_step,
+                epoch=epoch,
+                losses=loss_dict,
+                learning_rate=current_lr
+            )
+
+            # Clean console logging (much less frequent)
+            log_frequency = self.config["logging"]["log_every_n_steps"]
             if epoch > 0:
                 log_frequency = log_frequency * 10  # 10x less frequent after epoch 0
             
@@ -597,28 +828,22 @@ class GPUOptimizedTrainer:
         # Combined loss with configurable weights
         total_loss = avg_seg_loss + 0.05 * avg_score_loss + gaussianity_loss
         
-        # DETAILED LOSS COMPONENT LOGGING 
-        # Log detailed breakdown every 50 steps (or less frequently after epoch 0)
-        if hasattr(self, 'global_step'):
+        # Store loss components for tracker (replaces verbose logging)
+        self._last_loss_components = {
+            "total": total_loss.item(),
+            "segmentation": avg_seg_loss.item(),
+            "iou": avg_score_loss.item(),
+            "gaussianity": gaussianity_loss.item()
+        }
+        
+        # Optional verbose breakdown (configurable)
+        if self.loss_tracker.verbose_breakdown and hasattr(self, 'global_step'):
             current_epoch = getattr(self, 'current_epoch', 0)
-            log_freq = 50 if current_epoch == 0 else 200  # Less frequent after epoch 0
+            log_freq = 200 if current_epoch == 0 else 1000  # Much less frequent
             
             if self.global_step % log_freq == 0:
                 logger.info(f"LOSS BREAKDOWN - Step {self.global_step}:")
-                logger.info(f"  Segmentation Loss:  {avg_seg_loss:.6f}")
-                logger.info(f"  IoU Score Loss:     {avg_score_loss:.6f} (×0.05 = {0.05 * avg_score_loss:.6f})")
-                logger.info(f"  Gaussianity Loss:   {gaussianity_loss:.6f}")
-                logger.info(f"  TOTAL LOSS:         {total_loss:.6f}")
-                
-                # Log gaussianity components if available
-                if hasattr(self, '_last_gaussianity_components'):
-                    components = self._last_gaussianity_components
-                    logger.info(f"  Gaussianity Components:")
-                    logger.info(f"    Skewness (R/I):   {components['skewness_real']:.6f} / {components['skewness_imag']:.6f}")
-                    logger.info(f"    Kurtosis (R/I):   {components['kurtosis_real']:.6f} / {components['kurtosis_imag']:.6f}")
-                    logger.info(f"    Anderson-D (R/I): {components['anderson_darling_real']:.6f} / {components['anderson_darling_imag']:.6f}")
-        
-        logger.debug(f"Per-mask training: {num_masks} masks, avg_seg_loss: {avg_seg_loss:.4f}, avg_score_loss: {avg_score_loss:.4f}, gaussianity_loss: {gaussianity_loss:.4f}")
+                logger.info(f"  Segmentation: {avg_seg_loss:.4f} | IoU: {avg_score_loss:.4f} | Gaussianity: {gaussianity_loss:.4f} | Total: {total_loss:.4f}")
         
         return total_loss
     
@@ -1066,6 +1291,12 @@ class GPUOptimizedTrainer:
 
         torch.save(checkpoint, filepath)
         logger.info(f"Checkpoint saved: {filepath}")
+    
+    def finalize_training(self):
+        """Finalize training - generate plots and save data"""
+        logger.info("Finalizing training...")
+        self.loss_tracker.finalize()
+        logger.info("Training finalization complete")
 
     def load_checkpoint(self, filepath: str) -> Dict[str, Any]:
         """Load training checkpoint"""

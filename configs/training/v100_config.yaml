@@ -66,6 +66,11 @@ logging:
   save_every_n_epochs: 10
   validate_every_n_epochs: 5
   
+  # LossTracker configuration
+  collect_metrics: true          # Silent loss data collection
+  verbose_breakdown: false       # Disable detailed per-step logging
+  export_on_completion: true     # Generate plots when training completes
+  
 validation:
   batch_size: 1
   patch_size: 512

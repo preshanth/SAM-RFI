@@ -938,6 +938,9 @@ def train_sam2_model(config_path: str, dataset_metadata: Dict, output_dir: str):
     
     logger.info(f"Training completed! Best validation loss: {best_val_loss:.4f}")
     logger.info(f"Model checkpoints saved in: {checkpoint_dir}")
+    
+    # Finalize training - generate plots and save training data
+    trainer.finalize_training()
 
 
 def demonstrate_training_pipeline(config: Dict, train_loader: DataLoader, 
