@@ -8,8 +8,8 @@ model:
   image_size: 1024
 
 training:
-  batch_size: 2           # Increased batch size for V100 (32GB)
-  gradient_accumulation: 8 # Simulate larger batch
+  batch_size: 1           # Reduced for 4x tiling memory usage
+  gradient_accumulation: 16 # Increased to maintain effective batch size
   mixed_precision: false   # Disable mixed precision to avoid scaler issues
   max_epochs: 200         # V100 can run for days
   learning_rate: 1e-4

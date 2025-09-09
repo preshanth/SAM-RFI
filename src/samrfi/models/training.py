@@ -614,31 +614,41 @@ class GPUOptimizedTrainer:
             tile = images[:, :, y:y+tile_size, x:x+tile_size]  # [batch, channels, tile_size, tile_size]
             tiles.append(tile)
         
-        # Stack all tiles: [batch*4, channels, tile_size, tile_size]
-        tiled_images = torch.cat(tiles, dim=0)
+        # Process tiles sequentially to avoid memory explosion
+        tile_results = []
         
-        # Scale prompts for tiles (simplified - use same prompts for all tiles)
-        tiled_points = batch_points * 4 if batch_points else None  # Replicate for 4 tiles
-        tiled_labels = batch_labels * 4 if batch_labels else None
-        tiled_boxes = batch_boxes * 4 if batch_boxes else None
+        for i, tile in enumerate(tiles):
+            # Process one tile at a time: [batch, channels, tile_size, tile_size]
+            single_tile_inputs = processor(
+                images=tile,
+                input_points=batch_points,  # Same prompts per tile
+                input_labels=batch_labels,
+                input_boxes=batch_boxes,
+                return_tensors="pt"
+            )
+            
+            # Move to device
+            for key in single_tile_inputs:
+                if torch.is_tensor(single_tile_inputs[key]):
+                    single_tile_inputs[key] = single_tile_inputs[key].to(self.device)
+            
+            # Forward pass on single tile
+            with torch.set_grad_enabled(True):
+                single_tile_output = model(**single_tile_inputs)
+            
+            tile_results.append(single_tile_output)
         
-        # Process tiled images
-        tiled_inputs = processor(
-            images=tiled_images,
-            input_points=tiled_points,
-            input_labels=tiled_labels, 
-            input_boxes=tiled_boxes,
-            return_tensors="pt"
-        )
+        # Combine results after processing
+        combined_masks = torch.cat([r.pred_masks for r in tile_results], dim=0)
+        combined_scores = torch.cat([r.iou_scores for r in tile_results], dim=0)
         
-        # Move to device
-        for key in tiled_inputs:
-            if torch.is_tensor(tiled_inputs[key]):
-                tiled_inputs[key] = tiled_inputs[key].to(self.device)
+        # Create combined outputs structure
+        class CombinedOutputs:
+            def __init__(self, pred_masks, iou_scores):
+                self.pred_masks = pred_masks
+                self.iou_scores = iou_scores
         
-        # Forward pass on tiles
-        with torch.set_grad_enabled(True):
-            tiled_outputs = model(**tiled_inputs)
+        tiled_outputs = CombinedOutputs(combined_masks, combined_scores)
         
         # Reconstruct full-size masks from tiles
         pred_masks = self._reconstruct_from_tiles(tiled_outputs.pred_masks, batch_size, height, width)
