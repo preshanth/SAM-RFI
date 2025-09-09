@@ -342,7 +342,7 @@ class SimulatedMS:
             # Calculate target broadband occupancy: 15% of total data
             target_broadband_occupancy = 0.15
             current_occupancy = 0.0
-            n_broadband_events = np.random.randint(2, 5)  # Fewer events for 15% target
+            n_broadband_events = np.random.randint(3, 6)  # Additional broadband event (was 2-5, now 3-6)
             
             for event_idx in range(n_broadband_events):
                 if current_occupancy >= target_broadband_occupancy:

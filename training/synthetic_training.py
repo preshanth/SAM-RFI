@@ -193,9 +193,9 @@ class RFISyntheticDataset(Dataset):
         self.observation_cache = {}  # For hybrid loading
         self.cache_access_order = []  # LRU cache for hybrid
         
-        # Set up channel selection
-        self.available_channels = ['real2', 'log_amp', 'phase', 'imag2']
-        self.validation_channels = ['real2', 'log_amp', 'phase']  # Fixed order for validation
+        # Set up channel selection - NEW: R=Gradient, G=Amplitude, B=Phase
+        self.available_channels = ['gradient', 'log_amp', 'phase', 'real2', 'imag2']
+        self.validation_channels = ['gradient', 'log_amp', 'phase']  # Fixed order: R=Gradient, G=LogAmp, B=Phase
         
         # Set up random seed for channel swapping
         if channel_swap_seed is not None:
@@ -443,6 +443,19 @@ class RFISyntheticDataset(Dataset):
         channels['real2'] = np.real(complex_data) ** 2
         channels['imag2'] = np.imag(complex_data) ** 2
         channels['log_amp'] = np.log10(np.abs(complex_data) + 1e-10)
+        
+        # Compute gradient magnitude from log amplitude
+        log_amp = channels['log_amp']
+        time_deriv = np.zeros_like(log_amp)
+        freq_deriv = np.zeros_like(log_amp)
+        
+        # Compute derivatives (gradient components)
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)  # Time derivative
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)  # Frequency derivative
+        
+        # Gradient magnitude (combines both derivatives)
+        channels['gradient'] = np.sqrt(time_deriv**2 + freq_deriv**2)
+        
         return channels
     
     def _normalize_channel_log(self, data, channel_name):
@@ -471,6 +484,13 @@ class RFISyntheticDataset(Dataset):
         
         elif channel_name == 'log_amp':
             # Already in log space
+            data_min, data_max = data.min(), data.max()
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+        
+        elif channel_name == 'gradient':
+            # Gradient magnitude is always positive (sqrt of squared derivatives)
             data_min, data_max = data.min(), data.max()
             if data_max > data_min:
                 return (data - data_min) / (data_max - data_min)
