@@ -5,7 +5,7 @@ Dataset handling, synthetic data generation, and HuggingFace integration.
 """
 
 # Core synthetic data generation (always available)
-from .synthetic_ms import ObservationConfig, RFIConfig, SyntheticVisibilityGenerator
+from .synthetic_ms_legacy import ObservationConfig, RFIConfig, SyntheticVisibilityGenerator
 from .ms_writer import MSWriter
 from .generator import SyntheticDatasetGenerator
 from .simulated_ms import SimulatedMS

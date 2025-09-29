@@ -1,5 +1,10 @@
 """
-Synthetic Measurement Set Generator
+Synthetic Measurement Set Generator (LEGACY)
+
+DEPRECATED: This module is preserved for reference but should not be used in new code.
+Use the new generator architecture instead:
+
+    from samrfi.datasets.generators import CASATrainingGenerator, PurePythonTrainingGenerator
 
 Creates realistic measurement sets with controllable RFI for training and benchmarking.
 Produces proper CASA-compatible MS format that can be read by aoflagger, CASA flaggers, etc.

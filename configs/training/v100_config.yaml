@@ -12,8 +12,8 @@ training:
   gradient_accumulation: 16 # Increased to maintain effective batch size
   mixed_precision: false   # Disable mixed precision to avoid scaler issues
   max_epochs: 200         # V100 can run for days
-  learning_rate: 1e-4
-  weight_decay: 1e-2
+  learning_rate: 1e-5     # Reduced 10× for frozen encoder fine-tuning (was 1e-4)
+  weight_decay: 0         # Disable for mask decoder training (was 1e-2)
   warmup_steps: 100
   
   # Memory optimization settings

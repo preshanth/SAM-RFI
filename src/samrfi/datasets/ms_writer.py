@@ -24,7 +24,7 @@ except ImportError as e:
     CASA_AVAILABLE = False
     logging.warning(f"CASA tools not available: {e}")
 
-from .synthetic_ms import ObservationConfig, SyntheticVisibilityGenerator
+from .synthetic_ms_legacy import ObservationConfig, SyntheticVisibilityGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +140,20 @@ class MSWriter:
         antenna_config = self._get_antenna_config()
         x, y, z, d, an, telname = antenna_config
         
-        # Update obs_config with actual antenna count from configuration
-        actual_num_antennas = len(x)
-        if actual_num_antennas != self.obs_config.num_antennas:
-            logger.info(f"Updating antenna count from {self.obs_config.num_antennas} to {actual_num_antennas} (from {telname} config)")
-            self.obs_config.num_antennas = actual_num_antennas
+        # If requested antennas < available antennas, slice to requested count
+        if self.obs_config.num_antennas < len(x):
+            x = x[:self.obs_config.num_antennas]
+            y = y[:self.obs_config.num_antennas] 
+            z = z[:self.obs_config.num_antennas]
+            d = d[:self.obs_config.num_antennas]
+            an = an[:self.obs_config.num_antennas]
+            logger.info(f"Using first {self.obs_config.num_antennas} antennas from {len(antenna_config[0])}-antenna {telname} config")
+        else:
+            # Keep all antennas and update config if we have fewer than requested
+            actual_num_antennas = len(x)
+            if actual_num_antennas != self.obs_config.num_antennas:
+                logger.info(f"Updating antenna count from {self.obs_config.num_antennas} to {actual_num_antennas} (from {telname} config)")
+                self.obs_config.num_antennas = actual_num_antennas
         
         # Set antenna configuration
         self.sm.setconfig(

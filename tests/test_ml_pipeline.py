@@ -20,7 +20,7 @@ from pathlib import Path
 import logging
 
 # Pipeline components
-from samrfi.datasets import SimulatedMS, ObservationConfig, RFIConfig
+from samrfi.datasets import SyntheticDatasetGenerator, ObservationConfig, RFIConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,8 +29,14 @@ logger = logging.getLogger(__name__)
 class TestMLPipeline:
     """Step-by-step ML pipeline validation"""
     
-    def test_1_simulated_ms_generation(self):
-        """Step 1: Generate realistic MS with RFI using SimulatedMS"""
+    # Class variables to share data between test methods
+    _obs_metadata = None
+    _temp_dir = None
+    _obs_config = None
+    _rfi_config = None
+    
+    def test_1_synthetic_data_generation(self):
+        """Step 1: Generate synthetic RFI data using SyntheticDatasetGenerator"""
         # Minimal but realistic config
         obs_config = ObservationConfig(
             num_antennas=4,          # 6 baselines (small but real)
@@ -51,58 +57,71 @@ class TestMLPipeline:
             satellite_passes=1          # 1 satellite pass
         )
         
-        # Create temporary MS
+        # Create temporary directory
         temp_dir = tempfile.mkdtemp(prefix="samrfi_test_")
-        ms_path = Path(temp_dir) / "test.ms"
         
         try:
-            logger.info("Creating SimulatedMS...")
-            simulator = SimulatedMS(obs_config)
-            simulator.create_ms_with_rfi(str(ms_path), rfi_config, include_rfi_flags=True)
+            logger.info("Creating synthetic data with SyntheticDatasetGenerator...")
+            generator = SyntheticDatasetGenerator(output_dir=temp_dir)
             
-            # Validate MS creation
-            assert ms_path.exists() and ms_path.is_dir(), "MS should be created"
+            # Generate single observation
+            obs_metadata = generator.generate_single_observation(
+                "test_obs", obs_config, rfi_config
+            )
             
-            # Check CASA table structure
-            required_tables = ["MAIN", "ANTENNA", "SPECTRAL_WINDOW"]
-            for table in required_tables:
-                assert (ms_path / table).exists(), f"Missing table: {table}"
+            # Validate generation
+            assert obs_metadata is not None, "Should return observation metadata"
+            assert 'ground_truth_dir' in obs_metadata, "Should have ground truth directory"
             
-            logger.info(f"✓ SimulatedMS created: {ms_path}")
+            # Check generated files
+            gt_dir = Path(obs_metadata['ground_truth_dir'])
+            assert gt_dir.exists(), "Ground truth directory should exist"
+            
+            required_files = ["corrupted_visibilities.npy", "rfi_mask.npy"]
+            for file in required_files:
+                assert (gt_dir / file).exists(), f"Missing file: {file}"
+            
+            logger.info(f"✓ Synthetic data created: {gt_dir}")
             logger.info(f"  Config: {obs_config.num_antennas} antennas, {rfi_config.broadband_probability:.0%} RFI")
+            logger.info(f"  obs_metadata keys: {list(obs_metadata.keys())}")
             
-            # Store for next test
-            self._ms_path = str(ms_path)
-            self._temp_dir = temp_dir
-            self._obs_config = obs_config
-            self._rfi_config = rfi_config
+            # Store for next test (class variables)
+            TestMLPipeline._obs_metadata = obs_metadata
+            TestMLPipeline._temp_dir = temp_dir
+            TestMLPipeline._obs_config = obs_config
+            TestMLPipeline._rfi_config = rfi_config
             
         except Exception as e:
             # Cleanup on failure
             if Path(temp_dir).exists():
                 shutil.rmtree(temp_dir)
-            pytest.fail(f"SimulatedMS generation failed: {e}")
+            pytest.fail(f"Synthetic data generation failed: {e}")
     
     def test_2_extract_baseline_waterfall(self):
-        """Step 2: Extract baseline waterfall like training pipeline does"""
-        if not hasattr(self, '_ms_path'):
-            pytest.skip("Requires test_1_simulated_ms_generation to pass")
+        """Step 2: Extract baseline waterfall using MSLoader (real MS reading)"""
+        if TestMLPipeline._obs_metadata is None:
+            pytest.skip("Requires test_1_synthetic_data_generation to pass")
         
         try:
-            # Extract baseline using CASA tools (like training)
-            from casatools import table
-            tb = table()
-            tb.open(self._ms_path)
+            # Get MS path created by SyntheticDatasetGenerator  
+            ms_path = TestMLPipeline._obs_metadata['corrupted_ms']  # Use corrupted MS with RFI
+            logger.info(f"Loading MS using MSLoader: {ms_path}")
             
-            # Get first baseline
-            tb.query('ANTENNA1==0 && ANTENNA2==1')
-            data_col = tb.getcol('DATA')    # [pol, chan, time]  
-            flag_col = tb.getcol('FLAG')    # Ground truth RFI flags
-            tb.close()
+            # Use MSLoader to read MS (real pipeline)
+            from samrfi.core import MSLoader
+            loader = MSLoader(ms_path, field_id=0)
             
-            # Extract first polarization as waterfall
-            complex_vis = data_col[0, :, :].T  # [time, freq]
-            rfi_mask = flag_col[0, :, :].T     # [time, freq] ground truth
+            # Load first baseline data  
+            baseline_data = loader.load_baseline_data(ant1=0, ant2=1, spw_group_id=0)
+            
+            # Extract complex visibilities
+            data_col = baseline_data['data']  # [time, chan, pol]
+            complex_vis = data_col[:, :, 0]   # First polarization [time, freq]
+            
+            # Load ground truth RFI mask from .npy for validation
+            gt_dir = Path(TestMLPipeline._obs_metadata['ground_truth_dir']) 
+            rfi_mask_gt = np.load(gt_dir / 'rfi_mask.npy')
+            rfi_mask = rfi_mask_gt[0, :, :, 0]  # First baseline, first pol [time, freq]
             
             # Validate extraction
             assert complex_vis.shape == (1024, 1024), f"Expected [1024,1024], got {complex_vis.shape}"

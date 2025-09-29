@@ -12,7 +12,7 @@ import logging
 import json
 from datetime import datetime
 
-from .synthetic_ms import ObservationConfig, RFIConfig, SyntheticVisibilityGenerator
+from .synthetic_ms_legacy import ObservationConfig, RFIConfig, SyntheticVisibilityGenerator
 from .ms_writer import MSWriter
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class SyntheticDatasetGenerator:
     
     def __init__(self, output_dir: str = "synthetic_datasets"):
         """
-        Initialize synthetic dataset generator
+        Initialize dataset generator
         
         Args:
             output_dir: Directory for output datasets
@@ -129,17 +129,17 @@ class SyntheticDatasetGenerator:
         
         # Create measurement sets - fresh MSWriter instance for each MS
         
-        # Clean MS (no RFI)
-        clean_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_clean.ms"
-        MSWriter(obs_config).create_measurement_set(
-            str(clean_ms_path), clean_vis, include_rfi_flags=False
-        )
+        # # Clean MS (no RFI)
+        # clean_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_clean.ms"
+        # MSWriter(obs_config).create_measurement_set(
+        #     str(clean_ms_path), clean_vis, include_rfi_flags=False
+        # )
         
-        # Corrupted MS (with RFI, no flags)
-        corrupted_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_corrupted.ms"
-        MSWriter(obs_config).create_measurement_set(
-            str(corrupted_ms_path), corrupted_vis, include_rfi_flags=False
-        )
+        # # Corrupted MS (with RFI, no flags)
+        # corrupted_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_corrupted.ms"
+        # MSWriter(obs_config).create_measurement_set(
+        #     str(corrupted_ms_path), corrupted_vis, include_rfi_flags=False
+        # )
         
         # Ground truth MS (with RFI flags)
         truth_ms_path = self.output_dir / 'measurement_sets' / f"{obs_name}_truth.ms"

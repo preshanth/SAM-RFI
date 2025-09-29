@@ -26,6 +26,8 @@ try:
     except ImportError:
         from torch.cuda.amp import autocast  # Fallback for older PyTorch
 
+    from monai.losses import DiceCELoss
+
     TORCH_AVAILABLE = True
 except ImportError as e:
     TORCH_AVAILABLE = False
@@ -330,6 +332,19 @@ class GPUOptimizedTrainer:
         """Setup model, optimizer, and scheduler"""
         self.model = sam_adapter.model
         self.processor = getattr(sam_adapter, 'processor', None)
+
+        # Freeze vision encoder and prompt encoder (only train mask decoder)
+        # This preserves SAM2's pretrained features from millions of images
+        for name, param in self.model.named_parameters():
+            if any(encoder_name in name for encoder_name in
+                   ["vision_encoder", "prompt_encoder", "image_encoder"]):
+                param.requires_grad = False
+
+        # Count trainable parameters
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.model.parameters())
+        logger.info(f"Froze vision/prompt encoders: {trainable_params:,} / {total_params:,} parameters trainable ({100*trainable_params/total_params:.1f}%)")
+        logger.info("Only training mask decoder for efficient fine-tuning")
 
         # Enable gradient checkpointing if needed (skip for SAM2)
         if (self.enable_gradient_checkpointing and 
@@ -770,8 +785,12 @@ class GPUOptimizedTrainer:
                 align_corners=False
             ).squeeze(1)  # [batch, H, W]
         
-        # Compute segmentation loss on union
-        segmentation_loss = F.binary_cross_entropy_with_logits(union_logits, gt_masks, reduction='mean')
+        # Compute segmentation loss on union using DiceCELoss (handles class imbalance)
+        dice_ce_loss = DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+        segmentation_loss = dice_ce_loss(
+            union_logits.unsqueeze(1),  # Add channel dimension [batch, 1, H, W]
+            gt_masks.unsqueeze(1)        # Add channel dimension [batch, 1, H, W]
+        )
         
         # Compute IoU score loss on union
         union_probs = torch.sigmoid(union_logits)  # [batch, H, W] 
