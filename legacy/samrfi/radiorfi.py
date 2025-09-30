@@ -8,6 +8,7 @@ from tqdm import tqdm
 from .plotter import Plotter
 from .metricscalculator import RadioRFIMetricsCalculator, SyntheticRFIMetricsCalculator
 
+
 class RadioRFI:
 
     def __init__(self, vis=False, dir_path=None):
@@ -19,43 +20,43 @@ class RadioRFI:
         self.rfi_antenna_data = None
         self.flags = None
 
-        self.module_type = 'radio'
-        
+        self.module_type = "radio"
+
         if dir_path:
-            if dir_path.endswith('/'):
+            if dir_path.endswith("/"):
                 dir_path = dir_path[:-1]
 
             current_directory = str(dir_path)
         else:
             current_directory = os.getcwd()
 
-        new_directory = os.path.join(current_directory, 'samrfi_data')
+        new_directory = os.path.join(current_directory, "samrfi_data")
 
         if not os.path.exists(new_directory):
             os.makedirs(new_directory)
 
         self.directory = new_directory
 
-        casalogs_directory = os.path.join(current_directory, 'casalogs')
+        casalogs_directory = os.path.join(current_directory, "casalogs")
 
         if not os.path.exists(casalogs_directory):
             os.makedirs(casalogs_directory)
-        
+
         if vis:
             # Path to ms
             self.vis = str(vis)
-            
-            # Number of antenna 
+
+            # Number of antenna
             tb_antenna = table()
-            tb_antenna.open(self.vis+'/ANTENNA')
+            tb_antenna.open(self.vis + "/ANTENNA")
             self.num_antennas = tb_antenna.nrows()
             tb_antenna.close()
 
             # Number of spectral windows
             tb_spw = table()
-            tb_spw.open(self.vis+'/SPECTRAL_WINDOW')
+            tb_spw.open(self.vis + "/SPECTRAL_WINDOW")
             self.num_spw = tb_spw.nrows()
-            self.channels_per_spw = tb_spw.getcol('NUM_CHAN')
+            self.channels_per_spw = tb_spw.getcol("NUM_CHAN")
             tb_spw.close()
 
             # Tables
@@ -64,14 +65,14 @@ class RadioRFI:
         else:
             self.vis = None
 
-    def load(self, vis=None, mode='DATA', ant_i=None):
+    def load(self, vis=None, mode="DATA", ant_i=None):
 
         if not self.vis:
             self.vis = str(vis)
 
         # combined_data = np.zeros([4,1024,140],dtype='complex128')
-        subtable = self.tb.query(f'DATA_DESC_ID=={0} && ANTENNA1=={0} && ANTENNA2=={1}')
-        self.time_tb = len(subtable.getcol('TIME'))
+        subtable = self.tb.query(f"DATA_DESC_ID=={0} && ANTENNA1=={0} && ANTENNA2=={1}")
+        self.time_tb = len(subtable.getcol("TIME"))
 
         channels_per_spw_list = self.channels_per_spw
 
@@ -93,49 +94,67 @@ class RadioRFI:
 
         antenna_baseline_map = []
 
-        print('\nLoading data...')
+        print("\nLoading data...")
 
         if ant_i:
             self.num_antennas_i = ant_i
 
         for i in tqdm(range(self.num_antennas_i)):
-       # for i in tqdm(range(self.num_antennas)):
+            # for i in tqdm(range(self.num_antennas)):
             for j in tqdm(range(i + 1, self.num_antennas)):
-                combined_data = np.zeros([4,same_num_spw*init_chan,self.time_tb],dtype='complex128')
+                combined_data = np.zeros(
+                    [4, same_num_spw * init_chan, self.time_tb], dtype="complex128"
+                )
 
-                for spw_spec, spw, num_chan in zip(same_spw_array, range(same_num_spw), same_channels_per_spw_array):
+                for spw_spec, spw, num_chan in zip(
+                    same_spw_array, range(same_num_spw), same_channels_per_spw_array
+                ):
                     # input field number as well
-                    subtable = self.tb.query(f'DATA_DESC_ID=={spw_spec} && ANTENNA1=={i} && ANTENNA2=={j}')
-                    combined_data[:,spw*init_chan:(spw+1)*init_chan,:] += subtable.getcol(mode)
+                    subtable = self.tb.query(
+                        f"DATA_DESC_ID=={spw_spec} && ANTENNA1=={i} && ANTENNA2=={j}"
+                    )
+                    combined_data[:, spw * init_chan : (spw + 1) * init_chan, :] += subtable.getcol(
+                        mode
+                    )
                 rfi_list.append(combined_data)
 
-                antenna_baseline_map.append((i,j))
+                antenna_baseline_map.append((i, j))
 
         self.antenna_baseline_map = antenna_baseline_map
         self.spw = same_spw_array
         self.channels_per_spw = same_channels_per_spw_array
-        
-        if mode == 'DATA':
+
+        if mode == "DATA":
             self.rfi_antenna_data_complex = np.stack(rfi_list)
             self.rfi_antenna_data = np.abs(self.rfi_antenna_data_complex)
             print(self.rfi_antenna_data.shape)
-        
-        if mode == 'FLAG':
+
+        if mode == "FLAG":
             self.ms_flags = np.stack(rfi_list)
 
     def update_flags(self, flags):
         self.flags = flags
 
-    def create_residuals(self,):
+    def create_residuals(
+        self,
+    ):
         self.residuals = np.where(np.logical_not(self.flags), self.rfi_antenna_data, 0)
 
-    def save_flags(self,):
+    def save_flags(
+        self,
+    ):
 
         for baseline, antennas in enumerate(tqdm(self.antenna_baseline_map)):
-            main_flags = self.flags[baseline,:,:,:]
+            main_flags = self.flags[baseline, :, :, :]
             for spw in self.spw:
-                flags = main_flags[:,0+(spw*self.channels_per_spw[0]):self.channels_per_spw[0]+(spw*self.channels_per_spw[0]),:]
-                self.subtable = self.tb.query(f'DATA_DESC_ID=={spw} && ANTENNA1=={antennas[0]} && ANTENNA2=={antennas[1]}')
-                self.subtable.putcol('FLAG', flags)
-
-        
+                flags = main_flags[
+                    :,
+                    0
+                    + (spw * self.channels_per_spw[0]) : self.channels_per_spw[0]
+                    + (spw * self.channels_per_spw[0]),
+                    :,
+                ]
+                self.subtable = self.tb.query(
+                    f"DATA_DESC_ID=={spw} && ANTENNA1=={antennas[0]} && ANTENNA2=={antennas[1]}"
+                )
+                self.subtable.putcol("FLAG", flags)

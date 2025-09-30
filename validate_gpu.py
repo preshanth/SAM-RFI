@@ -20,6 +20,7 @@ from datasets import load_from_disk
 # GPU profiling
 try:
     import pynvml
+
     pynvml.nvmlInit()
     HAS_NVML = True
 except:
@@ -45,18 +46,18 @@ class GPUMonitor:
                 allocated = torch.cuda.memory_allocated() / 1024**2
                 reserved = torch.cuda.memory_reserved() / 1024**2
                 return {
-                    'allocated_mb': allocated,
-                    'reserved_mb': reserved,
-                    'total_mb': torch.cuda.get_device_properties(0).total_memory / 1024**2
+                    "allocated_mb": allocated,
+                    "reserved_mb": reserved,
+                    "total_mb": torch.cuda.get_device_properties(0).total_memory / 1024**2,
                 }
             return None
 
         mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
         return {
-            'used_mb': mem_info.used / 1024**2,
-            'total_mb': mem_info.total / 1024**2,
-            'free_mb': mem_info.free / 1024**2,
-            'utilization_pct': mem_info.used / mem_info.total * 100
+            "used_mb": mem_info.used / 1024**2,
+            "total_mb": mem_info.total / 1024**2,
+            "free_mb": mem_info.free / 1024**2,
+            "utilization_pct": mem_info.used / mem_info.total * 100,
         }
 
     def get_utilization(self):
@@ -64,10 +65,7 @@ class GPUMonitor:
         if not self.has_nvml:
             return None
         util = pynvml.nvmlDeviceGetUtilizationRates(self.handle)
-        return {
-            'gpu_pct': util.gpu,
-            'memory_pct': util.memory
-        }
+        return {"gpu_pct": util.gpu, "memory_pct": util.memory}
 
     def get_device_name(self):
         """Get GPU device name"""
@@ -104,7 +102,7 @@ class TrainingProfiler:
         mem_before = self.monitor.get_memory_info()
 
         # Create trainer
-        trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path='./validation_output')
+        trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path="./validation_output")
 
         # Start profiling
         start_time = time.time()
@@ -118,7 +116,7 @@ class TrainingProfiler:
                 ],
                 record_shapes=True,
                 profile_memory=True,
-                with_stack=True
+                with_stack=True,
             ) as prof:
 
                 losses = trainer.train(
@@ -126,7 +124,7 @@ class TrainingProfiler:
                     batch_size=batch_size,
                     sam_checkpoint=config.model_checkpoint,
                     learning_rate=config.learning_rate,
-                    plot=False
+                    plot=False,
                 )
 
             end_time = time.time()
@@ -146,17 +144,19 @@ class TrainingProfiler:
             samples_per_sec = (len(dataset_wrapper.dataset) * num_epochs) / duration
 
             result = {
-                'batch_size': batch_size,
-                'num_epochs': num_epochs,
-                'success': True,
-                'duration_sec': duration,
-                'samples_per_sec': samples_per_sec,
-                'final_loss': losses[-1],
-                'memory_before_mb': mem_before,
-                'memory_after_mb': mem_after,
-                'peak_memory_mb': peak_memory_mb,
-                'gpu_utilization': util,
-                'profiler_summary': prof.key_averages().table(sort_by="cuda_time_total", row_limit=10)
+                "batch_size": batch_size,
+                "num_epochs": num_epochs,
+                "success": True,
+                "duration_sec": duration,
+                "samples_per_sec": samples_per_sec,
+                "final_loss": losses[-1],
+                "memory_before_mb": mem_before,
+                "memory_after_mb": mem_after,
+                "peak_memory_mb": peak_memory_mb,
+                "gpu_utilization": util,
+                "profiler_summary": prof.key_averages().table(
+                    sort_by="cuda_time_total", row_limit=10
+                ),
             }
 
             print(f"\n✓ Success!")
@@ -172,13 +172,13 @@ class TrainingProfiler:
             print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=5))
 
         except RuntimeError as e:
-            if 'out of memory' in str(e):
+            if "out of memory" in str(e):
                 print(f"\n✗ Out of memory!")
                 result = {
-                    'batch_size': batch_size,
-                    'success': False,
-                    'error': 'OOM',
-                    'message': str(e)
+                    "batch_size": batch_size,
+                    "success": False,
+                    "error": "OOM",
+                    "message": str(e),
                 }
             else:
                 raise
@@ -201,7 +201,7 @@ class TrainingProfiler:
 
             result = self.profile_batch_size(dataset_wrapper, config, batch_size, num_epochs=1)
 
-            if result['success']:
+            if result["success"]:
                 successful_batch_sizes.append(batch_size)
             else:
                 # Stop at first OOM
@@ -215,24 +215,24 @@ class TrainingProfiler:
             print("\n✗ No successful batch sizes found!")
             return None
 
-    def generate_report(self, output_path='validation_report.json'):
+    def generate_report(self, output_path="validation_report.json"):
         """Generate JSON report"""
         device_name = self.monitor.get_device_name()
         mem_info = self.monitor.get_memory_info()
 
         report = {
-            'device': device_name,
-            'total_memory_mb': mem_info['total_mb'] if mem_info else None,
-            'cuda_version': torch.version.cuda,
-            'pytorch_version': torch.__version__,
-            'results': self.results,
-            'summary': {
-                'successful_batch_sizes': [r['batch_size'] for r in self.results if r['success']],
-                'failed_batch_sizes': [r['batch_size'] for r in self.results if not r['success']],
-            }
+            "device": device_name,
+            "total_memory_mb": mem_info["total_mb"] if mem_info else None,
+            "cuda_version": torch.version.cuda,
+            "pytorch_version": torch.__version__,
+            "results": self.results,
+            "summary": {
+                "successful_batch_sizes": [r["batch_size"] for r in self.results if r["success"]],
+                "failed_batch_sizes": [r["batch_size"] for r in self.results if not r["success"]],
+            },
         }
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(report, f, indent=2)
 
         print(f"\n✓ Report saved to: {output_path}")
@@ -240,17 +240,20 @@ class TrainingProfiler:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Validate SAM-RFI training on GPU with profiling'
+    parser = argparse.ArgumentParser(description="Validate SAM-RFI training on GPU with profiling")
+    parser.add_argument("--dataset", required=True, help="Path to HuggingFace dataset")
+    parser.add_argument("--config", required=True, help="Path to training config")
+    parser.add_argument(
+        "--max-batch-size", type=int, default=64, help="Maximum batch size to test (default: 64)"
     )
-    parser.add_argument('--dataset', required=True, help='Path to HuggingFace dataset')
-    parser.add_argument('--config', required=True, help='Path to training config')
-    parser.add_argument('--max-batch-size', type=int, default=64,
-                       help='Maximum batch size to test (default: 64)')
-    parser.add_argument('--num-epochs', type=int, default=1,
-                       help='Number of epochs for profiling (default: 1)')
-    parser.add_argument('--output', default='validation_report.json',
-                       help='Output report path (default: validation_report.json)')
+    parser.add_argument(
+        "--num-epochs", type=int, default=1, help="Number of epochs for profiling (default: 1)"
+    )
+    parser.add_argument(
+        "--output",
+        default="validation_report.json",
+        help="Output report path (default: validation_report.json)",
+    )
 
     args = parser.parse_args()
 
@@ -259,14 +262,14 @@ def main():
         print("✗ Error: CUDA not available!")
         return 1
 
-    print("="*80)
+    print("=" * 80)
     print("SAM-RFI GPU Validation")
-    print("="*80)
+    print("=" * 80)
 
     # Load config
     print(f"\nLoading config: {args.config}")
     config = ConfigLoader.load(args.config)
-    config.device = 'cuda'  # Force CUDA
+    config.device = "cuda"  # Force CUDA
 
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
@@ -281,7 +284,7 @@ def main():
                 "stretch": config.stretch,
                 "flag_sigma": config.flag_sigma,
                 "patch_method": "patchify",
-                "patch_size": config.patch_size
+                "patch_size": config.patch_size,
             }
             # Mock patched_data_norm_only for plotting
             self.patched_data_norm_only = np.zeros((len(ds), config.patch_size, config.patch_size))
@@ -319,16 +322,18 @@ def main():
     print("Validation Summary")
     print(f"{'='*80}")
 
-    successful = [r for r in profiler.results if r['success']]
+    successful = [r for r in profiler.results if r["success"]]
     if successful:
         print("\nSuccessful configurations:")
         for r in successful:
-            print(f"  batch_size={r['batch_size']:2d}: "
-                  f"{r['samples_per_sec']:6.2f} samples/sec, "
-                  f"loss={r['final_loss']:.6f}, "
-                  f"peak_mem={r['peak_memory_mb']:.0f}MB")
+            print(
+                f"  batch_size={r['batch_size']:2d}: "
+                f"{r['samples_per_sec']:6.2f} samples/sec, "
+                f"loss={r['final_loss']:.6f}, "
+                f"peak_mem={r['peak_memory_mb']:.0f}MB"
+            )
 
-    failed = [r for r in profiler.results if not r['success']]
+    failed = [r for r in profiler.results if not r["success"]]
     if failed:
         print("\nFailed configurations:")
         for r in failed:
@@ -340,5 +345,5 @@ def main():
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

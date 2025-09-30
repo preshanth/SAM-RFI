@@ -8,7 +8,7 @@ from pathlib import Path
 
 from samrfi.data import MSLoader, Preprocessor
 from .training.sam2_trainer import SAM2Trainer
-from .config.config_loader import ConfigLoader, TrainingConfig
+from .config.config_loader import ConfigLoader, TrainingConfig, DataConfig
 from .inference import RFIPredictor
 from .data_generation.synthetic_generator import SyntheticDataGenerator
 from .data_generation.ms_generator import MSDataGenerator
@@ -16,45 +16,28 @@ from .data_generation.ms_generator import MSDataGenerator
 
 def generate_data_command(args):
     """Execute data generation command"""
-    import yaml
-
-    print("="*60)
+    print("=" * 60)
     print("SAM-RFI Data Generation")
-    print("="*60)
+    print("=" * 60)
 
-    # Load config from YAML
+    # Load data generation config
     print(f"\nLoading configuration from: {args.config}")
-    with open(args.config, 'r') as f:
-        config_dict = yaml.safe_load(f)
+    config = ConfigLoader.load_data(args.config)
 
-    # Convert dict to object with attribute access
-    class ConfigObject:
-        def __init__(self, d):
-            for key, value in d.items():
-                if isinstance(value, dict):
-                    setattr(self, key, ConfigObject(value))
-                else:
-                    setattr(self, key, value)
-
-        def get(self, key, default=None):
-            return getattr(self, key, default)
-
-    config = ConfigObject(config_dict)
-
-    if args.source == 'synthetic':
+    if args.source == "synthetic":
         print("\nGenerating synthetic dataset...")
         generator = SyntheticDataGenerator(config)
         generator.generate(output_path=args.output)
-    elif args.source == 'ms':
+    elif args.source == "ms":
         print("\nGenerating dataset from Measurement Set...")
         generator = MSDataGenerator(config)
         generator.generate(output_path=args.output)
     else:
         raise ValueError(f"Unknown source: {args.source}")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Data Generation Complete!")
-    print("="*60)
+    print("=" * 60)
     print(f"Output directory: {args.output}")
     print(f"  exact_masks/ - Perfect ground truth")
     print(f"  mad_masks/ - MAD-based masks")
@@ -64,9 +47,9 @@ def train_command(args):
     """Execute training command on pre-generated dataset"""
     from datasets import load_from_disk
 
-    print("="*60)
+    print("=" * 60)
     print("SAM-RFI SAM2 Training")
-    print("="*60)
+    print("=" * 60)
 
     # Load configuration
     print(f"\nLoading configuration from: {args.config}")
@@ -122,12 +105,12 @@ def train_command(args):
         sam_checkpoint=config.model_checkpoint,
         learning_rate=config.learning_rate,
         plot=config.save_plots,
-        validation_dataset=val_dataset
+        validation_dataset=val_dataset,
     )
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Training Complete!")
-    print("="*60)
+    print("=" * 60)
 
     # Handle different return formats
     if isinstance(losses, dict):
@@ -144,7 +127,7 @@ def train_command(args):
 
 def create_config_command(args):
     """Create default configuration file"""
-    output_path = args.output or 'sam2_config.yaml'
+    output_path = args.output or "sam2_config.yaml"
 
     print(f"Creating default configuration: {output_path}")
     ConfigLoader.create_default_config(output_path)
@@ -174,9 +157,9 @@ def validate_config_command(args):
 
 def predict_command(args):
     """Execute prediction command"""
-    print("="*60)
+    print("=" * 60)
     print("SAM-RFI RFI Prediction")
-    print("="*60)
+    print("=" * 60)
 
     # Load predictor
     print(f"\nLoading model from: {args.model}")
@@ -184,7 +167,7 @@ def predict_command(args):
         model_path=args.model,
         sam_checkpoint=args.checkpoint,
         device=args.device,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
     )
 
     # Determine if iterative
@@ -199,7 +182,7 @@ def predict_command(args):
             num_antennas=args.num_antennas,
             patch_size=args.patch_size,
             stretch=args.stretch,
-            save_flags=not args.no_save
+            save_flags=not args.no_save,
         )
     else:
         print(f"\nMode: Single-pass flagging")
@@ -209,12 +192,12 @@ def predict_command(args):
             patch_size=args.patch_size,
             stretch=args.stretch,
             apply_existing_flags=args.apply_existing,
-            save_flags=not args.no_save
+            save_flags=not args.no_save,
         )
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Prediction Complete!")
-    print("="*60)
+    print("=" * 60)
     print(f"Total flagged: {flags.sum()/flags.size*100:.2f}%")
     if not args.no_save:
         print(f"Flags saved to: {args.input}")
@@ -223,7 +206,7 @@ def predict_command(args):
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
-        description='SAM-RFI: SAM2 training and prediction for Radio Frequency Interference detection',
+        description="SAM-RFI: SAM2 training and prediction for Radio Frequency Interference detection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -244,54 +227,85 @@ Examples:
 
   # Predict (iterative - 3 passes)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms --iterations 3
-        """
+        """,
     )
 
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Generate data command
-    generate_parser = subparsers.add_parser('generate-data', help='Generate training dataset from MS or synthetic')
-    generate_parser.add_argument('--source', required=True, choices=['synthetic', 'ms'],
-                                 help='Data source: synthetic or ms')
-    generate_parser.add_argument('--config', required=True, help='Path to YAML configuration file')
-    generate_parser.add_argument('--output', required=True, help='Output directory for generated dataset')
+    generate_parser = subparsers.add_parser(
+        "generate-data", help="Generate training dataset from MS or synthetic"
+    )
+    generate_parser.add_argument(
+        "--source", required=True, choices=["synthetic", "ms"], help="Data source: synthetic or ms"
+    )
+    generate_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
+    generate_parser.add_argument(
+        "--output", required=True, help="Output directory for generated dataset"
+    )
 
     # Train command
-    train_parser = subparsers.add_parser('train', help='Train SAM2 model on RFI data')
-    train_parser.add_argument('--config', required=True, help='Path to YAML configuration file')
-    train_parser.add_argument('--dataset', required=True, help='Path to pre-generated HuggingFace dataset')
-    train_parser.add_argument('--validation-dataset', help='Path to validation dataset (optional)')
-    train_parser.add_argument('--device', choices=['cuda', 'cpu'], help='Device to use (overrides config)')
-    train_parser.add_argument('--output-dir', help='Output directory (overrides config)')
+    train_parser = subparsers.add_parser("train", help="Train SAM2 model on RFI data")
+    train_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
+    train_parser.add_argument(
+        "--dataset", required=True, help="Path to pre-generated HuggingFace dataset"
+    )
+    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (optional)")
+    train_parser.add_argument(
+        "--device", choices=["cuda", "cpu"], help="Device to use (overrides config)"
+    )
+    train_parser.add_argument("--output-dir", help="Output directory (overrides config)")
 
     # Create config command
-    create_parser = subparsers.add_parser('create-config', help='Create default configuration file')
-    create_parser.add_argument('--output', '-o', help='Output path for config file (default: sam2_config.yaml)')
+    create_parser = subparsers.add_parser("create-config", help="Create default configuration file")
+    create_parser.add_argument(
+        "--output", "-o", help="Output path for config file (default: sam2_config.yaml)"
+    )
 
     # Validate config command
-    validate_parser = subparsers.add_parser('validate-config', help='Validate configuration file')
-    validate_parser.add_argument('--config', required=True, help='Path to YAML configuration file')
+    validate_parser = subparsers.add_parser("validate-config", help="Validate configuration file")
+    validate_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
 
     # Predict command
-    predict_parser = subparsers.add_parser('predict', help='Apply trained model to flag RFI')
-    predict_parser.add_argument('--model', required=True, help='Path to trained model (.pth file)')
-    predict_parser.add_argument('--input', required=True, help='Path to input measurement set')
-    predict_parser.add_argument('--checkpoint', default='large',
-                                choices=['tiny', 'small', 'base_plus', 'large'],
-                                help='SAM2 checkpoint size (default: large)')
-    predict_parser.add_argument('--iterations', type=int, default=None,
-                                help='Number of iterative flagging passes (default: 1 = single pass)')
-    predict_parser.add_argument('--num-antennas', type=int, help='Number of antennas to load (default: all)')
-    predict_parser.add_argument('--patch-size', type=int, default=128, help='Patch size (default: 128)')
-    predict_parser.add_argument('--stretch', default='SQRT', choices=['SQRT', 'LOG10'],
-                                help='Stretch function (default: SQRT)')
-    predict_parser.add_argument('--device', default='cuda', choices=['cuda', 'cpu'],
-                                help='Compute device (default: cuda)')
-    predict_parser.add_argument('--batch-size', type=int, default=4, help='Batch size (default: 4)')
-    predict_parser.add_argument('--apply-existing', action='store_true',
-                                help='Apply existing MS flags before prediction (single-pass only)')
-    predict_parser.add_argument('--no-save', action='store_true',
-                                help='Do not save flags to MS (prediction only)')
+    predict_parser = subparsers.add_parser("predict", help="Apply trained model to flag RFI")
+    predict_parser.add_argument("--model", required=True, help="Path to trained model (.pth file)")
+    predict_parser.add_argument("--input", required=True, help="Path to input measurement set")
+    predict_parser.add_argument(
+        "--checkpoint",
+        default="large",
+        choices=["tiny", "small", "base_plus", "large"],
+        help="SAM2 checkpoint size (default: large)",
+    )
+    predict_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=None,
+        help="Number of iterative flagging passes (default: 1 = single pass)",
+    )
+    predict_parser.add_argument(
+        "--num-antennas", type=int, help="Number of antennas to load (default: all)"
+    )
+    predict_parser.add_argument(
+        "--patch-size", type=int, default=128, help="Patch size (default: 128)"
+    )
+    predict_parser.add_argument(
+        "--stretch",
+        default="SQRT",
+        choices=["SQRT", "LOG10"],
+        help="Stretch function (default: SQRT)",
+    )
+    predict_parser.add_argument(
+        "--device", default="cuda", choices=["cuda", "cpu"], help="Compute device (default: cuda)"
+    )
+    predict_parser.add_argument("--batch-size", type=int, default=4, help="Batch size (default: 4)")
+    predict_parser.add_argument(
+        "--apply-existing",
+        action="store_true",
+        help="Apply existing MS flags before prediction (single-pass only)",
+    )
+    predict_parser.add_argument(
+        "--no-save", action="store_true", help="Do not save flags to MS (prediction only)"
+    )
 
     # Parse arguments
     args = parser.parse_args()
@@ -302,26 +316,27 @@ Examples:
 
     # Execute command
     try:
-        if args.command == 'generate-data':
+        if args.command == "generate-data":
             generate_data_command(args)
             return 0
-        elif args.command == 'train':
+        elif args.command == "train":
             train_command(args)
             return 0
-        elif args.command == 'create-config':
+        elif args.command == "create-config":
             create_config_command(args)
             return 0
-        elif args.command == 'validate-config':
+        elif args.command == "validate-config":
             return validate_config_command(args)
-        elif args.command == 'predict':
+        elif args.command == "predict":
             predict_command(args)
             return 0
     except Exception as e:
         print(f"\n✗ Error: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

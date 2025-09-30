@@ -1,5 +1,15 @@
 from ._version import __version__
-__all__ = ['radiorfi', 'rfimodels', 'syntheticrfi', 'rfidataset', 'rfitraining', 'metricscalculator', 'plotter', 'utilities']
+
+__all__ = [
+    "radiorfi",
+    "rfimodels",
+    "syntheticrfi",
+    "rfidataset",
+    "rfitraining",
+    "metricscalculator",
+    "plotter",
+    "utilities",
+]
 
 
 from .radiorfi import RadioRFI

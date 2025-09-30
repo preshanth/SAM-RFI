@@ -29,7 +29,7 @@ class SAM2Trainer:
     Simple, clean implementation that mirrors working SAM1 code.
     """
 
-    def __init__(self, rfidataset_instance, device='cuda', dir_path=None):
+    def __init__(self, rfidataset_instance, device="cuda", dir_path=None):
         """
         Initialize SAM2 trainer
 
@@ -43,13 +43,13 @@ class SAM2Trainer:
 
         # Setup output directory
         if dir_path:
-            if dir_path.endswith('/'):
+            if dir_path.endswith("/"):
                 dir_path = dir_path[:-1]
             current_directory = str(dir_path)
         else:
             current_directory = os.getcwd()
 
-        new_directory = os.path.join(current_directory, 'samrfi_data')
+        new_directory = os.path.join(current_directory, "samrfi_data")
         if not os.path.exists(new_directory):
             os.makedirs(new_directory)
 
@@ -57,9 +57,17 @@ class SAM2Trainer:
         self.ave_meanloss = []
         self.val_losses = None
 
-    def train(self, num_epochs=3, batch_size=4, sam_checkpoint='large',
-              learning_rate=1e-5, plot=True, model_path=None, trained_model_path=None,
-              validation_dataset=None):
+    def train(
+        self,
+        num_epochs=3,
+        batch_size=4,
+        sam_checkpoint="large",
+        learning_rate=1e-5,
+        plot=True,
+        model_path=None,
+        trained_model_path=None,
+        validation_dataset=None,
+    ):
         """
         Train SAM2 model on RFI dataset
 
@@ -76,14 +84,16 @@ class SAM2Trainer:
 
         # Map checkpoint names to HuggingFace model IDs
         checkpoint_map = {
-            'tiny': 'facebook/sam2-hiera-tiny',
-            'small': 'facebook/sam2-hiera-small',
-            'base_plus': 'facebook/sam2-hiera-base-plus',
-            'large': 'facebook/sam2-hiera-large'
+            "tiny": "facebook/sam2-hiera-tiny",
+            "small": "facebook/sam2-hiera-small",
+            "base_plus": "facebook/sam2-hiera-base-plus",
+            "large": "facebook/sam2-hiera-large",
         }
 
         if sam_checkpoint not in checkpoint_map:
-            raise ValueError(f"Invalid checkpoint '{sam_checkpoint}'. Use: {list(checkpoint_map.keys())}")
+            raise ValueError(
+                f"Invalid checkpoint '{sam_checkpoint}'. Use: {list(checkpoint_map.keys())}"
+            )
 
         model_name = checkpoint_map[sam_checkpoint]
 
@@ -116,7 +126,7 @@ class SAM2Trainer:
 
         # Setup optimizer and loss
         optimizer = Adam(model.mask_decoder.parameters(), lr=learning_rate, weight_decay=0)
-        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction="mean")
 
         # Move model to device
         model.to(self.device)
@@ -142,7 +152,7 @@ class SAM2Trainer:
                 outputs = model(
                     pixel_values=batch["pixel_values"].to(self.device),
                     input_boxes=batch["input_boxes"].to(self.device),
-                    multimask_output=False
+                    multimask_output=False,
                 )
 
                 # Get predictions and ground truth
@@ -158,8 +168,8 @@ class SAM2Trainer:
                 ground_truth_masks_resized = interpolate(
                     ground_truth_masks,
                     size=predicted_mask_size,
-                    mode='bilinear',
-                    align_corners=False
+                    mode="bilinear",
+                    align_corners=False,
                 )
 
                 # Compute loss
@@ -187,7 +197,7 @@ class SAM2Trainer:
                         outputs = model(
                             pixel_values=batch["pixel_values"].to(self.device),
                             input_boxes=batch["input_boxes"].to(self.device),
-                            multimask_output=False
+                            multimask_output=False,
                         )
 
                         predicted_masks = outputs.pred_masks.squeeze(1)
@@ -200,8 +210,8 @@ class SAM2Trainer:
                         ground_truth_masks_resized = interpolate(
                             ground_truth_masks,
                             size=predicted_mask_size,
-                            mode='bilinear',
-                            align_corners=False
+                            mode="bilinear",
+                            align_corners=False,
                         )
 
                         loss = seg_loss(predicted_masks, ground_truth_masks_resized)
@@ -211,9 +221,9 @@ class SAM2Trainer:
                 val_losses.append(epoch_val_loss)
 
             # Log epoch statistics
-            log_msg = f'EPOCH: {epoch+1}/{num_epochs} | Train loss: {epoch_mean_train_loss:.6f}'
+            log_msg = f"EPOCH: {epoch+1}/{num_epochs} | Train loss: {epoch_mean_train_loss:.6f}"
             if epoch_val_loss is not None:
-                log_msg += f' | Val loss: {epoch_val_loss:.6f}'
+                log_msg += f" | Val loss: {epoch_val_loss:.6f}"
             print(log_msg)
 
         self.ave_meanloss = train_losses
@@ -230,7 +240,7 @@ class SAM2Trainer:
 
         # Return losses
         if self.val_losses:
-            return {'train': train_losses, 'val': val_losses}
+            return {"train": train_losses, "val": val_losses}
         else:
             return train_losses
 
@@ -251,7 +261,7 @@ class SAM2Trainer:
             f"epochs{num_epochs}_{timestamp}.pth"
         )
 
-        method_dir = os.path.join(self.directory, 'models')
+        method_dir = os.path.join(self.directory, "models")
         if not os.path.exists(method_dir):
             os.makedirs(method_dir)
 
@@ -285,12 +295,7 @@ class SAM2Trainer:
         # Plot training loss
         epochs = range(1, len(self.ave_meanloss) + 1)
         ax.plot(
-            epochs,
-            self.ave_meanloss,
-            label=f"Training Loss",
-            color="blue",
-            linewidth=2,
-            marker='o'
+            epochs, self.ave_meanloss, label=f"Training Loss", color="blue", linewidth=2, marker="o"
         )
 
         # Plot validation loss if available
@@ -301,7 +306,7 @@ class SAM2Trainer:
                 label=f"Validation Loss",
                 color="red",
                 linewidth=2,
-                marker='s'
+                marker="s",
             )
 
         ax.set_xlabel("Epoch", fontsize=12)
@@ -318,7 +323,7 @@ class SAM2Trainer:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        method_dir = os.path.join(self.directory, 'models')
+        method_dir = os.path.join(self.directory, "models")
         os.makedirs(method_dir, exist_ok=True)  # Ensure directory exists
 
         filename = (

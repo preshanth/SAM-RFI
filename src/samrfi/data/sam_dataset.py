@@ -55,11 +55,7 @@ class SAMDataset(TorchDataset):
         bbox = self._get_bounding_box(ground_truth_mask)
 
         # Process image and prompt
-        inputs = self.processor(
-            image,
-            input_boxes=[[bbox]],
-            return_tensors="pt"
-        )
+        inputs = self.processor(image, input_boxes=[[bbox]], return_tensors="pt")
 
         # Remove batch dimension added by processor
         inputs = {k: v.squeeze(0) for k, v in inputs.items()}
@@ -85,7 +81,7 @@ class SAMDataset(TorchDataset):
         if len(x_indices) == 0 or len(y_indices) == 0:
             # Empty mask - return center box
             H, W = mask.shape
-            return [W//4, H//4, 3*W//4, 3*H//4]
+            return [W // 4, H // 4, 3 * W // 4, 3 * H // 4]
 
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)

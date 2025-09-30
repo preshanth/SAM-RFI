@@ -42,12 +42,12 @@ class MSDataGenerator:
         Returns:
             Path to saved dataset
         """
-        print("="*60)
+        print("=" * 60)
         print("MS Data Generation")
-        print("="*60)
+        print("=" * 60)
 
         # Validate MS path
-        ms_path = self.config.ms.get('path')
+        ms_path = self.config.ms.get("path")
         if not ms_path:
             raise ValueError("MS path not specified in config")
 
@@ -61,8 +61,8 @@ class MSDataGenerator:
         print("\n[1/4] Loading measurement set...")
         loader = MSLoader(ms_path)
 
-        num_antennas = self.config.ms.get('num_antennas', None)
-        data_mode = self.config.ms.get('data_mode', 'DATA')
+        num_antennas = self.config.ms.get("num_antennas", None)
+        data_mode = self.config.ms.get("data_mode", "DATA")
 
         loader.load(num_antennas=num_antennas, mode=data_mode)
 
@@ -71,7 +71,7 @@ class MSDataGenerator:
 
         # Load flags if using custom flags
         proc_config = self.config.processing
-        use_custom_flags = proc_config.get('custom_flag', True)
+        use_custom_flags = proc_config.get("custom_flag", True)
         flags = None
 
         if use_custom_flags:
@@ -83,17 +83,19 @@ class MSDataGenerator:
         preprocessor = Preprocessor(loader.magnitude, flags=flags)
 
         dataset = preprocessor.create_dataset(
-            patch_size=proc_config.get('patch_size', 128),
-            stretch=proc_config.get('stretch', 'SQRT'),
-            flag_sigma=proc_config.get('flag_sigma', 5),
+            patch_size=proc_config.get("patch_size", 128),
+            stretch=proc_config.get("stretch", "SQRT"),
+            flag_sigma=proc_config.get("flag_sigma", 5),
             use_custom_flags=use_custom_flags,
-            num_patches=proc_config.get('num_patches', None),
-            apply_stretching=proc_config.get('apply_stretching', True)
+            num_patches=proc_config.get("num_patches", None),
+            apply_stretching=proc_config.get("apply_stretching", True),
         )
 
         num_patches = len(dataset)
         print(f"  Generated {num_patches} patches")
-        print(f"  Patch size: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)}")
+        print(
+            f"  Patch size: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)}"
+        )
         print(f"  Stretch: {proc_config.get('stretch', 'SQRT')}")
         print(f"  Flag sigma: {proc_config.get('flag_sigma', 5)}")
 
@@ -107,22 +109,20 @@ class MSDataGenerator:
 
         # Save metadata
         metadata = {
-            'source': 'measurement_set',
-            'ms_path': str(ms_path),
-            'num_antennas': self.config.ms.get('num_antennas'),
-            'data_mode': self.config.ms.get('data_mode', 'DATA'),
-            'num_patches': num_patches,
-            'patch_size': proc_config.get('patch_size', 128),
-            'stretch': proc_config.get('stretch', 'SQRT'),
-            'flag_sigma': proc_config.get('flag_sigma', 5),
-            'custom_flag': proc_config.get('custom_flag', True),
-            'augmentation': {
-                'rotations': 'four_way'
-            }
+            "source": "measurement_set",
+            "ms_path": str(ms_path),
+            "num_antennas": self.config.ms.get("num_antennas"),
+            "data_mode": self.config.ms.get("data_mode", "DATA"),
+            "num_patches": num_patches,
+            "patch_size": proc_config.get("patch_size", 128),
+            "stretch": proc_config.get("stretch", "SQRT"),
+            "flag_sigma": proc_config.get("flag_sigma", 5),
+            "custom_flag": proc_config.get("custom_flag", True),
+            "augmentation": {"rotations": "four_way"},
         }
 
-        metadata_path = output_dir / 'metadata.json'
-        with open(metadata_path, 'w') as f:
+        metadata_path = output_dir / "metadata.json"
+        with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
         print(f"  Dataset saved to: {output_dir}")
@@ -131,12 +131,16 @@ class MSDataGenerator:
         # Statistics
         print("\nDataset Statistics:")
         print(f"  Total patches: {num_patches}")
-        print(f"  Image shape: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)}x3 (RGB)")
-        print(f"  Mask shape: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)} (binary)")
+        print(
+            f"  Image shape: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)}x3 (RGB)"
+        )
+        print(
+            f"  Mask shape: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)} (binary)"
+        )
         print(f"  Format: HuggingFace Dataset")
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("✓ Data generation complete!")
-        print("="*60)
+        print("=" * 60)
 
         return str(output_dir)

@@ -61,11 +61,11 @@ class Preprocessor:
     def create_dataset(
         self,
         patch_size=128,
-        stretch='SQRT',
+        stretch="SQRT",
         flag_sigma=5,
         use_custom_flags=True,
         num_patches=None,
-        apply_stretching=True
+        apply_stretching=True,
     ):
         """
         Create HuggingFace Dataset from waterfall data.
@@ -241,9 +241,9 @@ class Preprocessor:
         Returns:
             Stretched patches
         """
-        if stretch == 'SQRT':
+        if stretch == "SQRT":
             stretch_func = np.sqrt
-        elif stretch == 'LOG10':
+        elif stretch == "LOG10":
             stretch_func = np.log10
         else:
             raise ValueError(f"Invalid stretch '{stretch}'. Use 'SQRT' or 'LOG10'")
@@ -257,7 +257,7 @@ class Preprocessor:
             # Handle infinities
             finite_data = stretched_patch[np.isfinite(stretched_patch)]
             if len(finite_data) > 0:
-                mad = stats.median_abs_deviation(finite_data, nan_policy='omit')
+                mad = stats.median_abs_deviation(finite_data, nan_policy="omit")
                 stretched_patch[np.isinf(stretched_patch)] = mad
             else:
                 stretched_patch[np.isinf(stretched_patch)] = 0
@@ -280,7 +280,7 @@ class Preprocessor:
         flags = []
 
         for patch in patches:
-            mad = stats.median_abs_deviation(patch, axis=None, nan_policy='omit')
+            mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
             median = np.nanmedian(patch)
 
             upper_thresh = median + (mad * sigma)

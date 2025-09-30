@@ -33,14 +33,14 @@ class MSLoader:
         tb = table()
 
         # Number of antennas
-        tb.open(self.ms_path + '/ANTENNA')
+        tb.open(self.ms_path + "/ANTENNA")
         self.num_antennas = tb.nrows()
         tb.close()
 
         # Number of spectral windows and channels
-        tb.open(self.ms_path + '/SPECTRAL_WINDOW')
+        tb.open(self.ms_path + "/SPECTRAL_WINDOW")
         self.num_spw = tb.nrows()
-        self.channels_per_spw = tb.getcol('NUM_CHAN')
+        self.channels_per_spw = tb.getcol("NUM_CHAN")
         tb.close()
 
         # Main table
@@ -48,8 +48,8 @@ class MSLoader:
         self.tb.open(ms_path, nomodify=False)
 
         # Get number of time samples
-        subtable = self.tb.query(f'DATA_DESC_ID==0 && ANTENNA1==0 && ANTENNA2==1')
-        self.num_times = len(subtable.getcol('TIME'))
+        subtable = self.tb.query(f"DATA_DESC_ID==0 && ANTENNA1==0 && ANTENNA2==1")
+        self.num_times = len(subtable.getcol("TIME"))
         subtable.close()
 
         # Storage for loaded data
@@ -58,7 +58,7 @@ class MSLoader:
         self.antenna_baseline_map = None
         self.spw_list = None
 
-    def load(self, num_antennas=None, mode='DATA'):
+    def load(self, num_antennas=None, mode="DATA"):
         """
         Load complex visibilities from MS.
 
@@ -89,23 +89,20 @@ class MSLoader:
         data_list = []
         baseline_map = []
 
-        print(f'\nLoading {mode} from {self.ms_path}...')
-        print(f'  Antennas: {num_antennas}/{self.num_antennas}')
-        print(f'  SPWs: {num_spw} ({num_channels} channels each = {total_channels} total)')
-        print(f'  Times: {self.num_times}')
+        print(f"\nLoading {mode} from {self.ms_path}...")
+        print(f"  Antennas: {num_antennas}/{self.num_antennas}")
+        print(f"  SPWs: {num_spw} ({num_channels} channels each = {total_channels} total)")
+        print(f"  Times: {self.num_times}")
 
-        for i in tqdm(range(num_antennas), desc='Antenna 1'):
+        for i in tqdm(range(num_antennas), desc="Antenna 1"):
             for j in range(i + 1, self.num_antennas):
                 # Allocate array for this baseline
-                baseline_data = np.zeros(
-                    [4, total_channels, self.num_times],
-                    dtype='complex128'
-                )
+                baseline_data = np.zeros([4, total_channels, self.num_times], dtype="complex128")
 
                 # Load all SPWs for this baseline
                 for spw_idx, spw in enumerate(same_spw_list):
                     subtable = self.tb.query(
-                        f'DATA_DESC_ID=={spw} && ANTENNA1=={i} && ANTENNA2=={j}'
+                        f"DATA_DESC_ID=={spw} && ANTENNA1=={i} && ANTENNA2=={j}"
                     )
 
                     # Extract data for this SPW
@@ -127,7 +124,7 @@ class MSLoader:
         self.spw_list = same_spw_list
         self.channels_per_spw_list = same_channels_list
 
-        print(f'  Loaded shape: {self.data.shape}')
+        print(f"  Loaded shape: {self.data.shape}")
 
         return self.data
 
@@ -141,25 +138,22 @@ class MSLoader:
         if self.antenna_baseline_map is None:
             raise ValueError("Must call load() first to establish baseline map")
 
-        print('\nLoading flags from MS...')
+        print("\nLoading flags from MS...")
 
         flags_list = []
         num_channels = self.channels_per_spw_list[0]
         num_spw = len(self.spw_list)
         total_channels = num_spw * num_channels
 
-        for ant1, ant2 in tqdm(self.antenna_baseline_map, desc='Baselines'):
-            baseline_flags = np.zeros(
-                [4, total_channels, self.num_times],
-                dtype=bool
-            )
+        for ant1, ant2 in tqdm(self.antenna_baseline_map, desc="Baselines"):
+            baseline_flags = np.zeros([4, total_channels, self.num_times], dtype=bool)
 
             for spw_idx, spw in enumerate(self.spw_list):
                 subtable = self.tb.query(
-                    f'DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}'
+                    f"DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}"
                 )
 
-                spw_flags = subtable.getcol('FLAG')
+                spw_flags = subtable.getcol("FLAG")
 
                 start_ch = spw_idx * num_channels
                 end_ch = (spw_idx + 1) * num_channels
@@ -170,7 +164,7 @@ class MSLoader:
             flags_list.append(baseline_flags)
 
         self.flags = np.stack(flags_list)
-        print(f'  Loaded flags shape: {self.flags.shape}')
+        print(f"  Loaded flags shape: {self.flags.shape}")
 
         return self.flags
 
@@ -184,11 +178,13 @@ class MSLoader:
         if self.antenna_baseline_map is None:
             raise ValueError("Must call load() first to establish baseline map")
 
-        print('\nSaving flags to MS...')
+        print("\nSaving flags to MS...")
 
         num_channels = self.channels_per_spw_list[0]
 
-        for baseline_idx, (ant1, ant2) in enumerate(tqdm(self.antenna_baseline_map, desc='Baselines')):
+        for baseline_idx, (ant1, ant2) in enumerate(
+            tqdm(self.antenna_baseline_map, desc="Baselines")
+        ):
             baseline_flags = flags[baseline_idx]
 
             for spw_idx, spw in enumerate(self.spw_list):
@@ -199,16 +195,16 @@ class MSLoader:
 
                 # Write to MS
                 subtable = self.tb.query(
-                    f'DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}'
+                    f"DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}"
                 )
-                subtable.putcol('FLAG', spw_flags)
+                subtable.putcol("FLAG", spw_flags)
                 subtable.close()
 
-        print('  Flags saved successfully')
+        print("  Flags saved successfully")
 
     def close(self):
         """Close the measurement set."""
-        if hasattr(self, 'tb'):
+        if hasattr(self, "tb"):
             self.tb.close()
 
     def __del__(self):

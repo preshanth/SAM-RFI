@@ -6,4 +6,4 @@ from .ms_loader import MSLoader
 from .preprocessor import Preprocessor
 from .sam_dataset import SAMDataset
 
-__all__ = ['MSLoader', 'Preprocessor', 'SAMDataset']
+__all__ = ["MSLoader", "Preprocessor", "SAMDataset"]

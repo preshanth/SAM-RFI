@@ -29,13 +29,7 @@ class RFIPredictor:
         >>> flags = predictor.predict_iterative('observation.ms', num_iterations=3)
     """
 
-    def __init__(
-        self,
-        model_path,
-        sam_checkpoint='large',
-        device='cuda',
-        batch_size=4
-    ):
+    def __init__(self, model_path, sam_checkpoint="large", device="cuda", batch_size=4):
         """
         Initialize predictor.
 
@@ -51,13 +45,13 @@ class RFIPredictor:
 
         # Map checkpoint names to HuggingFace model names
         checkpoint_map = {
-            'tiny': 'facebook/sam2-hiera-tiny',
-            'small': 'facebook/sam2-hiera-small',
-            'base_plus': 'facebook/sam2-hiera-base-plus',
-            'large': 'facebook/sam2-hiera-large'
+            "tiny": "facebook/sam2-hiera-tiny",
+            "small": "facebook/sam2-hiera-small",
+            "base_plus": "facebook/sam2-hiera-base-plus",
+            "large": "facebook/sam2-hiera-large",
         }
 
-        model_name = checkpoint_map.get(sam_checkpoint, checkpoint_map['large'])
+        model_name = checkpoint_map.get(sam_checkpoint, checkpoint_map["large"])
 
         print(f"Loading SAM2 model: {model_name}")
 
@@ -81,9 +75,9 @@ class RFIPredictor:
         ms_path,
         num_antennas=None,
         patch_size=128,
-        stretch='SQRT',
+        stretch="SQRT",
         apply_existing_flags=False,
-        save_flags=True
+        save_flags=True,
     ):
         """
         Single-pass prediction on measurement set.
@@ -106,7 +100,7 @@ class RFIPredictor:
         # Load MS
         print("\n[1/4] Loading measurement set...")
         loader = MSLoader(ms_path)
-        loader.load(num_antennas=num_antennas, mode='DATA')
+        loader.load(num_antennas=num_antennas, mode="DATA")
 
         data_shape = loader.data.shape
         print(f"  Data shape: {data_shape}")
@@ -129,7 +123,7 @@ class RFIPredictor:
             stretch=stretch,
             flag_sigma=5,
             use_custom_flags=False,
-            apply_stretching=True
+            apply_stretching=True,
         )
 
         # Predict
@@ -138,11 +132,7 @@ class RFIPredictor:
 
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
-        predicted_flags = self._reconstruct_flags(
-            predicted_patches,
-            data_shape,
-            patch_size
-        )
+        predicted_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
 
         flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
         print(f"  Flagged: {flag_percent:.2f}% of data")
@@ -165,8 +155,8 @@ class RFIPredictor:
         num_iterations=3,
         num_antennas=None,
         patch_size=128,
-        stretch='SQRT',
-        save_flags=True
+        stretch="SQRT",
+        save_flags=True,
     ):
         """
         Iterative prediction with progressive cleaning.
@@ -194,7 +184,7 @@ class RFIPredictor:
         # Load MS once
         print("\n[Setup] Loading measurement set...")
         loader = MSLoader(ms_path)
-        loader.load(num_antennas=num_antennas, mode='DATA')
+        loader.load(num_antennas=num_antennas, mode="DATA")
 
         data_shape = loader.data.shape
         print(f"  Data shape: {data_shape}")
@@ -211,7 +201,9 @@ class RFIPredictor:
 
             # Apply cumulative flags to data
             if iteration > 0:
-                print(f"\n[1/4] Masking {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}% already flagged...")
+                print(
+                    f"\n[1/4] Masking {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}% already flagged..."
+                )
             else:
                 print("\n[1/4] First pass - no masking")
 
@@ -225,7 +217,7 @@ class RFIPredictor:
                 stretch=stretch,
                 flag_sigma=5,
                 use_custom_flags=False,
-                apply_stretching=True
+                apply_stretching=True,
             )
 
             # Predict
@@ -234,11 +226,7 @@ class RFIPredictor:
 
             # Reconstruct flags
             print("\n[4/4] Reconstructing flags...")
-            iteration_flags = self._reconstruct_flags(
-                predicted_patches,
-                data_shape,
-                patch_size
-            )
+            iteration_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
 
             # Combine with cumulative flags
             new_flags = iteration_flags & ~cumulative_flags  # Only count new flags
@@ -276,25 +264,19 @@ class RFIPredictor:
         """
         # Create SAM dataset wrapper
         sam_dataset = SAMDataset(dataset, self.processor)
-        dataloader = DataLoader(
-            sam_dataset,
-            batch_size=self.batch_size,
-            shuffle=False
-        )
+        dataloader = DataLoader(sam_dataset, batch_size=self.batch_size, shuffle=False)
 
         predicted_masks = []
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Predicting patches"):
                 # Move to device
-                pixel_values = batch['pixel_values'].to(self.device)
-                input_boxes = batch['input_boxes'].to(self.device)
+                pixel_values = batch["pixel_values"].to(self.device)
+                input_boxes = batch["input_boxes"].to(self.device)
 
                 # Forward pass
                 outputs = self.model(
-                    pixel_values=pixel_values,
-                    input_boxes=input_boxes,
-                    multimask_output=False
+                    pixel_values=pixel_values, input_boxes=input_boxes, multimask_output=False
                 )
 
                 # Get masks
@@ -367,6 +349,8 @@ class RFIPredictor:
                             t_start = j * patch_size
                             t_end = (j + 1) * patch_size
 
-                            full_flags[baseline, pol, ch_start:ch_end, t_start:t_end] |= reconstructed
+                            full_flags[
+                                baseline, pol, ch_start:ch_end, t_start:t_end
+                            ] |= reconstructed
 
         return full_flags

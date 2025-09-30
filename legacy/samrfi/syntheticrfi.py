@@ -4,14 +4,23 @@ import pandas as pd
 from .radiorfi import RadioRFI
 from .metricscalculator import SyntheticRFIMetricsCalculator
 
+
 class SyntheticRFI(RadioRFI):
 
-    def __init__(self, points_freq=None, points_time=None, min_freq=None, max_freq=None,
-                    max_time=None, min_time=None, dir_path=False):
-        
+    def __init__(
+        self,
+        points_freq=None,
+        points_time=None,
+        min_freq=None,
+        max_freq=None,
+        max_time=None,
+        min_time=None,
+        dir_path=False,
+    ):
+
         super().__init__(dir_path)
-        
-        self.module_type = 'synthetic'
+
+        self.module_type = "synthetic"
 
         self.synthetic_metrics = SyntheticRFIMetricsCalculator(self)
 
@@ -35,7 +44,19 @@ class SyntheticRFI(RadioRFI):
         self.frequencies = np.linspace(min_freq, max_freq, points_freq)
         self.times = np.linspace(min_time, max_time, points_time)
 
-        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'center_time', 'timewidth', 'duty_cycle', 'time_period', 'time_offset'])
+        self.rfi_table = pd.DataFrame(
+            columns=[
+                "rfi_type",
+                "amplitude",
+                "center_freq",
+                "bandwidth",
+                "center_time",
+                "timewidth",
+                "duty_cycle",
+                "time_period",
+                "time_offset",
+            ]
+        )
 
     def baseline_profile(self):
         """
@@ -59,24 +80,22 @@ class SyntheticRFI(RadioRFI):
         Returns:
             numpy.ndarray: An array representing the RFI signal.
         """
-        return amplitude * np.exp(-((x - center) ** 2) / (2 * (width ** 2)))
+        return amplitude * np.exp(-((x - center) ** 2) / (2 * (width**2)))
 
-    
-    def square_function(self, x, amplitude, center ,width):
-        return amplitude * np.where(np.abs(x - center) <= width/2, 1, 0)
+    def square_function(self, x, amplitude, center, width):
+        return amplitude * np.where(np.abs(x - center) <= width / 2, 1, 0)
 
     #####
     # Adding functions to data
     #####
 
     def add_gaussian_rfi(self, data, x, amplitude, center, width):
-        return data+self.gaussian_function(x, amplitude, center, width)
-
+        return data + self.gaussian_function(x, amplitude, center, width)
 
     def add_square_rfi(self, data, x, amplitude, center, width):
-        return data+self.square_function(x, amplitude, center, width)
+        return data + self.square_function(x, amplitude, center, width)
 
-    def add_gaussian_rfi_spectrograph(self, amplitude, center, width, rfi_axis='FREQ', table=False):
+    def add_gaussian_rfi_spectrograph(self, amplitude, center, width, rfi_axis="FREQ", table=False):
         """
         Add Gaussian RFI to the spectrograph along the specified axis.
 
@@ -90,12 +109,52 @@ class SyntheticRFI(RadioRFI):
         Returns:
             numpy.ndarray: The spectrograph with added Gaussian RFI.
         """
-        if rfi_axis == 'FREQ':
-            persistent_rfi_spec = np.apply_along_axis(self.add_gaussian_rfi, axis=0, arr=self.blank_spectrograph, x=self.frequencies, amplitude=amplitude, center=center, width=width)
-            new_row = pd.DataFrame({'rfi_type': ['gauss_persistent_freq'], 'amplitude': [amplitude], 'center_freq': [center], 'bandwidth': [width], 'center_time': [np.nan], 'timewidth': [np.nan], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
-        elif rfi_axis == 'TIME':
-            persistent_rfi_spec = np.apply_along_axis(self.add_gaussian_rfi, axis=1, arr=self.blank_spectrograph, x=self.times, amplitude=amplitude, center=center, width=width)
-            new_row = pd.DataFrame({'rfi_type': ['gauss_persistent_time'], 'amplitude': [amplitude], 'center_freq': [np.nan], 'bandwidth': [np.nan], 'center_time': [center], 'timewidth': [width], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
+        if rfi_axis == "FREQ":
+            persistent_rfi_spec = np.apply_along_axis(
+                self.add_gaussian_rfi,
+                axis=0,
+                arr=self.blank_spectrograph,
+                x=self.frequencies,
+                amplitude=amplitude,
+                center=center,
+                width=width,
+            )
+            new_row = pd.DataFrame(
+                {
+                    "rfi_type": ["gauss_persistent_freq"],
+                    "amplitude": [amplitude],
+                    "center_freq": [center],
+                    "bandwidth": [width],
+                    "center_time": [np.nan],
+                    "timewidth": [np.nan],
+                    "duty_cycle": [np.nan],
+                    "time_period": [np.nan],
+                    "time_offset": [np.nan],
+                }
+            )
+        elif rfi_axis == "TIME":
+            persistent_rfi_spec = np.apply_along_axis(
+                self.add_gaussian_rfi,
+                axis=1,
+                arr=self.blank_spectrograph,
+                x=self.times,
+                amplitude=amplitude,
+                center=center,
+                width=width,
+            )
+            new_row = pd.DataFrame(
+                {
+                    "rfi_type": ["gauss_persistent_time"],
+                    "amplitude": [amplitude],
+                    "center_freq": [np.nan],
+                    "bandwidth": [np.nan],
+                    "center_time": [center],
+                    "timewidth": [width],
+                    "duty_cycle": [np.nan],
+                    "time_period": [np.nan],
+                    "time_offset": [np.nan],
+                }
+            )
         else:
             raise ValueError("Invalid rfi_axis value. Use 'FREQ' or 'TIME'.")
 
@@ -104,7 +163,7 @@ class SyntheticRFI(RadioRFI):
 
         return persistent_rfi_spec
 
-    def add_square_rfi_spectrograph(self, amplitude, center, width, rfi_axis='FREQ', table=False):
+    def add_square_rfi_spectrograph(self, amplitude, center, width, rfi_axis="FREQ", table=False):
         """
         Add Square RFI to the spectrograph along the specified axis.
 
@@ -118,12 +177,52 @@ class SyntheticRFI(RadioRFI):
         Returns:
             numpy.ndarray: The spectrograph with added Square RFI.
         """
-        if rfi_axis == 'FREQ':
-            persistent_rfi_spec = np.apply_along_axis(self.add_square_rfi, axis=0, arr=self.blank_spectrograph, x=self.frequencies, amplitude=amplitude, center=center, width=width)
-            new_row = pd.DataFrame({'rfi_type': ['square_persistent_freq'], 'amplitude': [amplitude], 'center_freq': [center], 'bandwidth': [width], 'center_time': [np.nan], 'timewidth': [np.nan], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
-        elif rfi_axis == 'TIME':
-            persistent_rfi_spec = np.apply_along_axis(self.add_square_rfi, axis=1, arr=self.blank_spectrograph, x=self.times, amplitude=amplitude, center=center, width=width)
-            new_row = pd.DataFrame({'rfi_type': ['square_persistent_time'], 'amplitude': [amplitude], 'center_freq': [np.nan], 'bandwidth': [np.nan], 'center_time': [center], 'timewidth': [width], 'duty_cycle': [np.nan], 'time_period': [np.nan], 'time_offset': [np.nan]})
+        if rfi_axis == "FREQ":
+            persistent_rfi_spec = np.apply_along_axis(
+                self.add_square_rfi,
+                axis=0,
+                arr=self.blank_spectrograph,
+                x=self.frequencies,
+                amplitude=amplitude,
+                center=center,
+                width=width,
+            )
+            new_row = pd.DataFrame(
+                {
+                    "rfi_type": ["square_persistent_freq"],
+                    "amplitude": [amplitude],
+                    "center_freq": [center],
+                    "bandwidth": [width],
+                    "center_time": [np.nan],
+                    "timewidth": [np.nan],
+                    "duty_cycle": [np.nan],
+                    "time_period": [np.nan],
+                    "time_offset": [np.nan],
+                }
+            )
+        elif rfi_axis == "TIME":
+            persistent_rfi_spec = np.apply_along_axis(
+                self.add_square_rfi,
+                axis=1,
+                arr=self.blank_spectrograph,
+                x=self.times,
+                amplitude=amplitude,
+                center=center,
+                width=width,
+            )
+            new_row = pd.DataFrame(
+                {
+                    "rfi_type": ["square_persistent_time"],
+                    "amplitude": [amplitude],
+                    "center_freq": [np.nan],
+                    "bandwidth": [np.nan],
+                    "center_time": [center],
+                    "timewidth": [width],
+                    "duty_cycle": [np.nan],
+                    "time_period": [np.nan],
+                    "time_offset": [np.nan],
+                }
+            )
         else:
             raise ValueError("Invalid rfi_axis value. Use 'FREQ' or 'TIME'.")
 
@@ -132,7 +231,9 @@ class SyntheticRFI(RadioRFI):
 
         return persistent_rfi_spec
 
-    def create_spectrograph(self,):
+    def create_spectrograph(
+        self,
+    ):
         temporal_baseline = []
         for i in range(self.points_freq):
             temporal_baseline.append(self.baseline_profile())
@@ -140,7 +241,7 @@ class SyntheticRFI(RadioRFI):
         spectrograph = np.vstack(temporal_baseline)
 
         return spectrograph
-        
+
     def add_spectrographs(self, spectrograph1, spectrograph2):
         return spectrograph1 + spectrograph2
 
@@ -162,11 +263,11 @@ class SyntheticRFI(RadioRFI):
     #     self.temp_spectrograph = np.zeros((self.points_time, self.points_freq))
     #     for index, row in self.rfi_table.iterrows():
     #         if row['rfi_type'] == 'gauss_persistent_freq':
-    #             self.add_gaussian_rfi_spectrograph(row['amplitude'], 
+    #             self.add_gaussian_rfi_spectrograph(row['amplitude'],
     #                                                     row['center_freq'],  row['bandwidth'])
 
     #         if row['rfi_type'] == 'gauss_persistent_time':
-    #             self.add_gaussian_rfi_spectrograph(row['amplitude'], 
+    #             self.add_gaussian_rfi_spectrograph(row['amplitude'],
     #                                                     row['center_freq'],  row['bandwidth'])
 
     #         if row['rfi_type'] == 'intermittent':
@@ -174,10 +275,9 @@ class SyntheticRFI(RadioRFI):
     #                                             row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'])
 
     #         if row['rfi_type'] == 'persistent_sq':
-    #             self.add_square_rfi_spectrograph(row['amplitude'], 
+    #             self.add_square_rfi_spectrograph(row['amplitude'],
     #                                                     row['center_freq'],  row['bandwidth'])
 
-            
     #     self.model_spectrograph = self.temp_spectrograph
 
     # def create_model_spectrograph(self):
@@ -188,31 +288,30 @@ class SyntheticRFI(RadioRFI):
     #         numpy.ndarray: The model spectrograph.
     #     """
     #     self.temp_spectrograph = np.zeros((self.points_time, self.points_freq))
-        
+
     #     for index, row in self.rfi_table.iterrows():
     #         if row['rfi_type'] == 'gauss_persistent_freq':
     #             self.temp_spectrograph += self.add_gaussian_rfi_spectrograph(row['amplitude'], row['center_freq'], row['bandwidth'], rfi_axis='FREQ')
-            
+
     #         elif row['rfi_type'] == 'gauss_persistent_time':
     #             self.temp_spectrograph += self.add_gaussian_rfi_spectrograph(row['amplitude'], row['center_time'], row['timewidth'], rfi_axis='TIME')
-            
+
     #         elif row['rfi_type'] == 'intermittent_gauss':
     #             self.temp_spectrograph += self.intermittent_rfi(row['amplitude'], row['center_freq'], row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'], func_type='GAUSS')
-            
+
     #         elif row['rfi_type'] == 'intermittent_square':
     #             self.temp_spectrograph += self.intermittent_rfi(row['amplitude'], row['center_freq'], row['bandwidth'], row['time_period'], row['duty_cycle'], row['time_offset'], func_type='SQUARE')
-            
+
     #         elif row['rfi_type'] == 'square_persistent_freq':
     #             self.temp_spectrograph += self.add_square_rfi_spectrograph(row['amplitude'], row['center_freq'], row['bandwidth'], rfi_axis='FREQ')
-            
+
     #         elif row['rfi_type'] == 'square_persistent_time':
     #             self.temp_spectrograph += self.add_square_rfi_spectrograph(row['amplitude'], row['center_time'], row['timewidth'], rfi_axis='TIME')
-            
+
     #         else:
     #             raise ValueError(f"Unknown rfi_type: {row['rfi_type']}")
 
     #     self.model_spectrograph = self.temp_spectrograph
-
 
     def create_model_spectrograph(self):
         """
@@ -226,75 +325,85 @@ class SyntheticRFI(RadioRFI):
 
         # Process each row in the rfi_table and add the corresponding RFI to the model spectrograph
         for index, row in self.rfi_table.iterrows():
-            if row['rfi_type'] == 'gauss_persistent_freq':
+            if row["rfi_type"] == "gauss_persistent_freq":
                 spectrogram = self.add_gaussian_rfi_spectrograph(
-                    amplitude=row['amplitude'],
-                    center=row['center_freq'],
-                    width=row['bandwidth'],
-                    rfi_axis='FREQ'
+                    amplitude=row["amplitude"],
+                    center=row["center_freq"],
+                    width=row["bandwidth"],
+                    rfi_axis="FREQ",
                 )
                 self.model_spectrograph += spectrogram
 
-            elif row['rfi_type'] == 'gauss_persistent_time':
+            elif row["rfi_type"] == "gauss_persistent_time":
                 spectrogram = self.add_gaussian_rfi_spectrograph(
-                    amplitude=row['amplitude'],
-                    center=row['center_time'],
-                    width=row['timewidth'],
-                    rfi_axis='TIME'
+                    amplitude=row["amplitude"],
+                    center=row["center_time"],
+                    width=row["timewidth"],
+                    rfi_axis="TIME",
                 )
                 self.model_spectrograph += spectrogram
 
-            elif row['rfi_type'] == 'square_persistent_freq':
+            elif row["rfi_type"] == "square_persistent_freq":
                 spectrogram = self.add_square_rfi_spectrograph(
-                    amplitude=row['amplitude'],
-                    center=row['center_freq'],
-                    width=row['bandwidth'],
-                    rfi_axis='FREQ'
+                    amplitude=row["amplitude"],
+                    center=row["center_freq"],
+                    width=row["bandwidth"],
+                    rfi_axis="FREQ",
                 )
                 self.model_spectrograph += spectrogram
 
-            elif row['rfi_type'] == 'square_persistent_time':
+            elif row["rfi_type"] == "square_persistent_time":
                 spectrogram = self.add_square_rfi_spectrograph(
-                    amplitude=row['amplitude'],
-                    center=row['center_time'],
-                    width=row['timewidth'],
-                    rfi_axis='TIME'
+                    amplitude=row["amplitude"],
+                    center=row["center_time"],
+                    width=row["timewidth"],
+                    rfi_axis="TIME",
                 )
                 self.model_spectrograph += spectrogram
 
-            elif row['rfi_type'] == 'intermittent_gauss':
+            elif row["rfi_type"] == "intermittent_gauss":
                 spectrogram = self.intermittent_rfi(
-                    amplitude=row['amplitude'],
-                    center_freq=row['center_freq'],
-                    bandwidth=row['bandwidth'],
-                    time_period=row['time_period'],
-                    duty_cycle=row['duty_cycle'],
-                    time_offset=row['time_offset'],
-                    func_type='GAUSS'
+                    amplitude=row["amplitude"],
+                    center_freq=row["center_freq"],
+                    bandwidth=row["bandwidth"],
+                    time_period=row["time_period"],
+                    duty_cycle=row["duty_cycle"],
+                    time_offset=row["time_offset"],
+                    func_type="GAUSS",
                 )
                 self.model_spectrograph += spectrogram
 
-            elif row['rfi_type'] == 'intermittent_square':
+            elif row["rfi_type"] == "intermittent_square":
                 spectrogram = self.intermittent_rfi(
-                    amplitude=row['amplitude'],
-                    center_freq=row['center_freq'],
-                    bandwidth=row['bandwidth'],
-                    time_period=row['time_period'],
-                    duty_cycle=row['duty_cycle'],
-                    time_offset=row['time_offset'],
-                    func_type='SQUARE'
+                    amplitude=row["amplitude"],
+                    center_freq=row["center_freq"],
+                    bandwidth=row["bandwidth"],
+                    time_period=row["time_period"],
+                    duty_cycle=row["duty_cycle"],
+                    time_offset=row["time_offset"],
+                    func_type="SQUARE",
                 )
                 self.model_spectrograph += spectrogram
 
             else:
                 raise ValueError(f"Unknown rfi_type: {row['rfi_type']}")
 
-    def intermittent_rfi(self, amplitude, center_freq, bandwidth, time_period, duty_cycle, time_offset=0, func_type='GAUSS', table=False, ):
+    def intermittent_rfi(
+        self,
+        amplitude,
+        center_freq,
+        bandwidth,
+        time_period,
+        duty_cycle,
+        time_offset=0,
+        func_type="GAUSS",
+        table=False,
+    ):
         # Generated by Copilot
-        
+
         """
         Add intermittent RFI to the spectrograph in two channels with a specified frequency offset and time period.
-        
+
         Parameters:
         - spectrograph: The input spectrograph to which RFI will be added.
         - frequencies: Array of frequency values.
@@ -304,26 +413,28 @@ class SyntheticRFI(RadioRFI):
         - time_period: Time period for the intermittent RFI.
         - duty_cycle: Fraction of the time period during which the RFI is active.
         - time_offset: Offset in time for the intermittent RFI (default: 0).
-        
+
         Returns:
         - modified_spectrograph: The spectrograph with added intermittent RFI.
         """
         modified_spectrograph = self.blank_spectrograph
-        
+
         # Create the time mask for intermittent RFI
         time_mask = np.zeros(self.points_time)
         period_indices = np.arange(time_offset, self.points_time, time_period)
         for start_idx in period_indices:
             end_idx = min(start_idx + int(time_period * duty_cycle), self.points_time)
-            time_mask[int(start_idx):int(end_idx)] = 1
-        
+            time_mask[int(start_idx) : int(end_idx)] = 1
+
         # Generate the RFI signals for both channels
-        if func_type == 'GAUSS':
-            rfi_signal_1 = self.gaussian_function(self.frequencies, amplitude, center_freq, bandwidth)
-            rfi_type = 'intermittent_gauss'
-        elif func_type == 'SQUARE':
+        if func_type == "GAUSS":
+            rfi_signal_1 = self.gaussian_function(
+                self.frequencies, amplitude, center_freq, bandwidth
+            )
+            rfi_type = "intermittent_gauss"
+        elif func_type == "SQUARE":
             rfi_signal_1 = self.square_function(self.frequencies, amplitude, center_freq, bandwidth)
-            rfi_type = 'intermittent_square'
+            rfi_type = "intermittent_square"
         else:
             raise ValueError("Invalid func_type value. Use 'GAUSS' or 'SQUARE'.")
 
@@ -331,25 +442,40 @@ class SyntheticRFI(RadioRFI):
         for t in range(self.points_time):
             if time_mask[t] == 1:
                 modified_spectrograph[:, t] += rfi_signal_1
-        
+
         # Update the RFI table
         if table:
-            new_rows = pd.DataFrame({
-                'rfi_type': [rfi_type],
-                'amplitude': [amplitude],
-                'center_freq': [center_freq],
-                'bandwidth': [bandwidth],
-                'center_time': [np.nan],
-                'timewidth': [np.nan],
-                'duty_cycle': [duty_cycle],
-                'time_period': [time_period],
-                'time_offset': [time_offset],
-            })
+            new_rows = pd.DataFrame(
+                {
+                    "rfi_type": [rfi_type],
+                    "amplitude": [amplitude],
+                    "center_freq": [center_freq],
+                    "bandwidth": [bandwidth],
+                    "center_time": [np.nan],
+                    "timewidth": [np.nan],
+                    "duty_cycle": [duty_cycle],
+                    "time_period": [time_period],
+                    "time_offset": [time_offset],
+                }
+            )
             self.rfi_table = pd.concat([self.rfi_table, new_rows], ignore_index=True)
-        
+
         return modified_spectrograph
 
-    def generate_waterfall(self, mean_rfi=1, std_rfi=5, pers_freq_gauss=1, pers_time_gauss=0, inter_freq_gauss=0, inter_freq_square=0, pers_freq_square=0, pers_time_square=0, noise=10, mean=5, edge_buffer=50):
+    def generate_waterfall(
+        self,
+        mean_rfi=1,
+        std_rfi=5,
+        pers_freq_gauss=1,
+        pers_time_gauss=0,
+        inter_freq_gauss=0,
+        inter_freq_square=0,
+        pers_freq_square=0,
+        pers_time_square=0,
+        noise=10,
+        mean=5,
+        edge_buffer=50,
+    ):
         """
         Generate a waterfall plot with simulated radio frequency interference (RFI).
 
@@ -365,7 +491,19 @@ class SyntheticRFI(RadioRFI):
             None
         """
 
-        self.rfi_table = pd.DataFrame(columns=['rfi_type', 'amplitude', 'center_freq', 'bandwidth', 'center_time', 'timewidth', 'duty_cycle', 'time_period', 'time_offset'])
+        self.rfi_table = pd.DataFrame(
+            columns=[
+                "rfi_type",
+                "amplitude",
+                "center_freq",
+                "bandwidth",
+                "center_time",
+                "timewidth",
+                "duty_cycle",
+                "time_period",
+                "time_offset",
+            ]
+        )
 
         self.noise = noise
         self.mean = mean
@@ -382,76 +520,108 @@ class SyntheticRFI(RadioRFI):
 
         spec_list = []
         for i in np.arange(pers_freq_gauss):
-            spec_list.append(self.add_gaussian_rfi_spectrograph(
-                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
-                center=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
-                width=np.abs(np.random.normal(50, 3)),
-                rfi_axis='FREQ',
-                table=True
-            ))
+            spec_list.append(
+                self.add_gaussian_rfi_spectrograph(
+                    amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
+                    center=np.random.uniform(
+                        self.min_freq + edge_buffer, self.max_freq - edge_buffer
+                    ),
+                    width=np.abs(np.random.normal(50, 3)),
+                    rfi_axis="FREQ",
+                    table=True,
+                )
+            )
         persistent_rfi_spec = np.sum(spec_list, axis=0)
 
         spec_list = []
         for i in np.arange(pers_time_gauss):
-            spec_list.append(self.add_gaussian_rfi_spectrograph(
-                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
-                center=np.random.uniform(self.min_time + edge_buffer, self.max_time - edge_buffer),
-                width=np.abs(np.random.normal(50, 3)),
-                rfi_axis='TIME',
-                table=True
-            ))
+            spec_list.append(
+                self.add_gaussian_rfi_spectrograph(
+                    amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
+                    center=np.random.uniform(
+                        self.min_time + edge_buffer, self.max_time - edge_buffer
+                    ),
+                    width=np.abs(np.random.normal(50, 3)),
+                    rfi_axis="TIME",
+                    table=True,
+                )
+            )
         persistent_rfi_time = np.sum(spec_list, axis=0)
 
         spec_list = []
         for i in np.arange(inter_freq_gauss):
-            spec_list.append(self.intermittent_rfi(
-                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
-                center_freq=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
-                bandwidth=np.abs(np.random.normal(50, 10)),
-                time_period=np.random.randint(1, 500),
-                duty_cycle=np.random.uniform(0, 1),
-                time_offset=np.random.randint(1, 100),
-                func_type='GAUSS',
-                table=True
-            ))
+            spec_list.append(
+                self.intermittent_rfi(
+                    amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
+                    center_freq=np.random.uniform(
+                        self.min_freq + edge_buffer, self.max_freq - edge_buffer
+                    ),
+                    bandwidth=np.abs(np.random.normal(50, 10)),
+                    time_period=np.random.randint(1, 500),
+                    duty_cycle=np.random.uniform(0, 1),
+                    time_offset=np.random.randint(1, 100),
+                    func_type="GAUSS",
+                    table=True,
+                )
+            )
         intermittent_rfi_gauss = np.sum(spec_list, axis=0)
 
         spec_list = []
         for i in np.arange(inter_freq_square):
-            spec_list.append(self.intermittent_rfi(
-                amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
-                center_freq=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer),
-                bandwidth=np.abs(np.random.normal(50, 10)),
-                time_period=np.random.randint(1, 500),
-                duty_cycle=np.random.uniform(0, 1),
-                time_offset=np.random.randint(1, 100),
-                func_type='SQUARE',
-                table=True
-            ))
+            spec_list.append(
+                self.intermittent_rfi(
+                    amplitude=np.abs(np.random.normal(mean_rfi, std_rfi)),
+                    center_freq=np.random.uniform(
+                        self.min_freq + edge_buffer, self.max_freq - edge_buffer
+                    ),
+                    bandwidth=np.abs(np.random.normal(50, 10)),
+                    time_period=np.random.randint(1, 500),
+                    duty_cycle=np.random.uniform(0, 1),
+                    time_offset=np.random.randint(1, 100),
+                    func_type="SQUARE",
+                    table=True,
+                )
+            )
         intermittent_rfi_square = np.sum(spec_list, axis=0)
 
         spec_list = []
         for i in np.arange(pers_freq_square):
-            spec_list.append(self.add_square_rfi_spectrograph(
-                amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)), 
-                center=np.random.uniform(self.min_freq + edge_buffer, self.max_freq - edge_buffer), 
-                width=np.random.uniform(1, 10), 
-                rfi_axis='FREQ',
-                table=True
-            ))
+            spec_list.append(
+                self.add_square_rfi_spectrograph(
+                    amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)),
+                    center=np.random.uniform(
+                        self.min_freq + edge_buffer, self.max_freq - edge_buffer
+                    ),
+                    width=np.random.uniform(1, 10),
+                    rfi_axis="FREQ",
+                    table=True,
+                )
+            )
         square_rfi_spec = np.sum(spec_list, axis=0)
 
         spec_list = []
         for i in np.arange(pers_time_square):
-            spec_list.append(self.add_square_rfi_spectrograph(
-                amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)), 
-                center=np.random.uniform(self.min_time + edge_buffer, self.max_time - edge_buffer), 
-                width=np.random.uniform(75, 10), 
-                rfi_axis='TIME',
-                table=True))
+            spec_list.append(
+                self.add_square_rfi_spectrograph(
+                    amplitude=np.abs(np.random.uniform(mean_rfi, std_rfi)),
+                    center=np.random.uniform(
+                        self.min_time + edge_buffer, self.max_time - edge_buffer
+                    ),
+                    width=np.random.uniform(75, 10),
+                    rfi_axis="TIME",
+                    table=True,
+                )
+            )
         square_rfi_time = np.sum(spec_list, axis=0)
 
-        self.synthetic_rfi_array = persistent_rfi_spec + persistent_rfi_time + intermittent_rfi_gauss + intermittent_rfi_square + square_rfi_spec + square_rfi_time
+        self.synthetic_rfi_array = (
+            persistent_rfi_spec
+            + persistent_rfi_time
+            + intermittent_rfi_gauss
+            + intermittent_rfi_square
+            + square_rfi_spec
+            + square_rfi_time
+        )
         self.spectrograph = self.synthetic_rfi_array + self.create_spectrograph()
 
         self.rfi_antenna_data = self.spectrograph.reshape(1, 1, self.points_freq, self.points_time)

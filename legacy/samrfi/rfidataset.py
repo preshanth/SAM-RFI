@@ -26,23 +26,24 @@ from .syntheticrfi import SyntheticRFI
 from .radiorfi import RadioRFI
 from .utilities import *
 
+
 class RFIDataset:
     def __init__(self, rfi_instance, dir_path=False):
         self.rfi_instance = rfi_instance
 
         if dir_path:
-            if dir_path.endswith('/'):
+            if dir_path.endswith("/"):
                 dir_path = dir_path[:-1]
 
             current_directory = str(dir_path)
         else:
             current_directory = os.getcwd()
 
-        new_directory = os.path.join(current_directory, 'samrfi_data')
+        new_directory = os.path.join(current_directory, "samrfi_data")
 
         if not os.path.exists(new_directory):
             os.makedirs(new_directory)
-        
+
         self.directory = new_directory
 
     def apply_normalization(self, before_stretch=False):
@@ -54,12 +55,12 @@ class RFIDataset:
         for data in tqdm(self.patched_data):
 
             # Normalization
-            data = data/np.nanmedian(data)
+            data = data / np.nanmedian(data)
 
             images_med.append(data)
 
         images = np.stack(images_med)
-        
+
         # The stretching only affects the final outcome of the masks, since we want the image itself to be as is when training.
 
         if before_stretch:
@@ -67,28 +68,29 @@ class RFIDataset:
         else:
             self.patched_data = images
 
+    def apply_stretch(self, stretch="SQRT"):
 
-    def apply_stretch(self, stretch='SQRT'):
-
-        if stretch == 'SQRT':
+        if stretch == "SQRT":
             stretch_func = np.sqrt
-        elif stretch == 'LOG10':
+        elif stretch == "LOG10":
             stretch_func = np.log10
         else:
             raise ValueError("Invalid stretch. Use 'SQRT' or 'LOG10'.")
 
-        print(f"\nApplying {stretch} stretch and normalization to {len(self.patched_data)} patches...")
+        print(
+            f"\nApplying {stretch} stretch and normalization to {len(self.patched_data)} patches..."
+        )
         images_med = []
 
         for data in tqdm(self.patched_data):
-            
+
             # epsilon = 1e-10  # A small positive number
             # data = np.where(data == 0, epsilon, data)
 
             data = stretch_func(np.abs(data))
 
             finite_data = data[np.isfinite(data)]
-            mad = stats.median_abs_deviation(finite_data, nan_policy='omit')
+            mad = stats.median_abs_deviation(finite_data, nan_policy="omit")
 
             # Identify the indices of infinite values (inf and -inf)
             inf_mask = np.isinf(data)
@@ -102,7 +104,7 @@ class RFIDataset:
 
         self.patched_data = images
 
-    def create_patched_flags(self,sigma=8):
+    def create_patched_flags(self, sigma=8):
 
         flags = []
 
@@ -118,7 +120,7 @@ class RFIDataset:
 
             # Flag data points outside the thresholds
             flag = (data > upper_threshold) | (data < lower_threshold)
-            
+
             flags.append(flag)
 
         self.patched_flags = np.stack(flags)
@@ -132,7 +134,7 @@ class RFIDataset:
         # Initialize an empty list to store the filtered arrays
         filtered_images = []
         filtered_images_norm_only = []
-    
+
         # Iterate over the arrays and their corresponding mask values
         for arr, m in zip(self.patched_data, filtered_flags_im):
             # If the mask value is False, add the array to the filtered list
@@ -148,7 +150,9 @@ class RFIDataset:
         self.patched_flags = np.stack(filtered_flags)
         self.patched_data = np.stack(filtered_images)
 
-    def randomize_patches(self,):
+    def randomize_patches(
+        self,
+    ):
 
         # Shuffle the data and flags in unison
         indices = np.random.permutation(len(self.patched_data_norm_only))
@@ -157,7 +161,16 @@ class RFIDataset:
         self.patched_data = self.patched_data[indices]
         self.patched_flags = self.patched_flags[indices]
 
-    def create_dataset(self, stretch='SQRT', flag_sigma=5, patch_method='patchify', patch_size=128, num_patches=None, apply_stretching=True, custom_flag=True):
+    def create_dataset(
+        self,
+        stretch="SQRT",
+        flag_sigma=5,
+        patch_method="patchify",
+        patch_size=128,
+        num_patches=None,
+        apply_stretching=True,
+        custom_flag=True,
+    ):
 
         # Storing parameters
         self.dataset_params = {
@@ -171,8 +184,8 @@ class RFIDataset:
         }
 
         rfi_combined = four_rotations(self.rfi_instance.rfi_antenna_data)
-        
-        if patch_method == 'patchify':
+
+        if patch_method == "patchify":
             self.patched_data = create_patchify_patches(rfi_combined, patch_size=patch_size)
 
         # Store normalization without stretching in a seperate variable
@@ -180,19 +193,21 @@ class RFIDataset:
 
         if apply_stretching:
             self.apply_stretch(stretch=stretch)
-        
+
         self.apply_normalization(before_stretch=False)
 
         if custom_flag == True:
-        
+
             rfi_flags_combined = four_rotations(self.rfi_instance.flags)
-            
-            if patch_method == 'patchify':
-                self.patched_flags = create_patchify_patches(rfi_flags_combined, patch_size=patch_size)
-            
+
+            if patch_method == "patchify":
+                self.patched_flags = create_patchify_patches(
+                    rfi_flags_combined, patch_size=patch_size
+                )
+
         else:
             self.create_patched_flags(sigma=flag_sigma)
-            
+
         self.rm_blank_patches()
         self.randomize_patches()
 
@@ -211,9 +226,8 @@ class RFIDataset:
         dataset_dict["image"] = [img.convert("RGB") for img in dataset_dict["image"]]
 
         dataset = Dataset.from_dict(dataset_dict)
-        
-        self.dataset = dataset
 
+        self.dataset = dataset
 
     ### Add a method to quickly plot the dataset
 
@@ -250,12 +264,7 @@ class RFIDataset:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        filename_parts = [
-            f"dataset",
-            f"patch-{patch_method}",
-            f"size-{patch_size}",
-            timestamp
-        ]
+        filename_parts = [f"dataset", f"patch-{patch_method}", f"size-{patch_size}", timestamp]
 
         filename_parts.insert(1, f"num_patches-{self.dataset.shape[0]}")
 
@@ -266,24 +275,24 @@ class RFIDataset:
             filename_parts.insert(1, f"stretch-{stretch}")
 
         filename = "_".join(filename_parts)
-        
+
         if dataset_path:
             try:
                 self.dataset.save_to_disk(os.path.join(method_dir, dataset_path))
             except:
                 print("Dataset path not found. Saving model to default directory.")
-                method_dir = os.path.join(self.directory, 'datasets')
-                
+                method_dir = os.path.join(self.directory, "datasets")
+
                 if not os.path.exists(method_dir):
                     os.makedirs(method_dir)
                 self.dataset.save_to_disk(os.path.join(method_dir, filename))
         else:
-            method_dir = os.path.join(self.directory, 'datasets')
+            method_dir = os.path.join(self.directory, "datasets")
             if not os.path.exists(method_dir):
                 os.makedirs(method_dir)
-            
+
             self.dataset.save_to_disk(os.path.join(method_dir, filename))
-            
+
     '''
     def load_dataset(self, dataset_path):
         """
@@ -295,8 +304,8 @@ class RFIDataset:
         Raises:
         Exception: If there is an error loading the dataset from the provided path.
         """
-    ''' 
+    '''
 
     # A plotting function that plots a random label and image in the dataset to confirm functionality
 
-    # Other dataset statistics 
+    # Other dataset statistics

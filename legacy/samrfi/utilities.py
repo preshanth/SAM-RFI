@@ -20,6 +20,7 @@ def get_bounding_box(ground_truth_map):
 
     return bbox
 
+
 def find_spectrograph_peaks(spectrograph, min_distance=10, threshold_abs=30):
     """
     Find peaks in the spectrograph image.
@@ -34,7 +35,7 @@ def find_spectrograph_peaks(spectrograph, min_distance=10, threshold_abs=30):
     """
     max_peaks = peak_local_max(spectrograph, min_distance=min_distance, threshold_abs=threshold_abs)
     max_peaks = max_peaks, np.ones(len(max_peaks))
-    
+
     return max_peaks
 
 
@@ -48,7 +49,7 @@ def runtest(dat, flag):
 
 
 def calcquality(dat, flag):
-    """ Need to minimize the score that it returns"""
+    """Need to minimize the score that it returns"""
 
     shp = dat.shape
 
@@ -76,14 +77,14 @@ def calcquality(dat, flag):
     # print("Max deviation after flagging : ", maxdev)
     # print("Diff in mean of flagged and unflagged : ", fdiff)
     # print("Std after flagging : ", rstd)
-    
-    ## Maximum deviation from the mean is 3 sigma. => Gaussian stats. 
+
+    ## Maximum deviation from the mean is 3 sigma. => Gaussian stats.
     ## => What's leftover is noise-like and without significant outliers.
     aa = np.abs(np.abs(maxdev) - 3.0)
 
     ## Flagged data has a higher mean than what is left over => flagged only RFI. Maximize the difference between the means
     bb = 1.0 / ((np.abs(fdiff) - rstd) / rstd)
-    
+
     ## Maximize the difference between the std of the flagged and leftover data => Assumes that RFI is widely varying...
     cc = 1.0 / (np.abs(sdiff) / rstd)
 
@@ -91,11 +92,11 @@ def calcquality(dat, flag):
     dd = 0.0
     pflag = (len(flagged) / (1.0 * shp[0] * shp[1])) * 100.0
     if pflag > 70.0:
-        dd = (pflag - 70.0)/10.0
-    
-    res = np.sqrt(aa ** 2 + bb ** 2 + cc * 2 + dd * 2)
+        dd = (pflag - 70.0) / 10.0
 
-    if (fdiff < 0.0):
+    res = np.sqrt(aa**2 + bb**2 + cc * 2 + dd * 2)
+
+    if fdiff < 0.0:
         res = res + res + 10.0
 
     # print("Score : ", res)
@@ -104,7 +105,7 @@ def calcquality(dat, flag):
 
 
 def printstats(arr):
-    if (len(arr) == 0):
+    if len(arr) == 0:
         return 0, 0, 1
 
     med = np.median(arr)
@@ -120,22 +121,25 @@ def printstats(arr):
     return maxa, mean, std
 
 
-def getvals(tb, col='DATA', vis="", spw="", scan=""):
+def getvals(tb, col="DATA", vis="", spw="", scan=""):
 
     # print("SPW:", spw, "DDID:", ddid)
 
     tb.open(vis)
-    if (spw and scan):
-        tb.open(vis + '/DATA_DESCRIPTION')
-        spwids = tb.getcol('SPECTRAL_WINDOW_ID')
+    if spw and scan:
+        tb.open(vis + "/DATA_DESCRIPTION")
+        spwids = tb.getcol("SPECTRAL_WINDOW_ID")
         ddid = str(np.where(spwids == eval(spw))[0][0])
-        tb1 = tb.query('SCAN_NUMBER==' + scan + ' && DATA_DESC_ID==' + ddid + ' && ANTENNA1=1 && ANTENNA2=2')
+        tb1 = tb.query(
+            "SCAN_NUMBER==" + scan + " && DATA_DESC_ID==" + ddid + " && ANTENNA1=1 && ANTENNA2=2"
+        )
     else:
-        tb1 = tb.query('ANTENNA1=1 && ANTENNA2=2')
+        tb1 = tb.query("ANTENNA1=1 && ANTENNA2=2")
     dat = tb1.getcol(col)
     tb1.close()
     tb.close()
     return dat
+
 
 def four_rotations(rfi_antenna_data):
 
@@ -150,7 +154,11 @@ def four_rotations(rfi_antenna_data):
 
     return rfi_combined
 
-def create_patchify_patches(rfi_combined, patch_size=128,):
+
+def create_patchify_patches(
+    rfi_combined,
+    patch_size=128,
+):
     """
     Create patches from a list of images.
 
@@ -179,41 +187,42 @@ def create_patchify_patches(rfi_combined, patch_size=128,):
 
     return patches
 
+
 def create_patches(image, patch_size=256):
     # ChatGPT assisted with this function
     # Get image dimensions
     rows, cols = image.shape
-    
+
     # Calculate padding size
     pad_rows = (patch_size - rows % patch_size) % patch_size
     pad_cols = (patch_size - cols % patch_size) % patch_size
 
     # Pad the image to ensure it can be evenly divided into patches
-    padded_image = np.pad(image, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
+    padded_image = np.pad(image, ((0, pad_rows), (0, pad_cols)), mode="constant", constant_values=0)
 
     # Create patches
     patches = []
     for i in range(0, padded_image.shape[0], patch_size):
         for j in range(0, padded_image.shape[1], patch_size):
-            patch = padded_image[i:i + patch_size, j:j + patch_size]
+            patch = padded_image[i : i + patch_size, j : j + patch_size]
             patches.append(patch)
-    
-    return patches, image.shape, padded_image.shape    
+
+    return patches, image.shape, padded_image.shape
+
 
 def reconstruct_image(patches, original_shape, padded_shape, patch_size=256):
     # ChatGPT assisted with this function
     # Create an empty array to hold the reconstructed image
     reconstructed_image = np.zeros(padded_shape)
-    
+
     patch_index = 0
     for i in range(0, padded_shape[0], patch_size):
         for j in range(0, padded_shape[1], patch_size):
-            reconstructed_image[i:i + patch_size, j:j + patch_size] = patches[patch_index]
+            reconstructed_image[i : i + patch_size, j : j + patch_size] = patches[patch_index]
             patch_index += 1
-    
-    # Remove the padding to get the original image size
-    return reconstructed_image[:original_shape[0], :original_shape[1]]
 
+    # Remove the padding to get the original image size
+    return reconstructed_image[: original_shape[0], : original_shape[1]]
 
 
 def compute_start_indices(size, window_size, stride):
@@ -225,15 +234,16 @@ def compute_start_indices(size, window_size, stride):
             starts.append(size - window_size)
         return starts
 
+
 def extract_patches(array, window_size=256, overlap=128):
     """
     Extract overlapping patches from a 2D NumPy array.
-    
+
     Parameters:
     - array: Input 2D NumPy array.
     - window_size: Size of the window (patch).
     - overlap: Number of pixels to overlap between patches.
-    
+
     Returns:
     - patches_array: NumPy array of patches with shape (num_patches, window_size, window_size).
     - positions: List of (y, x) positions where each patch was extracted.
@@ -242,53 +252,54 @@ def extract_patches(array, window_size=256, overlap=128):
     height, width = array.shape
     x_starts = compute_start_indices(width, window_size, stride)
     y_starts = compute_start_indices(height, window_size, stride)
-    
+
     patches = []
     positions = []
     for y in y_starts:
         for x in x_starts:
-            patch = array[y:y+window_size, x:x+window_size]
+            patch = array[y : y + window_size, x : x + window_size]
             patches.append(patch)
             positions.append((y, x))
     patches_array = np.stack(patches)
     return patches_array, positions
 
+
 def reconstruct_from_patches(patches, positions, array_shape, window_size=256, overlap=128):
     """
     Reconstruct the original array from patches, applying logical AND in overlapping regions.
-    
+
     Parameters:
     - patches: NumPy array of patches with shape (num_patches, window_size, window_size).
     - positions: List of (y, x) positions where each patch should be placed.
     - array_shape: Shape of the original array (height, width).
     - window_size: Size of the window (patch).
     - overlap: Number of pixels that overlap between patches.
-    
+
     Returns:
     - output_array: Reconstructed 2D NumPy array.
     """
     # Initialize the output array to all True values
     output_array = np.ones(array_shape, dtype=bool)
     count_array = np.zeros(array_shape, dtype=int)
-    
+
     for idx, (y, x) in enumerate(positions):
         patch = patches[idx]
         # Create a mask for the current patch
         patch_mask = np.zeros(array_shape, dtype=bool)
-        patch_mask[y:y+window_size, x:x+window_size] = True
-        
+        patch_mask[y : y + window_size, x : x + window_size] = True
+
         # Update the count of overlaps
-        count_array[y:y+window_size, x:x+window_size] += 1
-        
+        count_array[y : y + window_size, x : x + window_size] += 1
+
         # Apply logical AND operation
-        output_array[y:y+window_size, x:x+window_size] = np.logical_and(
-            output_array[y:y+window_size, x:x+window_size], patch
+        output_array[y : y + window_size, x : x + window_size] = np.logical_and(
+            output_array[y : y + window_size, x : x + window_size], patch
         )
-    
+
     # Optional: You might want to consider only areas where the overlap count is more than 1
     # For example, setting areas with no overlap to the original detection values
     # This can be customized based on your specific requirements
-    
+
     return output_array
 
 
@@ -309,7 +320,7 @@ def extract_patches_with_context(array, patch_size=192, context_size=256):
     stride = patch_size  # Non-overlapping patches
     x_starts = compute_start_indices(width, patch_size, stride)
     y_starts = compute_start_indices(height, patch_size, stride)
-    
+
     patches = []
     positions = []
     for y in y_starts:
@@ -339,8 +350,9 @@ def extract_patches_with_context(array, patch_size=192, context_size=256):
             context_x_end = context_x_start + (array_x_end - array_x_start)
 
             # Copy the data from the array to the context patch
-            context_patch[context_y_start:context_y_end, context_x_start:context_x_end] = \
-                array[array_y_start:array_y_end, array_x_start:array_x_end]
+            context_patch[context_y_start:context_y_end, context_x_start:context_x_end] = array[
+                array_y_start:array_y_end, array_x_start:array_x_end
+            ]
 
             # Fill the missing context with random patches
             missing_mask = context_patch == 0
@@ -355,6 +367,7 @@ def extract_patches_with_context(array, patch_size=192, context_size=256):
             positions.append((y, x))
     patches_array = np.stack(patches)
     return patches_array, positions
+
 
 def crop_patches(patches, crop_size=192):
     """
@@ -373,6 +386,7 @@ def crop_patches(patches, crop_size=192):
     cropped_patches = patches[:, start:end, start:end]
     return cropped_patches
 
+
 def reconstruct_from_patches_adding(patches, positions, array_shape, patch_size=192):
     """
     Reconstruct the original array from cropped patches.
@@ -388,28 +402,34 @@ def reconstruct_from_patches_adding(patches, positions, array_shape, patch_size=
     """
     output_array = np.zeros(array_shape, dtype=patches.dtype)
     for idx, (y, x) in enumerate(positions):
-        output_array[y:y+patch_size, x:x+patch_size] = patches[idx]
+        output_array[y : y + patch_size, x : x + patch_size] = patches[idx]
     return output_array
+
 
 # Adapted from https://www.datacamp.com/tutorial/sam2-fine-tuning
 def get_points(mask, num_points):  # Sample points inside the input mask
-   points = []
-   coords = np.argwhere(mask > 0)
+    points = []
+    coords = np.argwhere(mask > 0)
 
-   for _ in range(num_points):
-       y, x = coords[np.random.randint(len(coords))]
-       points.append([x, y])
-   return np.array(points)
+    for _ in range(num_points):
+        y, x = coords[np.random.randint(len(coords))]
+        points.append([x, y])
+    return np.array(points)
 
 
-
-def get_peak_points(image, min_distance=16,):
+def get_peak_points(
+    image,
+    min_distance=16,
+):
     """
     Return up to num_points local maxima coordinates from the image in shape (N, 2).
     Utilizes skimage.feature.peak_local_max.
     """
     # peaks is an array of (row, col)
-    peaks = peak_local_max(image, min_distance=min_distance,)
+    peaks = peak_local_max(
+        image,
+        min_distance=min_distance,
+    )
     if len(peaks) == 0:
         return np.empty((0, 2), dtype=int)  # No peaks found
 

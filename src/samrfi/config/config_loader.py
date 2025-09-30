@@ -1,5 +1,5 @@
 """
-Configuration loader for SAM-RFI training
+Configuration loader for SAM-RFI training and data generation
 Handles YAML config files with validation
 """
 
@@ -9,12 +9,41 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 
 
+class DataConfig:
+    """
+    Flexible config wrapper for data generation
+    Preserves nested YAML structure and supports both dict and attribute access
+    """
+
+    def __init__(self, data: dict):
+        self._data = data
+        # Recursively wrap nested dicts
+        for key, value in data.items():
+            if isinstance(value, dict):
+                setattr(self, key, DataConfig(value))
+            else:
+                setattr(self, key, value)
+
+    # Dict-like operations for compatibility
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def items(self):
+        return self._data.items()
+
+
 @dataclass
 class TrainingConfig:
     """Training configuration dataclass with validation"""
 
     # Model configuration
-    model_checkpoint: str = 'large'
+    model_checkpoint: str = "large"
     freeze_encoders: bool = True
 
     # Training hyperparameters
@@ -22,30 +51,30 @@ class TrainingConfig:
     batch_size: int = 4
     learning_rate: float = 1e-5
     weight_decay: float = 0.0
-    device: str = 'cuda'
+    device: str = "cuda"
 
     # Dataset configuration
-    stretch: str = 'SQRT'
+    stretch: str = "SQRT"
     flag_sigma: int = 5
-    patch_method: str = 'patchify'
+    patch_method: str = "patchify"
     patch_size: int = 128
     num_patches: Optional[int] = None
     apply_stretching: bool = True
     custom_flag: bool = True
 
     # Output configuration
-    dir_path: str = './samrfi_data'
+    dir_path: str = "./samrfi_data"
     save_plots: bool = True
     plot_dpi: int = 300
 
     # MS loading configuration
     num_antennas: Optional[int] = None
-    data_mode: str = 'DATA'
+    data_mode: str = "DATA"
 
     def __post_init__(self):
         """Validate configuration values"""
         # Validate model checkpoint
-        valid_checkpoints = ['tiny', 'small', 'base_plus', 'large']
+        valid_checkpoints = ["tiny", "small", "base_plus", "large"]
         if self.model_checkpoint not in valid_checkpoints:
             raise ValueError(
                 f"Invalid model_checkpoint '{self.model_checkpoint}'. "
@@ -53,20 +82,16 @@ class TrainingConfig:
             )
 
         # Validate stretch
-        valid_stretches = ['SQRT', 'LOG10']
+        valid_stretches = ["SQRT", "LOG10"]
         if self.stretch not in valid_stretches:
             raise ValueError(
-                f"Invalid stretch '{self.stretch}'. "
-                f"Must be one of: {valid_stretches}"
+                f"Invalid stretch '{self.stretch}'. " f"Must be one of: {valid_stretches}"
             )
 
         # Validate device
-        valid_devices = ['cuda', 'cpu']
+        valid_devices = ["cuda", "cpu"]
         if self.device not in valid_devices:
-            raise ValueError(
-                f"Invalid device '{self.device}'. "
-                f"Must be one of: {valid_devices}"
-            )
+            raise ValueError(f"Invalid device '{self.device}'. " f"Must be one of: {valid_devices}")
 
         # Validate numeric ranges
         if self.num_epochs <= 0:
@@ -87,11 +112,11 @@ class TrainingConfig:
 
 class ConfigLoader:
     """
-    Load and validate YAML configuration files for SAM-RFI training
+    Load and validate YAML configuration files for SAM-RFI
     """
 
     @staticmethod
-    def load(config_path: str) -> TrainingConfig:
+    def load_training(config_path: str) -> TrainingConfig:
         """
         Load configuration from YAML file
 
@@ -112,7 +137,7 @@ class ConfigLoader:
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
         # Load YAML
-        with open(config_file, 'r') as f:
+        with open(config_file, "r") as f:
             try:
                 config_dict = yaml.safe_load(f)
             except yaml.YAMLError as e:
@@ -144,45 +169,92 @@ class ConfigLoader:
         flat = {}
 
         # Model section
-        if 'model' in config_dict:
-            model_config = config_dict['model']
-            flat['model_checkpoint'] = model_config.get('checkpoint', 'large')
-            flat['freeze_encoders'] = model_config.get('freeze_encoders', True)
+        if "model" in config_dict:
+            model_config = config_dict["model"]
+            flat["model_checkpoint"] = model_config.get("checkpoint", "large")
+            flat["freeze_encoders"] = model_config.get("freeze_encoders", True)
 
         # Training section
-        if 'training' in config_dict:
-            training_config = config_dict['training']
-            flat['num_epochs'] = training_config.get('num_epochs', 5)
-            flat['batch_size'] = training_config.get('batch_size', 4)
-            flat['learning_rate'] = training_config.get('learning_rate', 1e-5)
-            flat['weight_decay'] = training_config.get('weight_decay', 0.0)
-            flat['device'] = training_config.get('device', 'cuda')
+        if "training" in config_dict:
+            training_config = config_dict["training"]
+            flat["num_epochs"] = training_config.get("num_epochs", 5)
+            flat["batch_size"] = training_config.get("batch_size", 4)
+            flat["learning_rate"] = training_config.get("learning_rate", 1e-5)
+            flat["weight_decay"] = training_config.get("weight_decay", 0.0)
+            flat["device"] = training_config.get("device", "cuda")
 
         # Dataset section
-        if 'dataset' in config_dict:
-            dataset_config = config_dict['dataset']
-            flat['stretch'] = dataset_config.get('stretch', 'SQRT')
-            flat['flag_sigma'] = dataset_config.get('flag_sigma', 5)
-            flat['patch_method'] = dataset_config.get('patch_method', 'patchify')
-            flat['patch_size'] = dataset_config.get('patch_size', 128)
-            flat['num_patches'] = dataset_config.get('num_patches', None)
-            flat['apply_stretching'] = dataset_config.get('apply_stretching', True)
-            flat['custom_flag'] = dataset_config.get('custom_flag', True)
+        if "dataset" in config_dict:
+            dataset_config = config_dict["dataset"]
+            flat["stretch"] = dataset_config.get("stretch", "SQRT")
+            flat["flag_sigma"] = dataset_config.get("flag_sigma", 5)
+            flat["patch_method"] = dataset_config.get("patch_method", "patchify")
+            flat["patch_size"] = dataset_config.get("patch_size", 128)
+            flat["num_patches"] = dataset_config.get("num_patches", None)
+            flat["apply_stretching"] = dataset_config.get("apply_stretching", True)
+            flat["custom_flag"] = dataset_config.get("custom_flag", True)
 
         # Output section
-        if 'output' in config_dict:
-            output_config = config_dict['output']
-            flat['dir_path'] = output_config.get('dir_path', './samrfi_data')
-            flat['save_plots'] = output_config.get('save_plots', True)
-            flat['plot_dpi'] = output_config.get('plot_dpi', 300)
+        if "output" in config_dict:
+            output_config = config_dict["output"]
+            flat["dir_path"] = output_config.get("dir_path", "./samrfi_data")
+            flat["save_plots"] = output_config.get("save_plots", True)
+            flat["plot_dpi"] = output_config.get("plot_dpi", 300)
 
         # MS loading section
-        if 'ms_loading' in config_dict:
-            ms_config = config_dict['ms_loading']
-            flat['num_antennas'] = ms_config.get('num_antennas', None)
-            flat['data_mode'] = ms_config.get('data_mode', 'DATA')
+        if "ms_loading" in config_dict:
+            ms_config = config_dict["ms_loading"]
+            flat["num_antennas"] = ms_config.get("num_antennas", None)
+            flat["data_mode"] = ms_config.get("data_mode", "DATA")
 
         return flat
+
+    @staticmethod
+    def load_data(config_path: str) -> DataConfig:
+        """
+        Load data generation configuration from YAML file
+        Preserves nested structure for flexible data generation
+
+        Args:
+            config_path: Path to YAML configuration file
+
+        Returns:
+            DataConfig object with nested structure
+
+        Raises:
+            FileNotFoundError: If config file doesn't exist
+            yaml.YAMLError: If YAML parsing fails
+        """
+        config_file = Path(config_path)
+
+        if not config_file.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+        # Load YAML
+        with open(config_file, "r") as f:
+            try:
+                config_dict = yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                raise yaml.YAMLError(f"Failed to parse YAML config: {e}")
+
+        if config_dict is None:
+            raise ValueError(f"Empty configuration file: {config_path}")
+
+        return DataConfig(config_dict)
+
+    @staticmethod
+    def load(config_path: str) -> TrainingConfig:
+        """
+        Load training configuration (alias for load_training)
+        Maintained for backwards compatibility
+
+        Args:
+            config_path: Path to YAML configuration file
+
+        Returns:
+            TrainingConfig object with validated parameters
+        """
+        return ConfigLoader.load_training(config_path)
 
     @staticmethod
     def save(config: TrainingConfig, output_path: str):
@@ -195,44 +267,43 @@ class ConfigLoader:
         """
         # Convert to nested structure
         config_dict = {
-            'model': {
-                'checkpoint': config.model_checkpoint,
-                'freeze_encoders': config.freeze_encoders
+            "model": {
+                "checkpoint": config.model_checkpoint,
+                "freeze_encoders": config.freeze_encoders,
             },
-            'training': {
-                'num_epochs': config.num_epochs,
-                'batch_size': config.batch_size,
-                'learning_rate': config.learning_rate,
-                'weight_decay': config.weight_decay,
-                'device': config.device
+            "training": {
+                "num_epochs": config.num_epochs,
+                "batch_size": config.batch_size,
+                "learning_rate": config.learning_rate,
+                "weight_decay": config.weight_decay,
+                "device": config.device,
             },
-            'dataset': {
-                'stretch': config.stretch,
-                'flag_sigma': config.flag_sigma,
-                'patch_method': config.patch_method,
-                'patch_size': config.patch_size,
-                'num_patches': config.num_patches,
-                'apply_stretching': config.apply_stretching,
-                'custom_flag': config.custom_flag
+            "dataset": {
+                "stretch": config.stretch,
+                "flag_sigma": config.flag_sigma,
+                "patch_method": config.patch_method,
+                "patch_size": config.patch_size,
+                "num_patches": config.num_patches,
+                "apply_stretching": config.apply_stretching,
+                "custom_flag": config.custom_flag,
             },
-            'output': {
-                'dir_path': config.dir_path,
-                'save_plots': config.save_plots,
-                'plot_dpi': config.plot_dpi
-            }
+            "output": {
+                "dir_path": config.dir_path,
+                "save_plots": config.save_plots,
+                "plot_dpi": config.plot_dpi,
+            },
         }
 
         # Add ms_loading only if num_antennas is set
         if config.num_antennas is not None:
-            config_dict['ms_loading'] = {
-                'num_antennas': config.num_antennas,
-                'data_mode': config.data_mode
+            config_dict["ms_loading"] = {
+                "num_antennas": config.num_antennas,
+                "data_mode": config.data_mode,
             }
 
         # Write YAML
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
-
 
     @staticmethod
     def create_default_config(output_path: str):
