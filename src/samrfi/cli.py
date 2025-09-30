@@ -10,6 +10,33 @@ from samrfi.data import MSLoader, Preprocessor
 from .training.sam2_trainer import SAM2Trainer
 from .config.config_loader import ConfigLoader, TrainingConfig
 from .inference import RFIPredictor
+from .data_generation.synthetic_generator import SyntheticDataGenerator
+from .data_generation.ms_generator import MSDataGenerator
+
+
+def generate_data_command(args):
+    """Execute data generation command"""
+    print("="*60)
+    print("SAM-RFI Data Generation")
+    print("="*60)
+
+    if args.source == 'synthetic':
+        print("\nGenerating synthetic dataset...")
+        generator = SyntheticDataGenerator(args.config)
+        generator.generate(output_dir=args.output)
+    elif args.source == 'ms':
+        print("\nGenerating dataset from Measurement Set...")
+        generator = MSDataGenerator(args.config)
+        generator.generate(output_dir=args.output)
+    else:
+        raise ValueError(f"Unknown source: {args.source}")
+
+    print("\n" + "="*60)
+    print("Data Generation Complete!")
+    print("="*60)
+    print(f"Output directory: {args.output}")
+    print(f"  exact_masks/ - Perfect ground truth")
+    print(f"  mad_masks/ - MAD-based masks")
 
 
 def train_command(args):
@@ -179,17 +206,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create default config
-  samrfi create-config --output my_config.yaml
+  # Generate synthetic dataset
+  samrfi generate-data --source synthetic --config configs/synthetic_train_4k.yaml --output ./datasets/train_4k
+
+  # Generate dataset from MS
+  samrfi generate-data --source ms --config configs/ms_data.yaml --output ./datasets/my_ms_data
 
   # Train with pre-generated dataset
-  samrfi train --config my_config.yaml --dataset ./datasets/my_dataset
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks
 
-  # Train with custom settings
-  samrfi train --config my_config.yaml --dataset ./datasets/my_dataset --device cpu
-
-  # Validate config
-  samrfi validate-config --config my_config.yaml
+  # Train with validation
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks --validation-dataset ./datasets/val_1k/exact_masks
 
   # Predict (single pass)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
@@ -200,6 +227,13 @@ Examples:
     )
 
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Generate data command
+    generate_parser = subparsers.add_parser('generate-data', help='Generate training dataset from MS or synthetic')
+    generate_parser.add_argument('--source', required=True, choices=['synthetic', 'ms'],
+                                 help='Data source: synthetic or ms')
+    generate_parser.add_argument('--config', required=True, help='Path to YAML configuration file')
+    generate_parser.add_argument('--output', required=True, help='Output directory for generated dataset')
 
     # Train command
     train_parser = subparsers.add_parser('train', help='Train SAM2 model on RFI data')
@@ -247,7 +281,10 @@ Examples:
 
     # Execute command
     try:
-        if args.command == 'train':
+        if args.command == 'generate-data':
+            generate_data_command(args)
+            return 0
+        elif args.command == 'train':
             train_command(args)
             return 0
         elif args.command == 'create-config':
