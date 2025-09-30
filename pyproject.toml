@@ -1,0 +1,121 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "samrfi"
+version = "2.0.0"
+description = "SAM2-based Radio Frequency Interference (RFI) detection and flagging for radio astronomy"
+readme = "README.md"
+authors = [
+    {name = "Derod Deal", email = "dealderod@gmail.com"},
+    {name = "Preshanth Jagannathan", email = "pjaganna@nrao.edu"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+
+# Core dependencies (CPU-only, minimal)
+dependencies = [
+    "numpy>=1.26.0",
+    "scipy>=1.10.0",
+    "pandas>=2.2.0",
+    "pillow>=9.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "matplotlib>=3.7.0",
+    "datasets>=2.10.0",
+    "patchify>=0.2.3",
+    "scikit-image>=0.20.0",
+]
+
+[project.optional-dependencies]
+# CUDA-enabled PyTorch (for GPU training)
+cuda = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "monai>=1.3.0",
+]
+
+# CASA tools for MS handling (always needed)
+casa = [
+    "casatools>=6.5.0",
+    "casatasks>=6.5.0",
+]
+
+# Development dependencies (includes CUDA + CASA)
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "ipython>=8.0.0",
+    "jupyter>=1.0.0",
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "monai>=1.3.0",
+    "casatools>=6.5.0",
+    "casatasks>=6.5.0",
+]
+
+# All dependencies (same as dev)
+all = [
+    "samrfi[dev]",
+]
+
+[project.scripts]
+samrfi = "samrfi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/preshanth/SAM-RFI"
+Documentation = "https://sam-rfi.readthedocs.io"
+Repository = "https://github.com/preshanth/SAM-RFI"
+"Bug Tracker" = "https://github.com/preshanth/SAM-RFI/issues"
+
+[tool.setuptools]
+packages = ["samrfi", "samrfi.data", "samrfi.training", "samrfi.config", "samrfi.data_generation", "samrfi.inference"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+samrfi = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

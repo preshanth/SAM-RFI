@@ -1,0 +1,30 @@
+# SAM2 Default Training Configuration for SAM-RFI
+
+model:
+  checkpoint: large  # Options: tiny, small, base_plus, large
+  freeze_encoders: true  # Only train mask decoder
+
+training:
+  num_epochs: 5
+  batch_size: 4
+  learning_rate: 1.0e-5
+  weight_decay: 0.0
+  device: cuda  # Options: cuda, cpu
+
+dataset:
+  stretch: SQRT  # Options: SQRT, LOG10
+  flag_sigma: 5
+  patch_method: patchify
+  patch_size: 128
+  num_patches: null  # null = use all patches
+  apply_stretching: true
+  custom_flag: true
+
+output:
+  dir_path: ./samrfi_data
+  save_plots: true
+  plot_dpi: 300
+
+ms_loading:
+  num_antennas: 1
+  data_mode: DATA
