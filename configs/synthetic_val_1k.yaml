@@ -3,8 +3,8 @@
 
 synthetic:
   num_samples: 1000
-  num_channels: 2048
-  num_times: 512
+  num_channels: 1024  # Square shape for SAM2 native resolution
+  num_times: 1024     # Square shape for SAM2 native resolution
 
   # Physical scales (milli-Jansky and Jansky)
   noise_mjy: 1.0                 # 1 mJy noise
@@ -42,4 +42,16 @@ processing:
   flag_sigma: 5
 
   # Patch size for training
-  patch_size: 128
+  # - Set to image size (1024) to disable patching (use full waterfall)
+  # - Set smaller (e.g., 128, 256, 512) to subdivide into patches
+  patch_size: 1024
+
+  # Parallelization: Number of worker processes for preprocessing
+  # - Speeds up patchification and MAD flag generation
+  # - Options:
+  #   - positive integer: number of worker processes to use
+  #   - 0 or null: sequential processing (useful for debugging)
+  #   - -1: use all available CPU cores
+  # - Default: 4 (modest, safe for most systems)
+  # - Recommended: Set to (total_cores - 2) to leave headroom for system
+  num_workers: 4

@@ -166,6 +166,7 @@ class SyntheticDataGenerator:
                 num_patches=proc_config.get("num_patches", None),
                 normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
                 normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                num_workers=proc_config.get("num_workers", 4),
             )
             dataset_exact_list.append(batch_dataset_exact)
 
@@ -179,6 +180,7 @@ class SyntheticDataGenerator:
                 num_patches=proc_config.get("num_patches", None),
                 normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
                 normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                num_workers=proc_config.get("num_workers", 4),
             )
             dataset_mad_list.append(batch_dataset_mad)
 

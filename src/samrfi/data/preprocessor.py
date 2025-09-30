@@ -10,6 +10,52 @@ from patchify import patchify
 from datasets import Dataset
 from PIL import Image
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+from functools import partial
+
+
+# Standalone functions for multiprocessing (must be picklable)
+def _patchify_single_waterfall(waterfall, patch_size):
+    """
+    Patchify a single waterfall into patches.
+
+    Args:
+        waterfall: 2D array (channels, times)
+        patch_size: Size of square patches
+
+    Returns:
+        List of patches from this waterfall
+    """
+    patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+    # Extract patches
+    patch_list = []
+    for i in range(patches.shape[0]):
+        for j in range(patches.shape[1]):
+            patch_list.append(patches[i, j])
+
+    return patch_list
+
+
+def _compute_mad_flag_single_patch(patch, sigma):
+    """
+    Compute MAD-based flag for a single patch.
+
+    Args:
+        patch: 2D array (patch_size, patch_size)
+        sigma: Threshold in units of MAD
+
+    Returns:
+        Boolean flag array
+    """
+    mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
+    median = np.nanmedian(patch)
+
+    upper_thresh = median + (mad * sigma)
+    lower_thresh = median - (mad * sigma)
+
+    flag = (patch > upper_thresh) | (patch < lower_thresh)
+    return flag
 
 
 class Preprocessor:
@@ -80,6 +126,7 @@ class Preprocessor:
         num_patches=None,
         normalize_before_stretch=True,
         normalize_after_stretch=False,
+        num_workers=4,
     ):
         """
         Create HuggingFace Dataset from waterfall data.
@@ -92,6 +139,7 @@ class Preprocessor:
             num_patches: Limit number of patches (default: all)
             normalize_before_stretch: Divide by median before stretching (default True)
             normalize_after_stretch: Divide by median after stretching (default False)
+            num_workers: Number of parallel workers for preprocessing (0 for sequential, -1 for all cores, default 4)
 
         Returns:
             HuggingFace Dataset with 'image' and 'label' fields
@@ -102,6 +150,7 @@ class Preprocessor:
         print(f"  Normalize before stretch: {normalize_before_stretch}")
         print(f"  Stretch: {stretch if stretch else 'None'}")
         print(f"  Normalize after stretch: {normalize_after_stretch}")
+        print(f"  Parallel workers: {num_workers if num_workers else 'sequential'}")
 
         # Step 1: Augmentation (4-way rotation)
         print("  [1/7] Applying 4-way rotation augmentation...")
@@ -113,10 +162,22 @@ class Preprocessor:
         else:
             augmented_flags = None
 
-        # Step 2: Patchify
-        print(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
-        self.patches = self._create_patches(augmented_data, patch_size)
-        print(f"    Created {len(self.patches)} patches")
+        # Step 2: Patchify (or skip if patch_size >= image dimensions)
+        waterfall_shape = augmented_data[0].shape
+        if patch_size >= min(waterfall_shape):
+            # Skip patching - use full waterfalls
+            print(f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})...")
+            self.patches = np.array(augmented_data)
+            if augmented_flags is not None:
+                augmented_flags = np.array(augmented_flags)
+            print(f"    Using {len(self.patches)} full waterfalls")
+        else:
+            # Apply patching
+            print(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
+            self.patches = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
+            if augmented_flags is not None:
+                augmented_flags = self._create_patches(augmented_flags, patch_size, num_workers=num_workers)
+            print(f"    Created {len(self.patches)} patches")
 
         # Step 3: Normalize before stretch (optional)
         if normalize_before_stretch:
@@ -143,10 +204,11 @@ class Preprocessor:
         # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
         if use_custom_flags and augmented_flags is not None:
             print("  [6/7] Using custom flags (respecting incoming flags)...")
-            self.patch_flags = self._create_patches(augmented_flags, patch_size)
+            # Flags already patchified (or converted to array) in Step 2
+            self.patch_flags = augmented_flags
         else:
             print(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
-            self.patch_flags = self._generate_mad_flags(self.patches, flag_sigma)
+            self.patch_flags = self._generate_mad_flags(self.patches, flag_sigma, num_workers=num_workers)
 
         print(f"    Flag patches: {self.patch_flags.shape}")
 
@@ -210,27 +272,39 @@ class Preprocessor:
 
         return augmented
 
-    def _create_patches(self, data_list, patch_size):
+    def _create_patches(self, data_list, patch_size, num_workers=None):
         """
         Create patches from list of 2D arrays.
 
         Args:
             data_list: List of 2D arrays
             patch_size: Size of square patches
+            num_workers: Number of parallel workers (None/0 for sequential, -1 for all cores)
 
         Returns:
             Array of patches, shape (num_patches, patch_size, patch_size)
         """
-        all_patches = []
+        if num_workers and num_workers != 0:
+            # Parallel processing
+            n_workers = cpu_count() if num_workers == -1 else num_workers
 
-        for waterfall in data_list:
-            # Patchify this waterfall
-            patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+            with Pool(n_workers) as pool:
+                patch_func = partial(_patchify_single_waterfall, patch_size=patch_size)
+                results = pool.map(patch_func, data_list)
 
-            # Extract patches
-            for i in range(patches.shape[0]):
-                for j in range(patches.shape[1]):
-                    all_patches.append(patches[i, j])
+            # Flatten results
+            all_patches = [patch for waterfall_patches in results for patch in waterfall_patches]
+        else:
+            # Sequential processing (original code)
+            all_patches = []
+            for waterfall in data_list:
+                # Patchify this waterfall
+                patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+                # Extract patches
+                for i in range(patches.shape[0]):
+                    for j in range(patches.shape[1]):
+                        all_patches.append(patches[i, j])
 
         return np.array(all_patches)
 
@@ -292,28 +366,38 @@ class Preprocessor:
 
         return np.array(stretched)
 
-    def _generate_mad_flags(self, patches, sigma):
+    def _generate_mad_flags(self, patches, sigma, num_workers=None):
         """
         Generate flags using MAD (Median Absolute Deviation).
 
         Args:
             patches: Array of patches
             sigma: Threshold in units of MAD
+            num_workers: Number of parallel workers (None/0 for sequential, -1 for all cores)
 
         Returns:
             Boolean flag array
         """
-        flags = []
+        if num_workers and num_workers != 0:
+            # Parallel processing
+            n_workers = cpu_count() if num_workers == -1 else num_workers
 
-        for patch in patches:
-            mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
-            median = np.nanmedian(patch)
+            with Pool(n_workers) as pool:
+                flag_func = partial(_compute_mad_flag_single_patch, sigma=sigma)
+                flags = pool.map(flag_func, patches)
+        else:
+            # Sequential processing (original code)
+            flags = []
 
-            upper_thresh = median + (mad * sigma)
-            lower_thresh = median - (mad * sigma)
+            for patch in patches:
+                mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
+                median = np.nanmedian(patch)
 
-            flag = (patch > upper_thresh) | (patch < lower_thresh)
-            flags.append(flag)
+                upper_thresh = median + (mad * sigma)
+                lower_thresh = median - (mad * sigma)
+
+                flag = (patch > upper_thresh) | (patch < lower_thresh)
+                flags.append(flag)
 
         return np.array(flags, dtype=bool)
 

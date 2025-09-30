@@ -90,6 +90,7 @@ class MSDataGenerator:
             num_patches=proc_config.get("num_patches", None),
             normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
             normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+            num_workers=proc_config.get("num_workers", 4),
         )
 
         num_patches = len(dataset)
