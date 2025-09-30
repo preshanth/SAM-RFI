@@ -43,6 +43,7 @@ cuda = [
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "monai>=1.3.0",
+    "nvidia-ml-py3>=7.352.0",  # pynvml for GPU monitoring
 ]
 
 # CASA tools for MS handling (always needed)
@@ -63,6 +64,7 @@ dev = [
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "monai>=1.3.0",
+    "nvidia-ml-py3>=7.352.0",
     "casatools>=6.5.0",
     "casatasks>=6.5.0",
 ]
