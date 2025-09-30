@@ -102,73 +102,104 @@ class SyntheticDataGenerator:
         pol_corr = synth_config.get("polarization_correlation", 0.8)
         print(f"Polarization correlation: {pol_corr}")
 
-        # Generate samples
+        # Generate samples in batches to avoid memory exhaustion
         print(f"\n[1/5] Generating {num_samples} synthetic samples...")
 
-        all_waterfalls = []
-        all_exact_masks = []
-        rfi_parameters = []
+        batch_size = 100  # Process 100 samples at a time
+        num_batches = (num_samples + batch_size - 1) // batch_size
 
-        for i in tqdm(range(num_samples), desc="Generating samples"):
-            waterfall, exact_mask, rfi_params = self._generate_single_sample(
-                num_channels=num_channels,
-                num_times=num_times,
-                noise_level=noise_level,
-                rfi_power_min=rfi_power_min,
-                rfi_power_max=rfi_power_max,
-                rfi_config=rfi_config,
-                enable_bandpass=enable_bandpass,
-                bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
-                pol_corr=pol_corr,
-                synth_config=synth_config,
+        all_rfi_parameters = []
+        dataset_exact_list = []
+        dataset_mad_list = []
+        total_rfi_flags = 0
+        total_pixels = 0
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, num_samples)
+            batch_samples = end_idx - start_idx
+
+            print(f"\n  Processing batch {batch_idx + 1}/{num_batches} (samples {start_idx}-{end_idx})...")
+
+            batch_waterfalls = []
+            batch_exact_masks = []
+
+            for i in tqdm(range(batch_samples), desc=f"Batch {batch_idx + 1}/{num_batches}"):
+                waterfall, exact_mask, rfi_params = self._generate_single_sample(
+                    num_channels=num_channels,
+                    num_times=num_times,
+                    noise_level=noise_level,
+                    rfi_power_min=rfi_power_min,
+                    rfi_power_max=rfi_power_max,
+                    rfi_config=rfi_config,
+                    enable_bandpass=enable_bandpass,
+                    bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
+                    pol_corr=pol_corr,
+                    synth_config=synth_config,
+                )
+
+                batch_waterfalls.append(waterfall)
+                batch_exact_masks.append(exact_mask)
+                all_rfi_parameters.append(rfi_params)
+
+            # Stack this batch
+            batch_data = np.vstack(batch_waterfalls)
+            batch_masks = np.vstack(batch_exact_masks)
+
+            # Track RFI statistics
+            total_rfi_flags += np.sum(batch_masks)
+            total_pixels += batch_masks.size
+
+            print(f"    Batch data shape: {batch_data.shape}")
+            print(f"    Batch masks shape: {batch_masks.shape}")
+
+            # Create datasets for this batch
+            print(f"    Creating datasets for batch {batch_idx + 1}...")
+
+            # Dataset 1: Exact ground truth masks
+            preprocessor_exact = Preprocessor(batch_data, flags=batch_masks)
+            batch_dataset_exact = preprocessor_exact.create_dataset(
+                patch_size=proc_config.get("patch_size", 128),
+                stretch=proc_config.get("stretch", "SQRT"),
+                flag_sigma=proc_config.get("flag_sigma", 5),
+                use_custom_flags=True,
+                num_patches=proc_config.get("num_patches", None),
+                apply_stretching=proc_config.get("apply_stretching", True),
             )
+            dataset_exact_list.append(batch_dataset_exact)
 
-            all_waterfalls.append(waterfall)
-            all_exact_masks.append(exact_mask)
-            rfi_parameters.append(rfi_params)
+            # Dataset 2: MAD-based masks
+            preprocessor_mad = Preprocessor(batch_data, flags=None)
+            batch_dataset_mad = preprocessor_mad.create_dataset(
+                patch_size=proc_config.get("patch_size", 128),
+                stretch=proc_config.get("stretch", "SQRT"),
+                flag_sigma=proc_config.get("flag_sigma", 5),
+                use_custom_flags=False,
+                num_patches=proc_config.get("num_patches", None),
+                apply_stretching=proc_config.get("apply_stretching", True),
+            )
+            dataset_mad_list.append(batch_dataset_mad)
 
-        # Stack all samples
-        combined_data = np.vstack(all_waterfalls)
-        combined_masks = np.vstack(all_exact_masks)
+            print(f"    Batch {batch_idx + 1} processed: {len(batch_dataset_exact)} patches")
 
-        print(f"  Generated data shape: {combined_data.shape}")
-        print(f"  Exact masks shape: {combined_masks.shape}")
+            # Clean up batch arrays
+            del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
+            del preprocessor_exact, preprocessor_mad
 
-        # Create TWO datasets: one with exact masks, one with MAD masks
-        print("\n[2/5] Creating RFI datasets...")
+        # Concatenate all batch datasets
+        print("\n[2/5] Combining batch datasets...")
+        from datasets import concatenate_datasets
 
-        # Dataset 1: Exact ground truth masks
-        print("  (a) Exact ground truth masks...")
-        preprocessor_exact = Preprocessor(combined_data, flags=combined_masks)
-        dataset_exact = preprocessor_exact.create_dataset(
-            patch_size=proc_config.get("patch_size", 128),
-            stretch=proc_config.get("stretch", "SQRT"),
-            flag_sigma=proc_config.get("flag_sigma", 5),
-            use_custom_flags=True,  # Use exact flags!
-            num_patches=proc_config.get("num_patches", None),
-            apply_stretching=proc_config.get("apply_stretching", True),
-        )
-
-        # Dataset 2: MAD-based masks (for flagger comparison)
-        print("  (b) MAD-based masks (for comparison)...")
-        preprocessor_mad = Preprocessor(combined_data, flags=None)  # No flags = use MAD
-        dataset_mad = preprocessor_mad.create_dataset(
-            patch_size=proc_config.get("patch_size", 128),
-            stretch=proc_config.get("stretch", "SQRT"),
-            flag_sigma=proc_config.get("flag_sigma", 5),
-            use_custom_flags=False,  # Generate MAD masks
-            num_patches=proc_config.get("num_patches", None),
-            apply_stretching=proc_config.get("apply_stretching", True),
-        )
+        dataset_exact = concatenate_datasets(dataset_exact_list)
+        dataset_mad = concatenate_datasets(dataset_mad_list)
 
         num_patches = len(dataset_exact)
-        rfi_fraction = np.mean(combined_masks) * 100
+        rfi_fraction = (total_rfi_flags / total_pixels) * 100
 
-        print(f"  Generated {num_patches} patches per dataset")
-        print(
-            f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}"
-        )
-        print(f"  RFI fraction (exact): {rfi_fraction:.2f}%")
+        print(f"  Total samples: {num_samples}")
+        print(f"  Total patches: {num_patches}")
+        print(f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}")
+        print(f"  RFI fraction: {rfi_fraction:.2f}%")
         print(f"  Stretch: {proc_config.get('stretch', 'SQRT')}")
 
         # Save both datasets
@@ -214,6 +245,10 @@ class SyntheticDataGenerator:
             "augmentation": {
                 "rotations": proc_config.get("augmentation", {}).get("rotations", True)
             },
+            "batch_processing": {
+                "batch_size": batch_size,
+                "num_batches": num_batches,
+            },
         }
 
         metadata_path = output_dir / "metadata.json"
@@ -223,7 +258,7 @@ class SyntheticDataGenerator:
         # Save RFI parameters
         rfi_params_path = output_dir / "rfi_parameters.json"
         with open(rfi_params_path, "w") as f:
-            json.dump(rfi_parameters, f, indent=2)
+            json.dump(all_rfi_parameters, f, indent=2)
 
         print(f"  Exact masks dataset: {exact_dir}")
         print(f"  MAD masks dataset: {mad_dir}")
