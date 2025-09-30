@@ -84,11 +84,12 @@ class MSDataGenerator:
 
         dataset = preprocessor.create_dataset(
             patch_size=proc_config.get("patch_size", 128),
-            stretch=proc_config.get("stretch", "SQRT"),
+            stretch=proc_config.get("stretch", None),
             flag_sigma=proc_config.get("flag_sigma", 5),
             use_custom_flags=use_custom_flags,
             num_patches=proc_config.get("num_patches", None),
-            apply_stretching=proc_config.get("apply_stretching", True),
+            normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+            normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
         )
 
         num_patches = len(dataset)

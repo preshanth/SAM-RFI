@@ -19,19 +19,32 @@ class Preprocessor:
     Pipeline:
         1. Four-way rotation augmentation
         2. Patchify into fixed-size patches
-        3. Normalize (divide by median)
-        4. Apply stretch (SQRT or LOG10)
-        5. Generate or use flags
-        6. Remove blank patches
-        7. Shuffle patches
-        8. Create HuggingFace Dataset
+        3. Normalize before stretch (optional, configurable)
+        4. Apply stretch (optional: "SQRT", "LOG10", or None)
+        5. Normalize after stretch (optional, configurable)
+        6. Generate or use flags (flags never transformed, only patchified)
+        7. Remove blank patches
+        8. Shuffle patches
+        9. Create HuggingFace Dataset
 
     Usage:
+        >>> # Real data: normalize, no stretch
         >>> preprocessor = Preprocessor(data, flags=None)
         >>> dataset = preprocessor.create_dataset(
         ...     patch_size=128,
-        ...     stretch='SQRT',
-        ...     flag_sigma=5
+        ...     normalize_before_stretch=True,
+        ...     stretch=None,
+        ...     normalize_after_stretch=False
+        ... )
+
+        >>> # Synthetic data: preserve physical scales
+        >>> preprocessor = Preprocessor(data, flags=exact_masks)
+        >>> dataset = preprocessor.create_dataset(
+        ...     patch_size=128,
+        ...     normalize_before_stretch=False,
+        ...     stretch=None,
+        ...     normalize_after_stretch=False,
+        ...     use_custom_flags=True
         ... )
     """
 
@@ -61,22 +74,24 @@ class Preprocessor:
     def create_dataset(
         self,
         patch_size=128,
-        stretch="SQRT",
+        stretch=None,
         flag_sigma=5,
         use_custom_flags=True,
         num_patches=None,
-        apply_stretching=True,
+        normalize_before_stretch=True,
+        normalize_after_stretch=False,
     ):
         """
         Create HuggingFace Dataset from waterfall data.
 
         Args:
             patch_size: Size of square patches (default 128)
-            stretch: Stretch function ('SQRT' or 'LOG10')
+            stretch: Stretch function - "SQRT", "LOG10", or None (default None)
             flag_sigma: Sigma threshold for MAD flagging (if not using custom flags)
             use_custom_flags: If True and flags provided, use them. Otherwise generate with MAD.
             num_patches: Limit number of patches (default: all)
-            apply_stretching: Whether to apply stretch function
+            normalize_before_stretch: Divide by median before stretching (default True)
+            normalize_after_stretch: Divide by median after stretching (default False)
 
         Returns:
             HuggingFace Dataset with 'image' and 'label' fields
@@ -84,7 +99,9 @@ class Preprocessor:
         print(f"\n[Preprocessor] Creating dataset...")
         print(f"  Input shape: {self.data.shape}")
         print(f"  Patch size: {patch_size}x{patch_size}")
-        print(f"  Stretch: {stretch if apply_stretching else 'None'}")
+        print(f"  Normalize before stretch: {normalize_before_stretch}")
+        print(f"  Stretch: {stretch if stretch else 'None'}")
+        print(f"  Normalize after stretch: {normalize_after_stretch}")
 
         # Step 1: Augmentation (4-way rotation)
         print("  [1/7] Applying 4-way rotation augmentation...")
@@ -101,50 +118,59 @@ class Preprocessor:
         self.patches = self._create_patches(augmented_data, patch_size)
         print(f"    Created {len(self.patches)} patches")
 
-        # Step 3: Normalize (store before stretching for training)
-        print("  [3/7] Normalizing patches...")
-        self.patches_normalized_only = self._normalize(self.patches.copy())
-
-        # Step 4: Apply stretch
-        if apply_stretching:
-            print(f"  [4/7] Applying {stretch} stretch...")
-            self.patches = self._apply_stretch(self.patches, stretch)
+        # Step 3: Normalize before stretch (optional)
+        if normalize_before_stretch:
+            print("  [3/7] Normalizing patches (before stretch)...")
             self.patches = self._normalize(self.patches)
         else:
-            print("  [4/7] Skipping stretch (disabled)")
-            self.patches = self.patches_normalized_only.copy()
+            print("  [3/7] Skipping normalization before stretch")
 
-        # Step 5: Generate or use flags
+        # Step 4: Apply stretch (optional)
+        if stretch:
+            print(f"  [4/7] Applying {stretch} stretch...")
+            self.patches = self._apply_stretch(self.patches, stretch)
+        else:
+            print("  [4/7] Skipping stretch")
+
+        # Step 5: Normalize after stretch (optional)
+        if normalize_after_stretch:
+            print("  [5/7] Normalizing patches (after stretch)...")
+            self.patches = self._normalize(self.patches)
+        else:
+            print("  [5/7] Skipping normalization after stretch")
+
+        # Step 6: Generate or use flags
+        # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
         if use_custom_flags and augmented_flags is not None:
-            print("  [5/7] Using custom flags...")
+            print("  [6/7] Using custom flags (respecting incoming flags)...")
             self.patch_flags = self._create_patches(augmented_flags, patch_size)
         else:
-            print(f"  [5/7] Generating MAD flags (sigma={flag_sigma})...")
+            print(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
             self.patch_flags = self._generate_mad_flags(self.patches, flag_sigma)
 
         print(f"    Flag patches: {self.patch_flags.shape}")
 
-        # Step 6: Remove blank patches
-        print("  [6/7] Removing blank patches...")
+        # Step 7: Remove blank patches
+        print("  [7/7] Removing blank patches...")
         initial_count = len(self.patches)
         self._remove_blank_patches()
         removed = initial_count - len(self.patches)
         print(f"    Removed {removed} blank patches, {len(self.patches)} remain")
 
-        # Step 7: Shuffle
-        print("  [7/7] Shuffling patches...")
+        # Step 8: Shuffle
+        print("  [8/8] Shuffling patches...")
         self._shuffle()
 
         # Limit number of patches if requested
         if num_patches and num_patches < len(self.patches):
-            self.patches_normalized_only = self.patches_normalized_only[:num_patches]
+            self.patches = self.patches[:num_patches]
             self.patch_flags = self.patch_flags[:num_patches]
             print(f"    Limited to {num_patches} patches")
 
         # Create HuggingFace Dataset
         print("\n  Creating HuggingFace Dataset...")
         dataset_dict = {
-            "image": [Image.fromarray(img).convert("RGB") for img in self.patches_normalized_only],
+            "image": [Image.fromarray(img).convert("RGB") for img in self.patches],
             "label": [Image.fromarray(mask) for mask in self.patch_flags],
         }
 
@@ -297,14 +323,12 @@ class Preprocessor:
         has_flags = np.array([flags.any() for flags in self.patch_flags])
 
         # Filter
-        self.patches_normalized_only = self.patches_normalized_only[has_flags]
-        self.patch_flags = self.patch_flags[has_flags]
         self.patches = self.patches[has_flags]
+        self.patch_flags = self.patch_flags[has_flags]
 
     def _shuffle(self):
         """Shuffle patches and flags in unison."""
-        indices = np.random.permutation(len(self.patches_normalized_only))
+        indices = np.random.permutation(len(self.patches))
 
-        self.patches_normalized_only = self.patches_normalized_only[indices]
-        self.patch_flags = self.patch_flags[indices]
         self.patches = self.patches[indices]
+        self.patch_flags = self.patch_flags[indices]

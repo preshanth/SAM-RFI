@@ -160,11 +160,12 @@ class SyntheticDataGenerator:
             preprocessor_exact = Preprocessor(batch_data, flags=batch_masks)
             batch_dataset_exact = preprocessor_exact.create_dataset(
                 patch_size=proc_config.get("patch_size", 128),
-                stretch=proc_config.get("stretch", "SQRT"),
+                stretch=proc_config.get("stretch", None),
                 flag_sigma=proc_config.get("flag_sigma", 5),
                 use_custom_flags=True,
                 num_patches=proc_config.get("num_patches", None),
-                apply_stretching=proc_config.get("apply_stretching", True),
+                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
             )
             dataset_exact_list.append(batch_dataset_exact)
 
@@ -172,11 +173,12 @@ class SyntheticDataGenerator:
             preprocessor_mad = Preprocessor(batch_data, flags=None)
             batch_dataset_mad = preprocessor_mad.create_dataset(
                 patch_size=proc_config.get("patch_size", 128),
-                stretch=proc_config.get("stretch", "SQRT"),
+                stretch=proc_config.get("stretch", None),
                 flag_sigma=proc_config.get("flag_sigma", 5),
                 use_custom_flags=False,
                 num_patches=proc_config.get("num_patches", None),
-                apply_stretching=proc_config.get("apply_stretching", True),
+                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
             )
             dataset_mad_list.append(batch_dataset_mad)
 

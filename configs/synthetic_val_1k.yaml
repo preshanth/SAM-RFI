@@ -25,7 +25,21 @@ synthetic:
   polarization_correlation: 0.8  # Correlated RFI in XX/YY
 
 processing:
-  stretch: SQRT
+  # Normalization: Divide by median to make patches comparable
+  # - Real data: Recommended (accounts for baseline length, system temperature)
+  # - Synthetic data: NOT recommended (destroys physical scales)
+  # - Options: true, false
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+
+  # Stretching: Compress dynamic range (makes RFI look like "objects" for SAM)
+  # - Options: "SQRT" (square root), "LOG10" (logarithmic), null (disabled)
+  # - Real data: May not be needed if normalization handles dynamic range
+  # - Synthetic data: NOT recommended (preserve physical 1 mJy noise, 1000-10000 Jy RFI scales)
+  stretch: null
+
+  # MAD flagging parameters (only used when no exact masks provided)
   flag_sigma: 5
+
+  # Patch size for training
   patch_size: 128
-  apply_stretching: true
