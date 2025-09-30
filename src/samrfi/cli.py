@@ -16,18 +16,39 @@ from .data_generation.ms_generator import MSDataGenerator
 
 def generate_data_command(args):
     """Execute data generation command"""
+    import yaml
+
     print("="*60)
     print("SAM-RFI Data Generation")
     print("="*60)
 
+    # Load config from YAML
+    print(f"\nLoading configuration from: {args.config}")
+    with open(args.config, 'r') as f:
+        config_dict = yaml.safe_load(f)
+
+    # Convert dict to object with attribute access
+    class ConfigObject:
+        def __init__(self, d):
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    setattr(self, key, ConfigObject(value))
+                else:
+                    setattr(self, key, value)
+
+        def get(self, key, default=None):
+            return getattr(self, key, default)
+
+    config = ConfigObject(config_dict)
+
     if args.source == 'synthetic':
         print("\nGenerating synthetic dataset...")
-        generator = SyntheticDataGenerator(args.config)
-        generator.generate(output_dir=args.output)
+        generator = SyntheticDataGenerator(config)
+        generator.generate(output_path=args.output)
     elif args.source == 'ms':
         print("\nGenerating dataset from Measurement Set...")
-        generator = MSDataGenerator(args.config)
-        generator.generate(output_dir=args.output)
+        generator = MSDataGenerator(config)
+        generator.generate(output_path=args.output)
     else:
         raise ValueError(f"Unknown source: {args.source}")
 
