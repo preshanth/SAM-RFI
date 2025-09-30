@@ -1,0 +1,31 @@
+# Synthetic validation data generation - 1000 samples
+# Physically realistic RFI with exact ground truth masks
+
+synthetic:
+  num_samples: 1000
+  num_channels: 2048
+  num_times: 512
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0                 # 1 mJy noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI min
+  rfi_power_max: 10000.0         # 10000 Jy RFI max
+
+  # RFI types per sample (total 7 RFI events per waterfall)
+  rfi_type_counts:
+    narrowband_persistent: 2     # GPS, satellites
+    broadband_persistent: 1      # Power lines
+    frequency_sweep: 1           # Radar (linear/quadratic chirp)
+    narrowband_bursty: 2         # Random pulsed transmitters
+    broadband_bursty: 1          # Lightning, transients
+
+  # Bandpass effects
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
+  polarization_correlation: 0.8  # Correlated RFI in XX/YY
+
+processing:
+  stretch: SQRT
+  flag_sigma: 5
+  patch_size: 128
+  apply_stretching: true

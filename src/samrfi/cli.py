@@ -37,6 +37,8 @@ def train_command(args):
     # Print configuration
     print("\nTraining Configuration:")
     print(f"  Dataset: {args.dataset}")
+    if args.validation_dataset:
+        print(f"  Validation dataset: {args.validation_dataset}")
     print(f"  Model: sam2-{config.model_checkpoint}")
     print(f"  Epochs: {config.num_epochs}")
     print(f"  Batch size: {config.batch_size}")
@@ -47,6 +49,13 @@ def train_command(args):
     print(f"\nLoading dataset from: {args.dataset}")
     dataset = load_from_disk(args.dataset)
     print(f"  Loaded {len(dataset)} training patches")
+
+    # Load validation dataset if provided
+    val_dataset = None
+    if args.validation_dataset:
+        print(f"\nLoading validation dataset from: {args.validation_dataset}")
+        val_dataset = load_from_disk(args.validation_dataset)
+        print(f"  Loaded {len(val_dataset)} validation patches")
 
     # Create minimal wrapper for SAM2Trainer compatibility
     class DatasetWrapper:
@@ -64,14 +73,24 @@ def train_command(args):
         batch_size=config.batch_size,
         sam_checkpoint=config.model_checkpoint,
         learning_rate=config.learning_rate,
-        plot=config.save_plots
+        plot=config.save_plots,
+        validation_dataset=val_dataset
     )
 
     print("\n" + "="*60)
     print("Training Complete!")
     print("="*60)
-    print(f"Final loss: {losses[-1]:.6f}")
-    print(f"Best loss: {min(losses):.6f}")
+
+    # Handle different return formats
+    if isinstance(losses, dict):
+        print(f"Final train loss: {losses['train'][-1]:.6f}")
+        print(f"Best train loss: {min(losses['train']):.6f}")
+        print(f"Final val loss: {losses['val'][-1]:.6f}")
+        print(f"Best val loss: {min(losses['val']):.6f}")
+    else:
+        print(f"Final loss: {losses[-1]:.6f}")
+        print(f"Best loss: {min(losses):.6f}")
+
     print(f"Models saved to: {config.dir_path}/models/")
 
 
@@ -186,6 +205,7 @@ Examples:
     train_parser = subparsers.add_parser('train', help='Train SAM2 model on RFI data')
     train_parser.add_argument('--config', required=True, help='Path to YAML configuration file')
     train_parser.add_argument('--dataset', required=True, help='Path to pre-generated HuggingFace dataset')
+    train_parser.add_argument('--validation-dataset', help='Path to validation dataset (optional)')
     train_parser.add_argument('--device', choices=['cuda', 'cpu'], help='Device to use (overrides config)')
     train_parser.add_argument('--output-dir', help='Output directory (overrides config)')
 
