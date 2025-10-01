@@ -41,6 +41,7 @@ dependencies = [
 # CUDA-enabled PyTorch (for GPU training)
 cuda = [
     "torch>=2.0.0",
+    "torchvision>=0.15.0",  # Required for SAM2 image segmentation models
     "transformers>=4.40.0",
     "monai>=1.3.0",
     "nvidia-ml-py3>=7.352.0",  # pynvml for GPU monitoring
@@ -62,6 +63,7 @@ dev = [
     "ipython>=8.0.0",
     "jupyter>=1.0.0",
     "torch>=2.0.0",
+    "torchvision>=0.15.0",
     "transformers>=4.40.0",
     "monai>=1.3.0",
     "nvidia-ml-py3>=7.352.0",

@@ -79,9 +79,9 @@ class SAMDataset(TorchDataset):
         y_indices, x_indices = np.where(mask > 0)
 
         if len(x_indices) == 0 or len(y_indices) == 0:
-            # Empty mask - return center box
+            # Empty mask - return center box (as Python int)
             H, W = mask.shape
-            return [W // 4, H // 4, 3 * W // 4, 3 * H // 4]
+            return [int(W // 4), int(H // 4), int(3 * W // 4), int(3 * H // 4)]
 
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
@@ -93,4 +93,5 @@ class SAMDataset(TorchDataset):
         y_min = max(0, y_min - np.random.randint(0, 20))
         y_max = min(H, y_max + np.random.randint(0, 20))
 
-        return [x_min, y_min, x_max, y_max]
+        # Convert to native Python int (processor doesn't accept numpy.int64)
+        return [int(x_min), int(y_min), int(x_max), int(y_max)]
