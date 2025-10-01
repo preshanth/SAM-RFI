@@ -107,7 +107,7 @@ class TrainingProfiler:
         # Get profiling config (with defaults if not present)
         profiling_config = getattr(config, 'profiling', {})
         if isinstance(profiling_config, dict):
-            profiling_enabled = profiling_config.get('enabled', True)
+            profiling_enabled = profiling_config.get('enabled', False)
             activities_config = profiling_config.get('activities', {})
             cpu_profiling = activities_config.get('cpu', True) if isinstance(activities_config, dict) else True
             cuda_profiling = activities_config.get('cuda', True) if isinstance(activities_config, dict) else True
