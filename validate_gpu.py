@@ -104,21 +104,58 @@ class TrainingProfiler:
         # Create trainer
         trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path="./validation_output")
 
+        # Get profiling config (with defaults if not present)
+        profiling_config = getattr(config, 'profiling', {})
+        if isinstance(profiling_config, dict):
+            profiling_enabled = profiling_config.get('enabled', True)
+            activities_config = profiling_config.get('activities', {})
+            cpu_profiling = activities_config.get('cpu', True) if isinstance(activities_config, dict) else True
+            cuda_profiling = activities_config.get('cuda', True) if isinstance(activities_config, dict) else True
+            record_shapes = profiling_config.get('record_shapes', False)
+            profile_memory = profiling_config.get('profile_memory', False)
+            with_stack = profiling_config.get('with_stack', False)
+        else:
+            # Handle DataConfig object
+            profiling_enabled = getattr(profiling_config, 'enabled', True)
+            activities_config = getattr(profiling_config, 'activities', {})
+            cpu_profiling = activities_config.get('cpu', True) if hasattr(activities_config, 'get') else True
+            cuda_profiling = activities_config.get('cuda', True) if hasattr(activities_config, 'get') else True
+            record_shapes = getattr(profiling_config, 'record_shapes', False)
+            profile_memory = getattr(profiling_config, 'profile_memory', False)
+            with_stack = getattr(profiling_config, 'with_stack', False)
+
         # Start profiling
         start_time = time.time()
 
         try:
-            # Enable PyTorch profiler
-            with torch.profiler.profile(
-                activities=[
-                    torch.profiler.ProfilerActivity.CPU,
-                    torch.profiler.ProfilerActivity.CUDA,
-                ],
-                record_shapes=True,
-                profile_memory=True,
-                with_stack=True,
-            ) as prof:
+            if profiling_enabled:
+                # Build activities list
+                activities = []
+                if cpu_profiling:
+                    activities.append(torch.profiler.ProfilerActivity.CPU)
+                if cuda_profiling:
+                    activities.append(torch.profiler.ProfilerActivity.CUDA)
 
+                print(f"  Profiling: enabled (shapes={record_shapes}, memory={profile_memory}, stack={with_stack})")
+
+                # Enable PyTorch profiler with config options
+                with torch.profiler.profile(
+                    activities=activities,
+                    record_shapes=record_shapes,
+                    profile_memory=profile_memory,
+                    with_stack=with_stack,
+                ) as prof:
+
+                    losses = trainer.train(
+                        num_epochs=num_epochs,
+                        batch_size=batch_size,
+                        sam_checkpoint=config.model_checkpoint,
+                        learning_rate=config.learning_rate,
+                        plot=False,
+                    )
+            else:
+                print(f"  Profiling: disabled")
+                prof = None
                 losses = trainer.train(
                     num_epochs=num_epochs,
                     batch_size=batch_size,
@@ -143,18 +180,20 @@ class TrainingProfiler:
             duration = end_time - start_time
             samples_per_sec = (len(dataset_wrapper.dataset) * num_epochs) / duration
 
-            # Extract key profiler stats (don't store full table string)
-            key_averages = prof.key_averages()
-            top_cuda_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:5]
-            profiler_stats = [
-                {
-                    "name": op.key,
-                    "cuda_time_ms": op.cuda_time_total / 1000,  # Convert to ms
-                    "cpu_time_ms": op.cpu_time_total / 1000,
-                    "count": op.count,
-                }
-                for op in top_cuda_ops
-            ]
+            # Extract key profiler stats if profiling was enabled
+            profiler_stats = None
+            if profiling_enabled and prof is not None:
+                key_averages = prof.key_averages()
+                top_cuda_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:5]
+                profiler_stats = [
+                    {
+                        "name": op.key,
+                        "cuda_time_ms": op.cuda_time_total / 1000,  # Convert to ms
+                        "cpu_time_ms": op.cpu_time_total / 1000,
+                        "count": op.count,
+                    }
+                    for op in top_cuda_ops
+                ]
 
             result = {
                 "batch_size": batch_size,
@@ -167,7 +206,7 @@ class TrainingProfiler:
                 "memory_after_mb": mem_after,
                 "peak_memory_mb": peak_memory_mb,
                 "gpu_utilization": util,
-                "top_cuda_ops": profiler_stats,  # Store stats, not full table
+                "top_cuda_ops": profiler_stats,  # None if profiling disabled
             }
 
             print(f"\n✓ Success!")
@@ -179,8 +218,9 @@ class TrainingProfiler:
             if util:
                 print(f"  GPU utilization: {util['gpu_pct']}%")
 
-            print("\nTop CUDA operations:")
-            print(key_averages.table(sort_by="cuda_time_total", row_limit=5))
+            if profiling_enabled and prof is not None:
+                print("\nTop CUDA operations:")
+                print(key_averages.table(sort_by="cuda_time_total", row_limit=5))
 
         except RuntimeError as e:
             if "out of memory" in str(e):

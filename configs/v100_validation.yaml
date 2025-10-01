@@ -1,13 +1,13 @@
-# A100 40GB GPU Configuration
-# Optimized for large batch training with profiling
+# V100 32GB GPU Configuration
+# Optimized for validation with profiling
 
 model:
-  checkpoint: large              # Use large model for A100
+  checkpoint: large              # Use large model for V100
   freeze_encoders: true
 
 training:
   num_epochs: 3
-  batch_size: 16                 # Start with 16, validation script will find optimal
+  batch_size: 8                  # Conservative start for V100, validation script will find optimal
   learning_rate: 1.0e-5
   weight_decay: 0.0
   device: cuda
