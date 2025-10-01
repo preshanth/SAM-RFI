@@ -116,7 +116,7 @@ class TrainingProfiler:
             with_stack = profiling_config.get('with_stack', False)
         else:
             # Handle DataConfig object
-            profiling_enabled = getattr(profiling_config, 'enabled', True)
+            profiling_enabled = getattr(profiling_config, 'enabled', False)
             activities_config = getattr(profiling_config, 'activities', {})
             cpu_profiling = activities_config.get('cpu', True) if hasattr(activities_config, 'get') else True
             cuda_profiling = activities_config.get('cuda', True) if hasattr(activities_config, 'get') else True
