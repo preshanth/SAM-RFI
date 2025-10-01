@@ -21,7 +21,7 @@ dataset:
 profiling:
   enabled: true                  # Master switch - disable profiling entirely
   activities:
-    cpu: true                    # Profile CPU operations
+    cpu: false                   # Profile CPU operations (accumulates in RAM)
     cuda: true                   # Profile CUDA operations
   record_shapes: false           # Record tensor shapes (memory cost)
   profile_memory: false          # Track memory allocations (HIGH memory cost)

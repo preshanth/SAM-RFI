@@ -4,10 +4,11 @@ Mirrors the working SAM1 training approach
 """
 
 import os
+import gc
+import time
 from pathlib import Path
 from datetime import datetime
 from statistics import mean
-from tqdm import tqdm
 
 import torch
 from torch.nn.functional import interpolate
@@ -21,6 +22,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from samrfi.data import SAMDataset
+
+
+def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=None):
+    """
+    Log training progress without TQDM overhead.
+
+    Logs every 100 batches or at completion to avoid excessive output.
+    """
+    if batch_idx % 100 == 0 or batch_idx == total_batches:
+        elapsed = time.time() - start_time
+        rate = batch_idx / elapsed if elapsed > 0 else 0
+        eta_sec = (total_batches - batch_idx) / rate if rate > 0 else 0
+
+        loss_str = f", Loss: {current_loss:.6f}" if current_loss is not None else ""
+        print(f"{prefix}[{batch_idx}/{total_batches}] "
+              f"Rate: {rate:.1f} batch/s, ETA: {eta_sec/60:.1f}m{loss_str}")
 
 
 class SAM2Trainer:
@@ -147,7 +164,11 @@ class SAM2Trainer:
             model.train()
             epoch_train_losses = []
 
-            for batch in tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]"):
+            total_batches = len(train_dataloader)
+            epoch_start_time = time.time()
+            print(f"\nEpoch {epoch+1}/{num_epochs} [Train]: Starting {total_batches} batches")
+
+            for batch_idx, batch in enumerate(train_dataloader, 1):
                 # Forward pass
                 outputs = model(
                     pixel_values=batch["pixel_values"].to(self.device),
@@ -180,7 +201,21 @@ class SAM2Trainer:
                 loss.backward()
                 optimizer.step()
 
-                epoch_train_losses.append(loss.item())
+                # Extract loss value
+                loss_value = loss.item()
+                epoch_train_losses.append(loss_value)
+
+                # CRITICAL: Explicit cleanup to prevent memory accumulation
+                # Safe to delete after optimizer.step() - gradients stored in parameter.grad
+                del outputs, predicted_masks, ground_truth_masks, ground_truth_masks_resized, loss, batch
+
+                # Clear CUDA cache periodically to prevent fragmentation
+                if batch_idx % 100 == 0:
+                    torch.cuda.empty_cache()
+
+                # Log progress
+                _log_progress(batch_idx, total_batches, epoch_start_time,
+                            f"Epoch {epoch+1}/{num_epochs} [Train] ", loss_value)
 
             # Calculate mean training loss
             epoch_mean_train_loss = mean(epoch_train_losses)
@@ -192,8 +227,12 @@ class SAM2Trainer:
                 model.eval()
                 epoch_val_losses = []
 
+                total_val_batches = len(val_dataloader)
+                val_start_time = time.time()
+                print(f"\nEpoch {epoch+1}/{num_epochs} [Val]: Starting {total_val_batches} batches")
+
                 with torch.no_grad():
-                    for batch in tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]"):
+                    for batch_idx, batch in enumerate(val_dataloader, 1):
                         outputs = model(
                             pixel_values=batch["pixel_values"].to(self.device),
                             input_boxes=batch["input_boxes"].to(self.device),
@@ -215,7 +254,19 @@ class SAM2Trainer:
                         )
 
                         loss = seg_loss(predicted_masks, ground_truth_masks_resized)
-                        epoch_val_losses.append(loss.item())
+                        loss_value = loss.item()
+                        epoch_val_losses.append(loss_value)
+
+                        # CRITICAL: Explicit cleanup (same as training)
+                        del outputs, predicted_masks, ground_truth_masks, ground_truth_masks_resized, loss, batch
+
+                        # Clear CUDA cache periodically
+                        if batch_idx % 100 == 0:
+                            torch.cuda.empty_cache()
+
+                        # Log progress
+                        _log_progress(batch_idx, total_val_batches, val_start_time,
+                                    f"Epoch {epoch+1}/{num_epochs} [Val] ", loss_value)
 
                 epoch_val_loss = mean(epoch_val_losses)
                 val_losses.append(epoch_val_loss)
@@ -225,6 +276,10 @@ class SAM2Trainer:
             if epoch_val_loss is not None:
                 log_msg += f" | Val loss: {epoch_val_loss:.6f}"
             print(log_msg)
+
+            # Force garbage collection at end of epoch
+            gc.collect()
+            torch.cuda.empty_cache()
 
         self.ave_meanloss = train_losses
         self.val_losses = val_losses if val_losses else None

@@ -345,8 +345,9 @@ def main():
                 "patch_method": "patchify",
                 "patch_size": config.patch_size,
             }
-            # Mock patched_data_norm_only for plotting
-            self.patched_data_norm_only = np.zeros((len(ds), config.patch_size, config.patch_size))
+            # Use real dataset for length (only used in plot titles via len())
+            # No need to create 53GB fake array when we have real data
+            self.patched_data_norm_only = ds
 
     dataset_wrapper = DatasetWrapper(dataset)
 
