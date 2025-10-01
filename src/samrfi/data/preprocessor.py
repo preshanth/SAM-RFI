@@ -42,12 +42,16 @@ def _compute_mad_flag_single_patch(patch, sigma):
     Compute MAD-based flag for a single patch.
 
     Args:
-        patch: 2D array (patch_size, patch_size)
+        patch: 2D array (patch_size, patch_size), can be complex
         sigma: Threshold in units of MAD
 
     Returns:
         Boolean flag array
     """
+    # Handle complex data by using magnitude
+    if np.iscomplexobj(patch):
+        patch = np.abs(patch)
+
     mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
     median = np.nanmedian(patch)
 
@@ -179,26 +183,34 @@ class Preprocessor:
                 augmented_flags = self._create_patches(augmented_flags, patch_size, num_workers=num_workers)
             print(f"    Created {len(self.patches)} patches")
 
-        # Step 3: Normalize before stretch (optional)
-        if normalize_before_stretch:
-            print("  [3/7] Normalizing patches (before stretch)...")
-            self.patches = self._normalize(self.patches)
-        else:
-            print("  [3/7] Skipping normalization before stretch")
+        # Check if data is complex
+        is_complex = np.iscomplexobj(self.patches[0]) if len(self.patches) > 0 else False
 
-        # Step 4: Apply stretch (optional)
-        if stretch:
-            print(f"  [4/7] Applying {stretch} stretch...")
-            self.patches = self._apply_stretch(self.patches, stretch)
+        if is_complex:
+            print("  [3/7] Complex data detected - skipping normalization (will extract channels)")
+            print("  [4/7] Skipping stretch (using gradient/log_amp/phase channels)")
+            print("  [5/7] Skipping normalization (channels normalized independently)")
         else:
-            print("  [4/7] Skipping stretch")
+            # Step 3: Normalize before stretch (optional, real data only)
+            if normalize_before_stretch:
+                print("  [3/7] Normalizing patches (before stretch)...")
+                self.patches = self._normalize(self.patches)
+            else:
+                print("  [3/7] Skipping normalization before stretch")
 
-        # Step 5: Normalize after stretch (optional)
-        if normalize_after_stretch:
-            print("  [5/7] Normalizing patches (after stretch)...")
-            self.patches = self._normalize(self.patches)
-        else:
-            print("  [5/7] Skipping normalization after stretch")
+            # Step 4: Apply stretch (optional, real data only)
+            if stretch:
+                print(f"  [4/7] Applying {stretch} stretch...")
+                self.patches = self._apply_stretch(self.patches, stretch)
+            else:
+                print("  [4/7] Skipping stretch")
+
+            # Step 5: Normalize after stretch (optional, real data only)
+            if normalize_after_stretch:
+                print("  [5/7] Normalizing patches (after stretch)...")
+                self.patches = self._normalize(self.patches)
+            else:
+                print("  [5/7] Skipping normalization after stretch")
 
         # Step 6: Generate or use flags
         # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
@@ -231,13 +243,30 @@ class Preprocessor:
 
         # Create HuggingFace Dataset
         print("\n  Creating HuggingFace Dataset...")
+        print(f"    Extracting 3-channel representations (gradient, log_amp, phase)...")
+
+        # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
+        images_3ch = []
+        for patch in self.patches:
+            if np.iscomplexobj(patch):
+                # Complex data: extract gradient, log_amp, phase
+                img_3ch = self._extract_channels_from_complex(patch)
+            else:
+                # Real data: fallback to amplitude-based channels
+                img_3ch = self._extract_channels_from_real(patch)
+
+            # Convert to float32 and ensure proper range [0, 1]
+            img_3ch = img_3ch.astype(np.float32)
+            images_3ch.append(img_3ch)
+
         dataset_dict = {
-            "image": [Image.fromarray(img).convert("RGB") for img in self.patches],
+            "image": images_3ch,  # Numpy arrays (H, W, 3) in [0,1] range
             "label": [Image.fromarray(mask) for mask in self.patch_flags],
         }
 
         self.dataset = Dataset.from_dict(dataset_dict)
         print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
+        print(f"    Image format: numpy float32 (H, W, 3), channels=[gradient, log_amp, phase]")
 
         return self.dataset
 
@@ -308,6 +337,85 @@ class Preprocessor:
 
         return np.array(all_patches)
 
+    def _extract_channels_from_complex(self, complex_data):
+        """
+        Extract 3 channels (gradient, log_amp, phase) from complex visibility data.
+        This makes RFI edges pop for SAM2.
+
+        Args:
+            complex_data: Complex array (H, W)
+
+        Returns:
+            3-channel array (H, W, 3) with [gradient, log_amp, phase]
+        """
+        # Extract amplitude (log scale)
+        amplitude = np.abs(complex_data)
+        log_amp = np.log10(amplitude + 1e-10)
+
+        # Extract phase [-π, π]
+        phase = np.angle(complex_data)
+
+        # Compute spatial gradient magnitude from log amplitude
+        time_deriv = np.zeros_like(log_amp)
+        freq_deriv = np.zeros_like(log_amp)
+
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)   # Time derivative
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)   # Frequency derivative
+
+        gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
+
+        # Normalize each channel to [0, 1] independently (preserves relative DR)
+        def normalize_channel(data):
+            data_min, data_max = np.nanmin(data), np.nanmax(data)
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+
+        gradient_norm = normalize_channel(gradient)
+        log_amp_norm = normalize_channel(log_amp)
+        phase_norm = (phase + np.pi) / (2 * np.pi)  # Phase already bounded, map to [0,1]
+
+        # Stack as (H, W, 3) - [gradient, log_amp, phase]
+        return np.stack([gradient_norm, log_amp_norm, phase_norm], axis=-1)
+
+    def _extract_channels_from_real(self, real_data):
+        """
+        Extract 3 channels from real-valued data (fallback for non-complex data).
+        Uses amplitude-based approximations.
+
+        Args:
+            real_data: Real array (H, W)
+
+        Returns:
+            3-channel array (H, W, 3) with [gradient, log_amp, zeros]
+        """
+        # Use absolute value as amplitude proxy
+        amplitude = np.abs(real_data)
+        log_amp = np.log10(amplitude + 1e-10)
+
+        # Compute spatial gradient
+        time_deriv = np.zeros_like(log_amp)
+        freq_deriv = np.zeros_like(log_amp)
+
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)
+
+        gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
+
+        # Normalize
+        def normalize_channel(data):
+            data_min, data_max = np.nanmin(data), np.nanmax(data)
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+
+        gradient_norm = normalize_channel(gradient)
+        log_amp_norm = normalize_channel(log_amp)
+        phase_zeros = np.zeros_like(log_amp)  # No phase info for real data
+
+        # Stack as (H, W, 3) - [gradient, log_amp, zero_phase]
+        return np.stack([gradient_norm, log_amp_norm, phase_zeros], axis=-1)
+
     def _normalize(self, patches):
         """
         Normalize patches by dividing by median.
@@ -321,6 +429,10 @@ class Preprocessor:
         normalized = []
 
         for patch in patches:
+            # Handle complex data (take magnitude before normalization)
+            if np.iscomplexobj(patch):
+                patch = np.abs(patch)
+
             median = np.nanmedian(patch)
             if median > 0:
                 normalized_patch = patch / median

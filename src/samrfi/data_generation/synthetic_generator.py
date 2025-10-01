@@ -388,19 +388,31 @@ class SyntheticDataGenerator:
         # Combine clean + RFI
         combined = baseline + rfi_signal
 
-        # Create 4 polarizations with correlation
-        pol1 = combined.copy()
-        pol2 = (
+        # Create 4 polarizations with correlation (COMPLEX for phase extraction)
+        # Add random phase to create complex visibilities
+        pol1_real = combined.copy()
+        pol1_phase = np.random.uniform(0, 2 * np.pi, combined.shape)
+        pol1 = pol1_real * np.exp(1j * pol1_phase)
+
+        pol2_real = (
             pol_corr * rfi_signal
             + (1 - pol_corr) * np.random.normal(0, noise_level * 0.1, rfi_signal.shape)
             + baseline
         )
-        pol3 = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
-        pol4 = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
+        pol2_phase = np.random.uniform(0, 2 * np.pi, pol2_real.shape)
+        pol2 = pol2_real * np.exp(1j * pol2_phase)
+
+        pol3_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
+        pol3_phase = np.random.uniform(0, 2 * np.pi, pol3_real.shape)
+        pol3 = pol3_real * np.exp(1j * pol3_phase)
+
+        pol4_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
+        pol4_phase = np.random.uniform(0, 2 * np.pi, pol4_real.shape)
+        pol4 = pol4_real * np.exp(1j * pol4_phase)
 
         waterfall = np.stack([pol1, pol2, pol3, pol4], axis=0)[
             np.newaxis, ...
-        ]  # (1, 4, channels, times)
+        ]  # (1, 4, channels, times) - COMPLEX
 
         # Mask for all polarizations (RFI appears in XX and YY but correlated)
         mask_pol1 = rfi_mask.copy()

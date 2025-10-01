@@ -19,7 +19,7 @@ dataset:
   apply_stretching: true
 
 profiling:
-  enabled: true                  # Master switch - disable profiling entirely
+  enabled: false                 # Master switch - disable profiling entirely
   activities:
     cpu: false                   # Profile CPU operations (accumulates in RAM)
     cuda: true                   # Profile CUDA operations
