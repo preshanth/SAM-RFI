@@ -83,7 +83,9 @@ class GPUMonitor:
             if torch.cuda.is_available():
                 return torch.cuda.get_device_name(0)
             return "Unknown"
-        return pynvml.nvmlDeviceGetName(self.handle)
+        name = pynvml.nvmlDeviceGetName(self.handle)
+        # pynvml returns bytes, convert to string
+        return name.decode() if isinstance(name, bytes) else name
 
     def cleanup(self):
         if self.has_nvml:
@@ -339,15 +341,37 @@ class TrainingProfiler:
             print("\n✗ No successful batch sizes found!")
             return None
 
+    def _sanitize_for_json(self, obj):
+        """Recursively convert any non-JSON-serializable types to safe types"""
+        if obj is None:
+            return None
+        elif isinstance(obj, bytes):
+            return obj.decode()
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {k: self._sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._sanitize_for_json(item) for item in obj]
+        else:
+            return obj
+
     def generate_report(self, output_path="validation_report.json"):
         """Generate JSON report"""
         device_name = self.monitor.get_device_name()
         mem_info = self.monitor.get_memory_info()
 
+        # Get CUDA version, handle bytes or None
+        cuda_version = torch.version.cuda
+        if isinstance(cuda_version, bytes):
+            cuda_version = cuda_version.decode()
+
         report = {
             "device": device_name,
             "total_memory_mb": mem_info["total_mb"] if mem_info else None,
-            "cuda_version": torch.version.cuda,
+            "cuda_version": cuda_version,
             "pytorch_version": torch.__version__,
             "results": self.results,
             "summary": {
@@ -355,6 +379,9 @@ class TrainingProfiler:
                 "failed_batch_sizes": [r["batch_size"] for r in self.results if not r["success"]],
             },
         }
+
+        # Sanitize entire report to catch any JSON serialization issues
+        report = self._sanitize_for_json(report)
 
         with open(output_path, "w") as f:
             json.dump(report, f, indent=2)
