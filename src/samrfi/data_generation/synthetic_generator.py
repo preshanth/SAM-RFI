@@ -105,7 +105,7 @@ class SyntheticDataGenerator:
         # Generate samples in batches to avoid memory exhaustion
         print(f"\n[1/5] Generating {num_samples} synthetic samples...")
 
-        batch_size = 100  # Process 100 samples at a time
+        batch_size = 50  # Process 50 samples at a time (reduced for 1024x1024 full resolution)
         num_batches = (num_samples + batch_size - 1) // batch_size
 
         all_rfi_parameters = []
