@@ -16,6 +16,7 @@ import json
 import torch
 import numpy as np
 from datasets import load_from_disk
+import psutil
 
 # GPU profiling
 try:
@@ -29,6 +30,15 @@ except:
 
 from samrfi.training.sam2_trainer import SAM2Trainer
 from samrfi.config.config_loader import ConfigLoader
+
+
+def print_memory_usage(label=""):
+    """Print current CPU RAM usage for debugging memory leaks"""
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    mem_mb = mem_info.rss / 1024 / 1024
+    mem_pct = psutil.virtual_memory().percent
+    print(f"  [MEMORY {label}] CPU RAM: {mem_mb:.0f} MB ({mem_pct:.1f}% system)")
 
 
 class GPUMonitor:
@@ -93,10 +103,22 @@ class TrainingProfiler:
         print(f"Profiling batch_size={batch_size}")
         print(f"{'='*80}")
 
-        # Clear cache
+        # Validate dataset is not empty
+        if not hasattr(dataset_wrapper, 'dataset') or len(dataset_wrapper.dataset) == 0:
+            raise ValueError("Dataset is empty or invalid - cannot profile training")
+
+        # Clear cache and force synchronization
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
+
+        # Explicit garbage collection before starting
+        import gc
+        gc.collect()
+
+        # Monitor memory at start
+        print_memory_usage("START")
 
         # Get initial memory
         mem_before = self.monitor.get_memory_info()
@@ -152,6 +174,7 @@ class TrainingProfiler:
                         sam_checkpoint=config.model_checkpoint,
                         learning_rate=config.learning_rate,
                         plot=False,
+                        save_model=False,  # Skip model saving during validation
                     )
             else:
                 print(f"  Profiling: disabled")
@@ -162,9 +185,13 @@ class TrainingProfiler:
                     sam_checkpoint=config.model_checkpoint,
                     learning_rate=config.learning_rate,
                     plot=False,
+                    save_model=False,  # Skip model saving during validation
                 )
 
             end_time = time.time()
+
+            # Monitor memory after training
+            print_memory_usage("AFTER TRAINING")
 
             # Get final memory
             mem_after = self.monitor.get_memory_info()
@@ -178,22 +205,52 @@ class TrainingProfiler:
 
             # Calculate metrics
             duration = end_time - start_time
-            samples_per_sec = (len(dataset_wrapper.dataset) * num_epochs) / duration
+            samples_per_sec = (len(dataset_wrapper.dataset) * num_epochs) / duration if duration > 0 else 0
 
             # Extract key profiler stats if profiling was enabled
             profiler_stats = None
             if profiling_enabled and prof is not None:
                 key_averages = prof.key_averages()
-                top_cuda_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:5]
-                profiler_stats = [
-                    {
-                        "name": op.key,
-                        "cuda_time_ms": op.cuda_time_total / 1000,  # Convert to ms
-                        "cpu_time_ms": op.cpu_time_total / 1000,
-                        "count": op.count,
-                    }
-                    for op in top_cuda_ops
-                ]
+                # Validate profiler has data before processing
+                if key_averages and len(key_averages) > 0:
+                    top_cuda_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:5]
+                    profiler_stats = [
+                        {
+                            "name": op.key.decode() if isinstance(op.key, bytes) else op.key,
+                            "cuda_time_ms": float(op.cuda_time_total / 1000),  # Convert to ms
+                            "cpu_time_ms": float(op.cpu_time_total / 1000),
+                            "count": int(op.count),
+                        }
+                        for op in top_cuda_ops
+                    ]
+
+            # Handle losses being dict (with validation) or list (training only)
+            # Validate losses is not None or empty
+            if losses is None:
+                final_loss = None
+            elif isinstance(losses, dict):
+                final_loss = losses["train"][-1] if losses.get("train") and len(losses["train"]) > 0 else None
+            else:
+                final_loss = losses[-1] if len(losses) > 0 else None
+
+            # CRITICAL: Delete model and trainer immediately to prevent memory spike
+            # This must happen BEFORE building result dict
+            del trainer
+            if profiling_enabled and prof is not None:
+                del prof
+
+            # Force CUDA synchronization and cleanup
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+
+            # Aggressive garbage collection
+            import gc
+            gc.collect()
+            gc.collect()
+
+            # Monitor memory after cleanup
+            print_memory_usage("AFTER CLEANUP")
 
             result = {
                 "batch_size": batch_size,
@@ -201,7 +258,7 @@ class TrainingProfiler:
                 "success": True,
                 "duration_sec": duration,
                 "samples_per_sec": samples_per_sec,
-                "final_loss": losses[-1],
+                "final_loss": final_loss,
                 "memory_before_mb": mem_before,
                 "memory_after_mb": mem_after,
                 "peak_memory_mb": peak_memory_mb,
@@ -236,12 +293,20 @@ class TrainingProfiler:
 
         self.results.append(result)
 
-        # Explicit cleanup to prevent memory accumulation between batch size tests
-        del trainer
+        # Additional cleanup (trainer/prof already deleted in success path, but handle error cases)
+        # Force synchronization and aggressive cleanup
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
+        # Final garbage collection
         import gc
         gc.collect()
+        gc.collect()  # Call twice for circular references
+
+        # Monitor memory at end
+        print_memory_usage("END")
 
         return result
 

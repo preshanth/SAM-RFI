@@ -84,6 +84,7 @@ class SAM2Trainer:
         model_path=None,
         trained_model_path=None,
         validation_dataset=None,
+        save_model=True,
     ):
         """
         Train SAM2 model on RFI dataset
@@ -97,6 +98,7 @@ class SAM2Trainer:
             model_path: Path to pretrained model to resume from
             trained_model_path: Path to save trained model
             validation_dataset: Optional HuggingFace dataset for validation
+            save_model: Whether to save model checkpoint (default: True, set False for validation)
         """
 
         # Map checkpoint names to HuggingFace model IDs
@@ -284,8 +286,9 @@ class SAM2Trainer:
         self.ave_meanloss = train_losses
         self.val_losses = val_losses if val_losses else None
 
-        # Save model
-        self._save_model(model, sam_checkpoint, num_epochs, trained_model_path)
+        # Save model (skip during validation to save memory)
+        if save_model:
+            self._save_model(model, sam_checkpoint, num_epochs, trained_model_path)
 
         # Plot loss curve
         if plot:
