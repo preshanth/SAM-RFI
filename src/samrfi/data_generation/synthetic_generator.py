@@ -190,12 +190,24 @@ class SyntheticDataGenerator:
             del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
             del preprocessor_exact, preprocessor_mad
 
-        # Concatenate all batch datasets
+        # Concatenate all batch datasets (numpy concatenation - much faster!)
         print("\n[2/5] Combining batch datasets...")
-        from datasets import concatenate_datasets
 
-        dataset_exact = concatenate_datasets(dataset_exact_list)
-        dataset_mad = concatenate_datasets(dataset_mad_list)
+        all_images_exact = np.concatenate([d.images for d in dataset_exact_list])
+        all_labels_exact = np.concatenate([d.labels for d in dataset_exact_list])
+        all_images_mad = np.concatenate([d.images for d in dataset_mad_list])
+        all_labels_mad = np.concatenate([d.labels for d in dataset_mad_list])
+
+        # Merge metadata from first batch
+        from samrfi.data.numpy_dataset import NumpyDataset
+
+        metadata_exact = dataset_exact_list[0].metadata.copy() if dataset_exact_list else {}
+        metadata_exact['num_batches'] = len(dataset_exact_list)
+        metadata_mad = dataset_mad_list[0].metadata.copy() if dataset_mad_list else {}
+        metadata_mad['num_batches'] = len(dataset_mad_list)
+
+        dataset_exact = NumpyDataset(all_images_exact, all_labels_exact, metadata_exact)
+        dataset_mad = NumpyDataset(all_images_mad, all_labels_mad, metadata_mad)
 
         num_patches = len(dataset_exact)
         rfi_fraction = (total_rfi_flags / total_pixels) * 100
@@ -211,15 +223,13 @@ class SyntheticDataGenerator:
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save exact mask dataset
-        exact_dir = output_dir / "exact_masks"
-        exact_dir.mkdir(exist_ok=True)
-        dataset_exact.save_to_disk(str(exact_dir))
+        # Save exact mask dataset as .npz
+        exact_path = output_dir / "exact_masks.npz"
+        dataset_exact.save_to_disk(exact_path)
 
-        # Save MAD mask dataset
-        mad_dir = output_dir / "mad_masks"
-        mad_dir.mkdir(exist_ok=True)
-        dataset_mad.save_to_disk(str(mad_dir))
+        # Save MAD mask dataset as .npz
+        mad_path = output_dir / "mad_masks.npz"
+        dataset_mad.save_to_disk(mad_path)
 
         # Save metadata
         metadata = {
@@ -264,8 +274,8 @@ class SyntheticDataGenerator:
         with open(rfi_params_path, "w") as f:
             json.dump(all_rfi_parameters, f, indent=2)
 
-        print(f"  Exact masks dataset: {exact_dir}")
-        print(f"  MAD masks dataset: {mad_dir}")
+        print(f"  Exact masks dataset: {exact_path}")
+        print(f"  MAD masks dataset: {mad_path}")
         print(f"  Metadata saved to: {metadata_path}")
         print(f"  RFI parameters saved to: {rfi_params_path}")
 
@@ -280,7 +290,7 @@ class SyntheticDataGenerator:
         print(
             f"  Mask shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)} (exact binary)"
         )
-        print(f"  Format: HuggingFace Dataset")
+        print(f"  Format: Numpy (.npz compressed)")
 
         print("\n[5/5] Validation:")
         print(f"  ✓ TWO datasets generated: exact masks + MAD masks")

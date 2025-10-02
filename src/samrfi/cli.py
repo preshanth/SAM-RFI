@@ -12,6 +12,7 @@ from .config.config_loader import ConfigLoader, TrainingConfig, DataConfig
 from .inference import RFIPredictor
 from .data_generation.synthetic_generator import SyntheticDataGenerator
 from .data_generation.ms_generator import MSDataGenerator
+from .data.numpy_dataset import NumpyDataset
 
 
 def generate_data_command(args):
@@ -43,9 +44,22 @@ def generate_data_command(args):
     print(f"  mad_masks/ - MAD-based masks")
 
 
+def load_dataset(path):
+    """Load dataset from either .npz (numpy) or HF format"""
+    path = Path(path)
+
+    if path.suffix == '.npz':
+        print(f"  Loading NumpyDataset from {path}")
+        return NumpyDataset.load_from_disk(path)
+    else:
+        # Assume HF dataset directory (backward compatibility)
+        from datasets import load_from_disk
+        print(f"  Loading HuggingFace Dataset from {path}")
+        return load_from_disk(path)
+
+
 def train_command(args):
     """Execute training command on pre-generated dataset"""
-    from datasets import load_from_disk
 
     print("=" * 60)
     print("SAM-RFI SAM2 Training")
@@ -78,14 +92,14 @@ def train_command(args):
 
     # Load dataset
     print(f"\nLoading dataset from: {args.dataset}")
-    dataset = load_from_disk(args.dataset)
+    dataset = load_dataset(args.dataset)
     print(f"  Loaded {len(dataset)} training patches")
 
     # Load validation dataset if provided
     val_dataset = None
     if args.validation_dataset:
         print(f"\nLoading validation dataset from: {args.validation_dataset}")
-        val_dataset = load_from_disk(args.validation_dataset)
+        val_dataset = load_dataset(args.validation_dataset)
         print(f"  Loaded {len(val_dataset)} validation patches")
 
     # Create minimal wrapper for SAM2Trainer compatibility
@@ -155,6 +169,37 @@ def validate_config_command(args):
         return 1
 
 
+def publish_dataset_command(args):
+    """Publish numpy dataset to HuggingFace Hub"""
+    from .data.hf_dataset_wrapper import HFDatasetWrapper
+
+    print("=" * 60)
+    print("SAM-RFI Dataset Publishing")
+    print("=" * 60)
+
+    # Load numpy dataset
+    print(f"\nLoading numpy dataset from {args.input}")
+    numpy_dataset = NumpyDataset.load_from_disk(args.input)
+    print(f"  {numpy_dataset}")
+
+    # Convert to HF format
+    print(f"\nConverting to HuggingFace Dataset format...")
+    hf_dataset = HFDatasetWrapper.from_numpy(numpy_dataset, batch_size=args.batch_size)
+
+    # Push to hub
+    print(f"\nPushing to HuggingFace Hub: {args.repo_id}")
+    hf_dataset.push_to_hub(
+        args.repo_id,
+        private=args.private,
+        token=args.token
+    )
+
+    print("\n" + "=" * 60)
+    print("✓ Dataset Published!")
+    print("=" * 60)
+    print(f"URL: https://huggingface.co/datasets/{args.repo_id}")
+
+
 def predict_command(args):
     """Execute prediction command"""
     print("=" * 60)
@@ -216,11 +261,14 @@ Examples:
   # Generate dataset from MS
   samrfi generate-data --source ms --config configs/ms_data.yaml --output ./datasets/my_ms_data
 
-  # Train with pre-generated dataset
-  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks
+  # Train with pre-generated dataset (.npz format)
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.npz
 
   # Train with validation
-  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks --validation-dataset ./datasets/val_1k/exact_masks
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.npz --validation-dataset ./datasets/val_1k/exact_masks.npz
+
+  # Publish dataset to HuggingFace Hub
+  samrfi publish --input ./datasets/train_4k/exact_masks.npz --repo-id username/sam-rfi-dataset
 
   # Predict (single pass)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
@@ -248,9 +296,9 @@ Examples:
     train_parser = subparsers.add_parser("train", help="Train SAM2 model on RFI data")
     train_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
     train_parser.add_argument(
-        "--dataset", required=True, help="Path to pre-generated HuggingFace dataset"
+        "--dataset", required=True, help="Path to pre-generated dataset (.npz or HF format)"
     )
-    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (optional)")
+    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (.npz or HF format, optional)")
     train_parser.add_argument(
         "--device", choices=["cuda", "cpu"], help="Device to use (overrides config)"
     )
@@ -265,6 +313,14 @@ Examples:
     # Validate config command
     validate_parser = subparsers.add_parser("validate-config", help="Validate configuration file")
     validate_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
+
+    # Publish command
+    publish_parser = subparsers.add_parser("publish", help="Publish dataset to HuggingFace Hub")
+    publish_parser.add_argument("--input", required=True, help="Path to .npz dataset")
+    publish_parser.add_argument("--repo-id", required=True, help="HuggingFace repo ID (username/dataset-name)")
+    publish_parser.add_argument("--private", action="store_true", help="Make dataset private")
+    publish_parser.add_argument("--token", help="HuggingFace token (or set HF_TOKEN env var)")
+    publish_parser.add_argument("--batch-size", type=int, default=50, help="Batch size for conversion (default: 50)")
 
     # Predict command
     predict_parser = subparsers.add_parser("predict", help="Apply trained model to flag RFI")
@@ -327,6 +383,9 @@ Examples:
             return 0
         elif args.command == "validate-config":
             return validate_config_command(args)
+        elif args.command == "publish":
+            publish_dataset_command(args)
+            return 0
         elif args.command == "predict":
             predict_command(args)
             return 0

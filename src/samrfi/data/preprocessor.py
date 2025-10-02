@@ -7,11 +7,10 @@ Clean rewrite of RFIDataset preprocessing pipeline.
 import numpy as np
 from scipy import stats
 from patchify import patchify
-from datasets import Dataset
-from PIL import Image
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from functools import partial
+from .numpy_dataset import NumpyDataset
 
 
 # Standalone functions for multiprocessing (must be picklable)
@@ -241,8 +240,8 @@ class Preprocessor:
             self.patch_flags = self.patch_flags[:num_patches]
             print(f"    Limited to {num_patches} patches")
 
-        # Create HuggingFace Dataset
-        print("\n  Creating HuggingFace Dataset...")
+        # Create NumpyDataset
+        print("\n  Creating NumpyDataset...")
         print(f"    Extracting 3-channel representations (gradient, log_amp, phase)...")
 
         # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
@@ -259,14 +258,23 @@ class Preprocessor:
             img_3ch = img_3ch.astype(np.float32)
             images_3ch.append(img_3ch)
 
-        dataset_dict = {
-            "image": images_3ch,  # Numpy arrays (H, W, 3) in [0,1] range
-            "label": [Image.fromarray(mask) for mask in self.patch_flags],
+        # Convert lists to numpy arrays
+        images_array = np.array(images_3ch, dtype=np.float32)
+        labels_array = np.array(self.patch_flags, dtype=np.uint8)
+
+        # Create metadata
+        metadata = {
+            "patch_size": patch_size,
+            "stretch": stretch,
+            "flag_sigma": flag_sigma,
+            "normalize_before_stretch": normalize_before_stretch,
+            "normalize_after_stretch": normalize_after_stretch,
         }
 
-        self.dataset = Dataset.from_dict(dataset_dict)
+        self.dataset = NumpyDataset(images_array, labels_array, metadata)
         print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
         print(f"    Image format: numpy float32 (H, W, 3), channels=[gradient, log_amp, phase]")
+        print(f"    {self.dataset}")
 
         return self.dataset
 
