@@ -304,12 +304,23 @@ class SAM2Trainer:
 
     def _save_model(self, model, sam_checkpoint, num_epochs, trained_model_path=None):
         """Save trained model with descriptive filename"""
-        params = self.RFIDataset.dataset_params
+        # Extract params from dataset if available (for backward compatibility)
+        params = getattr(self.RFIDataset, 'dataset_params', None)
 
-        stretch = params["stretch"]
-        flag_sigma = params["flag_sigma"]
-        patch_method = params["patch_method"]
-        patch_size = params["patch_size"]
+        if params:
+            # Old format (legacy RFIDataset)
+            stretch = params.get("stretch", "unknown")
+            flag_sigma = params.get("flag_sigma", "unknown")
+            patch_method = params.get("patch_method", "unknown")
+            patch_size = params.get("patch_size", "unknown")
+        else:
+            # New format (NumpyDataset) - extract from metadata if available
+            dataset = self.RFIDataset.dataset
+            metadata = getattr(dataset, 'metadata', {})
+            stretch = metadata.get("stretch", "unknown")
+            flag_sigma = metadata.get("flag_sigma", "unknown")
+            patch_method = "numpy"
+            patch_size = metadata.get("patch_size", "unknown")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = (
@@ -338,12 +349,22 @@ class SAM2Trainer:
 
     def _plot_loss_curve(self, sam_checkpoint, num_epochs):
         """Plot and save training and validation loss curves"""
-        params = self.RFIDataset.dataset_params
+        # Extract params from dataset if available (for backward compatibility)
+        params = getattr(self.RFIDataset, 'dataset_params', None)
 
-        stretch = params["stretch"]
-        flag_sigma = params["flag_sigma"]
-        patch_method = params["patch_method"]
-        patch_size = params["patch_size"]
+        if params:
+            stretch = params.get("stretch", "unknown")
+            flag_sigma = params.get("flag_sigma", "unknown")
+            patch_method = params.get("patch_method", "unknown")
+            patch_size = params.get("patch_size", "unknown")
+        else:
+            # New format (NumpyDataset)
+            dataset = self.RFIDataset.dataset
+            metadata = getattr(dataset, 'metadata', {})
+            stretch = metadata.get("stretch", "unknown")
+            flag_sigma = metadata.get("flag_sigma", "unknown")
+            patch_method = "numpy"
+            patch_size = metadata.get("patch_size", "unknown")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -374,7 +395,10 @@ class SAM2Trainer:
         title = f"SAM2-{sam_checkpoint} Training"
         if self.val_losses:
             title += " and Validation"
-        title += f" | {len(self.RFIDataset.patched_data_norm_only)} patches"
+        # Get number of patches from dataset
+        dataset = self.RFIDataset.dataset
+        num_patches = len(dataset) if hasattr(dataset, '__len__') else "unknown"
+        title += f" | {num_patches} patches"
         ax.set_title(title, fontsize=14)
 
         plt.legend(fontsize=10)

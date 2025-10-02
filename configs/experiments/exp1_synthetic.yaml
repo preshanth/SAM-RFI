@@ -1,0 +1,34 @@
+# Experiment 1: Pure Synthetic Training
+# Goal: Establish baseline performance on clean synthetic data with exact ground truth
+
+experiment:
+  name: "exp1_synthetic"
+  description: "Baseline training on pure synthetic data with exact ground truth masks"
+  output_dir: "./output/exp1_synthetic"
+  save_every_n_epochs: 5  # Save checkpoint every N epochs
+
+data:
+  train_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
+  val_dataset: "./datasets/synthetic_val_1k/exact_masks.npz"
+
+model:
+  checkpoint: "large"  # Options: tiny, small, base_plus, large
+  freeze_encoders: true  # Only train mask decoder
+
+training:
+  num_epochs: 20
+  batch_size: 4
+  learning_rate: 1.0e-5
+  weight_decay: 0.0
+  device: "cuda"  # Options: cuda, cpu
+
+notes: |
+  This experiment trains only on synthetic data to establish:
+  1. Best possible performance (exact ground truth)
+  2. Baseline for comparing real data experiments
+  3. Overfitting behavior (train vs val loss divergence)
+
+  Expected outcome:
+  - Very low train loss (near perfect segmentation)
+  - Low val loss (good generalization within synthetic domain)
+  - May not generalize to real data (test in exp2)
