@@ -264,10 +264,7 @@ class Preprocessor:
             "label": [Image.fromarray(mask) for mask in self.patch_flags],
         }
 
-        # Use smaller writer_batch_size for large images (1024x1024) to avoid PyArrow 2GB limit
-        # Default is 1000, but with 12MB images we need ~50-100 max
-        writer_batch_size = min(100, len(images_3ch))
-        self.dataset = Dataset.from_dict(dataset_dict, writer_batch_size=writer_batch_size)
+        self.dataset = Dataset.from_dict(dataset_dict)
         print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
         print(f"    Image format: numpy float32 (H, W, 3), channels=[gradient, log_amp, phase]")
 
