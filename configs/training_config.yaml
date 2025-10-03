@@ -1,0 +1,21 @@
+# Full training pipeline config
+
+data:
+  # Training dataset
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_4000
+
+  # Validation dataset
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000
+
+  # Which masks to use
+  mask_type: exact_masks  # or mad_masks
+
+training:
+  device: cuda
+  num_epochs: 10
+  batch_size: 16
+  learning_rate: 1.0e-5
+  model_checkpoint: large  # tiny, small, base_plus, or large
+  output_dir: ./training_output

@@ -105,14 +105,22 @@ class SyntheticDataGenerator:
         # Generate samples in batches to avoid memory exhaustion
         print(f"\n[1/5] Generating {num_samples} synthetic samples...")
 
-        batch_size = 50  # Process 50 samples at a time (reduced for 1024x1024 full resolution)
+        batch_size = synth_config.get("generation_batch_size", 50)  # Samples per generation batch
         num_batches = (num_samples + batch_size - 1) // batch_size
+        print(f"Generation batch size: {batch_size} samples/batch ({num_batches} batches)")
+
+        # Initialize BatchWriters for streaming to disk
+        from samrfi.data.numpy_dataset import BatchWriter
+        output_dir = Path(output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=100)
+        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100)
 
         all_rfi_parameters = []
-        dataset_exact_list = []
-        dataset_mad_list = []
         total_rfi_flags = 0
         total_pixels = 0
+        total_patches = 0
 
         for batch_idx in range(num_batches):
             start_idx = batch_idx * batch_size
@@ -168,7 +176,6 @@ class SyntheticDataGenerator:
                 normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
                 num_workers=proc_config.get("num_workers", 4),
             )
-            dataset_exact_list.append(batch_dataset_exact)
 
             # Dataset 2: MAD-based masks
             preprocessor_mad = Preprocessor(batch_data, flags=None)
@@ -182,56 +189,35 @@ class SyntheticDataGenerator:
                 normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
                 num_workers=proc_config.get("num_workers", 4),
             )
-            dataset_mad_list.append(batch_dataset_mad)
 
             print(f"    Batch {batch_idx + 1} processed: {len(batch_dataset_exact)} patches")
+            total_patches += len(batch_dataset_exact)
+
+            # Write to disk immediately (stream to batch files)
+            exact_writer.add_batch(batch_dataset_exact)
+            mad_writer.add_batch(batch_dataset_mad)
 
             # Clean up batch arrays
             del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
             del preprocessor_exact, preprocessor_mad
+            del batch_dataset_exact, batch_dataset_mad
 
-        # Concatenate all batch datasets (numpy concatenation - much faster!)
-        print("\n[2/5] Combining batch datasets...")
+        # Finalize batch writing (flush remaining samples + write metadata)
+        print("\n[2/5] Finalizing batch files...")
+        exact_writer.finalize()
+        mad_writer.finalize()
 
-        all_images_exact = np.concatenate([d.images for d in dataset_exact_list])
-        all_labels_exact = np.concatenate([d.labels for d in dataset_exact_list])
-        all_images_mad = np.concatenate([d.images for d in dataset_mad_list])
-        all_labels_mad = np.concatenate([d.labels for d in dataset_mad_list])
-
-        # Merge metadata from first batch
-        from samrfi.data.numpy_dataset import NumpyDataset
-
-        metadata_exact = dataset_exact_list[0].metadata.copy() if dataset_exact_list else {}
-        metadata_exact['num_batches'] = len(dataset_exact_list)
-        metadata_mad = dataset_mad_list[0].metadata.copy() if dataset_mad_list else {}
-        metadata_mad['num_batches'] = len(dataset_mad_list)
-
-        dataset_exact = NumpyDataset(all_images_exact, all_labels_exact, metadata_exact)
-        dataset_mad = NumpyDataset(all_images_mad, all_labels_mad, metadata_mad)
-
-        num_patches = len(dataset_exact)
+        # Summary
         rfi_fraction = (total_rfi_flags / total_pixels) * 100
-
+        print(f"\n[3/5] Generation summary:")
         print(f"  Total samples: {num_samples}")
-        print(f"  Total patches: {num_patches}")
+        print(f"  Total patches: {total_patches}")
         print(f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}")
         print(f"  RFI fraction: {rfi_fraction:.2f}%")
         print(f"  Stretch: {proc_config.get('stretch', 'SQRT')}")
 
-        # Save both datasets
-        print("\n[3/5] Saving datasets...")
-        output_dir = Path(output_path)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save exact mask dataset as .npz
-        exact_path = output_dir / "exact_masks.npz"
-        dataset_exact.save_to_disk(exact_path)
-
-        # Save MAD mask dataset as .npz
-        mad_path = output_dir / "mad_masks.npz"
-        dataset_mad.save_to_disk(mad_path)
-
-        # Save metadata
+        # Save generation metadata (separate from batch metadata)
+        print("\n[4/5] Saving generation metadata...")
         metadata = {
             "source": "synthetic",
             "physical_parameters": {
@@ -251,7 +237,7 @@ class SyntheticDataGenerator:
                 ),
             },
             "polarization_correlation": pol_corr,
-            "num_patches": num_patches,
+            "num_patches": total_patches,
             "rfi_fraction_percent": float(rfi_fraction),
             "patch_size": proc_config.get("patch_size", 128),
             "stretch": proc_config.get("stretch", "SQRT"),
@@ -265,7 +251,7 @@ class SyntheticDataGenerator:
             },
         }
 
-        metadata_path = output_dir / "metadata.json"
+        metadata_path = output_dir / "generation_metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
@@ -274,15 +260,15 @@ class SyntheticDataGenerator:
         with open(rfi_params_path, "w") as f:
             json.dump(all_rfi_parameters, f, indent=2)
 
-        print(f"  Exact masks dataset: {exact_path}")
-        print(f"  MAD masks dataset: {mad_path}")
-        print(f"  Metadata saved to: {metadata_path}")
-        print(f"  RFI parameters saved to: {rfi_params_path}")
+        print(f"  Exact masks dataset: {output_dir / 'exact_masks'} ({exact_writer.batch_file_idx} batch files)")
+        print(f"  MAD masks dataset: {output_dir / 'mad_masks'} ({mad_writer.batch_file_idx} batch files)")
+        print(f"  Generation metadata: {metadata_path}")
+        print(f"  RFI parameters: {rfi_params_path}")
 
         # Statistics
-        print("\n[4/5] Dataset Statistics:")
+        print("\n[5/5] Dataset Statistics:")
         print(f"  Total waterfall samples: {num_samples}")
-        print(f"  Total patches: {num_patches}")
+        print(f"  Total patches: {total_patches}")
         print(f"  RFI coverage: {rfi_fraction:.2f}%")
         print(
             f"  Image shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}×3 (RGB)"
@@ -290,13 +276,14 @@ class SyntheticDataGenerator:
         print(
             f"  Mask shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)} (exact binary)"
         )
-        print(f"  Format: Numpy (.npz compressed)")
+        print(f"  Format: Batched numpy files (uncompressed .npz)")
 
-        print("\n[5/5] Validation:")
+        print("\n✓ Generation Complete!")
         print(f"  ✓ TWO datasets generated: exact masks + MAD masks")
         print(f"  ✓ Exact ground truth for training")
         print(f"  ✓ MAD masks for flagger comparison")
         print(f"  ✓ Physical noise/RFI scales (~10^6 dynamic range)")
+        print(f"  ✓ Batched format for low-memory training")
         print(f"  ✓ Realistic RFI types (sweeps, bursts, persistent)")
         print(f"  ✓ Frequency sweeps: linear & quadratic")
         if enable_bandpass:

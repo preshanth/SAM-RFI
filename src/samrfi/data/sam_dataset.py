@@ -95,3 +95,81 @@ class SAMDataset(TorchDataset):
 
         # Convert to native Python int (processor doesn't accept numpy.int64)
         return [int(x_min), int(y_min), int(x_max), int(y_max)]
+
+
+class BatchedDataset(TorchDataset):
+    """
+    Loads data from multiple batch files with LRU caching.
+
+    Compatible with SAMDataset wrapper - provides same __getitem__ interface.
+
+    Directory structure:
+        data_dir/
+        ├── batch_000.npz  (images, labels)
+        ├── batch_001.npz
+        ├── ...
+        └── metadata.json
+
+    Args:
+        data_dir: Path to directory containing batch_*.npz files
+        cache_size: Number of batch files to keep in RAM (default: 3)
+    """
+
+    def __init__(self, data_dir, cache_size=3):
+        import json
+        from pathlib import Path
+        from functools import lru_cache
+
+        self.data_dir = Path(data_dir)
+
+        # Load metadata
+        metadata_path = self.data_dir / "metadata.json"
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"metadata.json not found in {self.data_dir}")
+
+        with open(metadata_path) as f:
+            self.metadata = json.load(f)
+
+        self.num_samples = self.metadata['num_samples']
+        self.samples_per_batch = self.metadata['samples_per_batch']
+        self.num_batches = self.metadata['num_batches']
+
+        # LRU cache for batch files
+        self._cache_size = cache_size
+        self._load_batch = lru_cache(maxsize=cache_size)(self._load_batch_uncached)
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        """
+        Get sample by index.
+
+        Returns:
+            dict with 'image' and 'label' keys (compatible with SAMDataset)
+        """
+        batch_num = idx // self.samples_per_batch
+        local_idx = idx % self.samples_per_batch
+
+        # Load batch (from cache or disk)
+        batch = self._load_batch(batch_num)
+
+        return {
+            'image': batch['images'][local_idx],
+            'label': batch['labels'][local_idx]
+        }
+
+    def _load_batch_uncached(self, batch_num):
+        """Load batch file from disk (wrapped by LRU cache)"""
+        batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
+        data = np.load(batch_file)
+        return {
+            'images': data['images'],
+            'labels': data['labels']
+        }
+
+    def __repr__(self):
+        return (f"BatchedDataset(samples={self.num_samples}, "
+                f"batches={self.num_batches}, "
+                f"samples_per_batch={self.samples_per_batch}, "
+                f"cache_size={self._cache_size})")

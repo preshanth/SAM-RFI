@@ -15,7 +15,6 @@ import json
 
 import torch
 import numpy as np
-from datasets import load_from_disk
 import psutil
 
 # GPU profiling
@@ -424,7 +423,8 @@ def main():
 
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
-    dataset = load_from_disk(args.dataset)
+    from samrfi.data import BatchedDataset
+    dataset = BatchedDataset(args.dataset)
     print(f"  Loaded {len(dataset)} samples")
 
     # Create wrapper

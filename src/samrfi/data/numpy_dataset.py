@@ -63,3 +63,114 @@ class NumpyDataset:
         return (f"NumpyDataset(samples={len(self)}, "
                 f"image_shape={self.images.shape[1:]}, "
                 f"size={self.images.nbytes / 1e9:.2f}GB)")
+
+
+class BatchWriter:
+    """
+    Accumulates samples and writes batch files to disk.
+
+    Writes uncompressed .npz files for fast loading during training.
+
+    Usage:
+        writer = BatchWriter(output_dir, samples_per_batch=100)
+        for batch_dataset in generate_batches():
+            writer.add_batch(batch_dataset)
+        writer.finalize()  # Flush remaining + write metadata
+    """
+
+    def __init__(self, output_dir, samples_per_batch=100):
+        """
+        Initialize batch writer.
+
+        Args:
+            output_dir: Directory to write batch files
+            samples_per_batch: Number of samples per batch file
+        """
+        import json
+        from pathlib import Path
+
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.samples_per_batch = samples_per_batch
+        self.accumulated_images = []
+        self.accumulated_labels = []
+        self.batch_file_idx = 0
+        self.total_samples = 0
+
+    def add_batch(self, dataset):
+        """
+        Add samples from a NumpyDataset batch.
+
+        Args:
+            dataset: NumpyDataset instance with .images and .labels
+        """
+        self.accumulated_images.append(dataset.images)
+        self.accumulated_labels.append(dataset.labels)
+
+        # Check if we have enough to write a file
+        current_size = sum(len(img) for img in self.accumulated_images)
+        if current_size >= self.samples_per_batch:
+            self._flush()
+
+    def _flush(self):
+        """Write accumulated data to batch_NNN.npz."""
+        if not self.accumulated_images:
+            return
+
+        import numpy as np
+
+        images = np.concatenate(self.accumulated_images)
+        labels = np.concatenate(self.accumulated_labels)
+
+        # Take exactly samples_per_batch (might have a few extra)
+        num_to_write = min(len(images), self.samples_per_batch)
+        images_to_write = images[:num_to_write]
+        labels_to_write = labels[:num_to_write]
+
+        # Write file (uncompressed for fast loading)
+        batch_file = self.output_dir / f"batch_{self.batch_file_idx:03d}.npz"
+        np.savez(batch_file, images=images_to_write, labels=labels_to_write)
+
+        print(f"  Wrote {batch_file.name}: {num_to_write} samples ({images_to_write.nbytes / 1e9:.2f} GB)")
+
+        # Track remainder if any
+        remainder_images = images[num_to_write:]
+        remainder_labels = labels[num_to_write:]
+
+        if len(remainder_images) > 0:
+            self.accumulated_images = [remainder_images]
+            self.accumulated_labels = [remainder_labels]
+        else:
+            self.accumulated_images = []
+            self.accumulated_labels = []
+
+        self.total_samples += num_to_write
+        self.batch_file_idx += 1
+
+    def finalize(self):
+        """Flush remaining samples and write metadata."""
+        import json
+
+        # Flush any remaining samples
+        if self.accumulated_images:
+            self._flush()
+
+        # Write metadata
+        metadata = {
+            'num_samples': self.total_samples,
+            'samples_per_batch': self.samples_per_batch,
+            'num_batches': self.batch_file_idx,
+            'image_shape': [1024, 1024, 3],
+            'mask_shape': [1024, 1024],
+            'dtype': 'float32'
+        }
+
+        metadata_path = self.output_dir / 'metadata.json'
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        print(f"\nBatch writing complete:")
+        print(f"  Total samples: {self.total_samples}")
+        print(f"  Batch files: {self.batch_file_idx}")
+        print(f"  Metadata: {metadata_path}")
