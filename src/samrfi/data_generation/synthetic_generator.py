@@ -197,6 +197,10 @@ class SyntheticDataGenerator:
             exact_writer.add_batch(batch_dataset_exact)
             mad_writer.add_batch(batch_dataset_mad)
 
+            # Force flush to free memory immediately
+            exact_writer._flush()
+            mad_writer._flush()
+
             # Clean up batch arrays
             del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
             del preprocessor_exact, preprocessor_mad
