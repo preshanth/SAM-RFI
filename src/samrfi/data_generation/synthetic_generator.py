@@ -98,8 +98,10 @@ class SyntheticDataGenerator:
             bandpass_order = synth_config.get("bandpass_polynomial_order", 8)
             print(f"\nBandpass: Enabled ({bandpass_order}th order polynomial rolloff)")
 
-        # Polarization correlation
+        # Polarization configuration
+        num_polarizations = synth_config.get("num_polarizations", 1)
         pol_corr = synth_config.get("polarization_correlation", 0.8)
+        print(f"Number of polarizations: {num_polarizations}")
         print(f"Polarization correlation: {pol_corr}")
 
         # Generate samples in batches to avoid memory exhaustion
@@ -114,8 +116,11 @@ class SyntheticDataGenerator:
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Check if MAD generation is enabled
+        generate_mad = synth_config.get("generate_mad_masks", False)
+
         exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=100)
-        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100)
+        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100) if generate_mad else None
 
         all_rfi_parameters = []
         total_rfi_flags = 0
@@ -142,6 +147,7 @@ class SyntheticDataGenerator:
                     rfi_config=rfi_config,
                     enable_bandpass=enable_bandpass,
                     bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
+                    num_polarizations=num_polarizations,
                     pol_corr=pol_corr,
                     synth_config=synth_config,
                 )
@@ -177,39 +183,39 @@ class SyntheticDataGenerator:
                 num_workers=proc_config.get("num_workers", 4),
             )
 
-            # Dataset 2: MAD-based masks
-            preprocessor_mad = Preprocessor(batch_data, flags=None)
-            batch_dataset_mad = preprocessor_mad.create_dataset(
-                patch_size=proc_config.get("patch_size", 128),
-                stretch=proc_config.get("stretch", None),
-                flag_sigma=proc_config.get("flag_sigma", 5),
-                use_custom_flags=False,
-                num_patches=proc_config.get("num_patches", None),
-                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-                num_workers=proc_config.get("num_workers", 4),
-            )
-
             print(f"    Batch {batch_idx + 1} processed: {len(batch_dataset_exact)} patches")
             total_patches += len(batch_dataset_exact)
 
-            # Write to disk immediately (stream to batch files)
+            # Write exact masks to disk immediately
             exact_writer.add_batch(batch_dataset_exact)
-            mad_writer.add_batch(batch_dataset_mad)
-
-            # Force flush to free memory immediately
             exact_writer._flush()
-            mad_writer._flush()
+
+            # Optional: Generate MAD-based masks
+            if generate_mad:
+                preprocessor_mad = Preprocessor(batch_data, flags=None)
+                batch_dataset_mad = preprocessor_mad.create_dataset(
+                    patch_size=proc_config.get("patch_size", 128),
+                    stretch=proc_config.get("stretch", None),
+                    flag_sigma=proc_config.get("flag_sigma", 5),
+                    use_custom_flags=False,
+                    num_patches=proc_config.get("num_patches", None),
+                    normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                    normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                    num_workers=proc_config.get("num_workers", 4),
+                )
+                mad_writer.add_batch(batch_dataset_mad)
+                mad_writer._flush()
+                del preprocessor_mad, batch_dataset_mad
 
             # Clean up batch arrays
             del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
-            del preprocessor_exact, preprocessor_mad
-            del batch_dataset_exact, batch_dataset_mad
+            del preprocessor_exact, batch_dataset_exact
 
         # Finalize batch writing (flush remaining samples + write metadata)
         print("\n[2/5] Finalizing batch files...")
         exact_writer.finalize()
-        mad_writer.finalize()
+        if generate_mad:
+            mad_writer.finalize()
 
         # Summary
         rfi_fraction = (total_rfi_flags / total_pixels) * 100
@@ -265,7 +271,10 @@ class SyntheticDataGenerator:
             json.dump(all_rfi_parameters, f, indent=2)
 
         print(f"  Exact masks dataset: {output_dir / 'exact_masks'} ({exact_writer.batch_file_idx} batch files)")
-        print(f"  MAD masks dataset: {output_dir / 'mad_masks'} ({mad_writer.batch_file_idx} batch files)")
+        if generate_mad:
+            print(f"  MAD masks dataset: {output_dir / 'mad_masks'} ({mad_writer.batch_file_idx} batch files)")
+        else:
+            print(f"  MAD masks: Skipped (generate_mad_masks=False)")
         print(f"  Generation metadata: {metadata_path}")
         print(f"  RFI parameters: {rfi_params_path}")
 
@@ -283,9 +292,12 @@ class SyntheticDataGenerator:
         print(f"  Format: Batched numpy files (uncompressed .npz)")
 
         print("\n✓ Generation Complete!")
-        print(f"  ✓ TWO datasets generated: exact masks + MAD masks")
+        if generate_mad:
+            print(f"  ✓ TWO datasets generated: exact masks + MAD masks")
+            print(f"  ✓ MAD masks for flagger comparison")
+        else:
+            print(f"  ✓ Dataset generated: exact masks only")
         print(f"  ✓ Exact ground truth for training")
-        print(f"  ✓ MAD masks for flagger comparison")
         print(f"  ✓ Physical noise/RFI scales (~10^6 dynamic range)")
         print(f"  ✓ Batched format for low-memory training")
         print(f"  ✓ Realistic RFI types (sweeps, bursts, persistent)")
@@ -313,6 +325,7 @@ class SyntheticDataGenerator:
         rfi_config,
         enable_bandpass,
         bandpass_order,
+        num_polarizations,
         pol_corr,
         synth_config,
     ):
@@ -320,8 +333,8 @@ class SyntheticDataGenerator:
         Generate a single synthetic sample with exact mask
 
         Returns:
-            waterfall: (1, 4, channels, times) - 4 polarizations
-            exact_mask: (1, 4, channels, times) - binary mask of RFI locations
+            waterfall: (1, num_polarizations, channels, times)
+            exact_mask: (1, num_polarizations, channels, times) - binary mask of RFI locations
             rfi_params: dict of RFI parameters for this sample
         """
         # Create base spectrograph (clean Gaussian noise at mJy scale)
@@ -389,39 +402,37 @@ class SyntheticDataGenerator:
         # Combine clean + RFI
         combined = baseline + rfi_signal
 
-        # Create 4 polarizations with correlation (COMPLEX for phase extraction)
-        # Add random phase to create complex visibilities
-        pol1_real = combined.copy()
-        pol1_phase = np.random.uniform(0, 2 * np.pi, combined.shape)
-        pol1 = pol1_real * np.exp(1j * pol1_phase)
+        # Create polarizations with correlation (COMPLEX for phase extraction)
+        pols = []
+        masks = []
 
-        pol2_real = (
-            pol_corr * rfi_signal
-            + (1 - pol_corr) * np.random.normal(0, noise_level * 0.1, rfi_signal.shape)
-            + baseline
-        )
-        pol2_phase = np.random.uniform(0, 2 * np.pi, pol2_real.shape)
-        pol2 = pol2_real * np.exp(1j * pol2_phase)
+        for pol_idx in range(num_polarizations):
+            if pol_idx == 0:
+                # Pol 1: Full RFI + noise
+                pol_real = combined.copy()
+                mask = rfi_mask.copy()
+            elif pol_idx == 1:
+                # Pol 2: Correlated RFI + noise
+                pol_real = (
+                    pol_corr * rfi_signal
+                    + (1 - pol_corr) * np.random.normal(0, noise_level * 0.1, rfi_signal.shape)
+                    + baseline
+                )
+                mask = rfi_mask.copy()
+            else:
+                # Pol 3+: Noise only (no RFI)
+                pol_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
+                mask = np.zeros_like(rfi_mask)
 
-        pol3_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
-        pol3_phase = np.random.uniform(0, 2 * np.pi, pol3_real.shape)
-        pol3 = pol3_real * np.exp(1j * pol3_phase)
+            # Add random phase for complex visibilities
+            pol_phase = np.random.uniform(0, 2 * np.pi, pol_real.shape)
+            pol = pol_real * np.exp(1j * pol_phase)
 
-        pol4_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
-        pol4_phase = np.random.uniform(0, 2 * np.pi, pol4_real.shape)
-        pol4 = pol4_real * np.exp(1j * pol4_phase)
+            pols.append(pol)
+            masks.append(mask)
 
-        waterfall = np.stack([pol1, pol2, pol3, pol4], axis=0)[
-            np.newaxis, ...
-        ]  # (1, 4, channels, times) - COMPLEX
-
-        # Mask for all polarizations (RFI appears in XX and YY but correlated)
-        mask_pol1 = rfi_mask.copy()
-        mask_pol2 = rfi_mask.copy()  # Correlated
-        mask_pol3 = np.zeros_like(rfi_mask)  # Cross-pols clean
-        mask_pol4 = np.zeros_like(rfi_mask)
-
-        exact_mask = np.stack([mask_pol1, mask_pol2, mask_pol3, mask_pol4], axis=0)[np.newaxis, ...]
+        waterfall = np.stack(pols, axis=0)[np.newaxis, ...]  # (1, num_pols, channels, times)
+        exact_mask = np.stack(masks, axis=0)[np.newaxis, ...]  # (1, num_pols, channels, times)
 
         return waterfall, exact_mask, rfi_params
 

@@ -13,6 +13,8 @@ synthetic:
 
   # Memory management
   generation_batch_size: 10      # Process 10 samples at a time (lower = less RAM)
+  num_polarizations: 1           # Number of polarizations (1 saves 4x memory)
+  generate_mad_masks: false      # Skip MAD flagging (synthetic has exact masks)
 
   # RFI types per sample (total ~46 RFI events per waterfall, targeting ~20% pixel coverage)
   rfi_type_counts:
