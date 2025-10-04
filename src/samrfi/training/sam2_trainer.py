@@ -27,17 +27,14 @@ from samrfi.data import SAMDataset
 def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=None):
     """
     Log training progress without TQDM overhead.
-
-    Logs every 100 batches or at completion to avoid excessive output.
     """
-    if batch_idx % 100 == 0 or batch_idx == total_batches:
-        elapsed = time.time() - start_time
-        rate = batch_idx / elapsed if elapsed > 0 else 0
-        eta_sec = (total_batches - batch_idx) / rate if rate > 0 else 0
+    elapsed = time.time() - start_time
+    rate = batch_idx / elapsed if elapsed > 0 else 0
+    eta_sec = (total_batches - batch_idx) / rate if rate > 0 else 0
 
-        loss_str = f", Loss: {current_loss:.6f}" if current_loss is not None else ""
-        print(f"{prefix}[{batch_idx}/{total_batches}] "
-              f"Rate: {rate:.1f} batch/s, ETA: {eta_sec/60:.1f}m{loss_str}")
+    loss_str = f", Loss: {current_loss:.6f}" if current_loss is not None else ""
+    print(f"{prefix}[{batch_idx}/{total_batches}] "
+          f"Rate: {rate:.1f} batch/s, ETA: {eta_sec/60:.1f}m{loss_str}")
 
 
 class SAM2Trainer:
@@ -80,6 +77,32 @@ class SAM2Trainer:
         batch_size=4,
         sam_checkpoint="large",
         learning_rate=1e-5,
+        # Optimizer settings
+        optimizer='adam',
+        weight_decay=0.0,
+        adam_betas=(0.9, 0.999),
+        adam_eps=1e-8,
+        momentum=0.9,
+        # Loss function settings
+        loss_function='dicece',
+        loss_sigmoid=True,
+        loss_squared_pred=True,
+        loss_reduction='mean',
+        # Model architecture
+        multimask_output=False,
+        freeze_vision_encoder=True,
+        freeze_prompt_encoder=True,
+        # Data augmentation
+        bbox_perturbation=20,
+        # DataLoader settings
+        num_workers=0,
+        prefetch_factor=2,
+        persistent_workers=True,
+        pin_memory=True,
+        # Training optimization
+        log_interval=100,
+        cuda_cache_clear_interval=100,
+        # Output settings
         plot=True,
         model_path=None,
         trained_model_path=None,
@@ -123,33 +146,47 @@ class SAM2Trainer:
         model = Sam2Model.from_pretrained(model_name)
 
         # Create dataset using SAMDataset wrapper
-        train_dataset = SAMDataset(dataset=self.RFIDataset.dataset, processor=processor)
-        train_dataloader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=12,
-            prefetch_factor=2,
-            persistent_workers=True
+        train_dataset = SAMDataset(
+            dataset=self.RFIDataset.dataset,
+            processor=processor,
+            bbox_perturbation=bbox_perturbation
         )
+
+        # Build DataLoader config
+        dataloader_kwargs = {
+            'batch_size': batch_size,
+            'shuffle': True,
+            'num_workers': num_workers,
+            'pin_memory': pin_memory,
+        }
+        # Only add worker-specific settings if using workers
+        if num_workers > 0:
+            dataloader_kwargs['prefetch_factor'] = prefetch_factor
+            dataloader_kwargs['persistent_workers'] = persistent_workers
+
+        train_dataloader = DataLoader(train_dataset, **dataloader_kwargs)
 
         # Create validation dataloader if provided
         val_dataloader = None
         if validation_dataset is not None:
-            val_dataset = SAMDataset(dataset=validation_dataset, processor=processor)
-            val_dataloader = DataLoader(
-                val_dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=12,
-                prefetch_factor=2,
-                persistent_workers=True
+            val_dataset = SAMDataset(
+                dataset=validation_dataset,
+                processor=processor,
+                bbox_perturbation=bbox_perturbation
             )
+
+            # Use same DataLoader config but no shuffle for validation
+            val_kwargs = dataloader_kwargs.copy()
+            val_kwargs['shuffle'] = False
+
+            val_dataloader = DataLoader(val_dataset, **val_kwargs)
             print(f"  Validation samples: {len(validation_dataset)}")
 
-        # Freeze vision encoder and prompt encoder (only train mask decoder)
+        # Freeze layers based on config
         for name, param in model.named_parameters():
-            if name.startswith("vision_encoder") or name.startswith("prompt_encoder"):
+            if freeze_vision_encoder and name.startswith("vision_encoder"):
+                param.requires_grad_(False)
+            if freeze_prompt_encoder and name.startswith("prompt_encoder"):
                 param.requires_grad_(False)
 
         # Load pretrained weights if provided
@@ -157,9 +194,43 @@ class SAM2Trainer:
             print(f"Loading pretrained weights from: {model_path}")
             model.load_state_dict(torch.load(model_path))
 
-        # Setup optimizer and loss
-        optimizer = Adam(model.mask_decoder.parameters(), lr=learning_rate, weight_decay=0)
-        seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction="mean")
+        # Setup optimizer
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+        if optimizer.lower() == 'adam':
+            opt = Adam(trainable_params, lr=learning_rate, weight_decay=weight_decay,
+                      betas=adam_betas, eps=adam_eps)
+        elif optimizer.lower() == 'adamw':
+            from torch.optim import AdamW
+            opt = AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay,
+                       betas=adam_betas, eps=adam_eps)
+        elif optimizer.lower() == 'sgd':
+            from torch.optim import SGD
+            opt = SGD(trainable_params, lr=learning_rate, weight_decay=weight_decay,
+                     momentum=momentum)
+        else:
+            raise ValueError(f"Unknown optimizer: {optimizer}. Use 'adam', 'adamw', or 'sgd'")
+
+        # Setup loss function
+        if loss_function.lower() == 'dicece':
+            seg_loss = monai.losses.DiceCELoss(
+                sigmoid=loss_sigmoid,
+                squared_pred=loss_squared_pred,
+                reduction=loss_reduction
+            )
+        elif loss_function.lower() == 'dice':
+            seg_loss = monai.losses.DiceLoss(
+                sigmoid=loss_sigmoid,
+                squared_pred=loss_squared_pred,
+                reduction=loss_reduction
+            )
+        elif loss_function.lower() == 'ce':
+            from torch.nn import BCEWithLogitsLoss
+            seg_loss = BCEWithLogitsLoss(reduction=loss_reduction)
+        elif loss_function.lower() == 'focal':
+            seg_loss = monai.losses.FocalLoss(reduction=loss_reduction)
+        else:
+            raise ValueError(f"Unknown loss: {loss_function}. Use 'dicece', 'dice', 'ce', or 'focal'")
 
         # Move model to device
         model.to(self.device)
@@ -189,7 +260,7 @@ class SAM2Trainer:
                 outputs = model(
                     pixel_values=batch["pixel_values"].to(self.device),
                     input_boxes=batch["input_boxes"].to(self.device),
-                    multimask_output=False,
+                    multimask_output=multimask_output,
                 )
 
                 # Get predictions and ground truth
@@ -213,9 +284,9 @@ class SAM2Trainer:
                 loss = seg_loss(predicted_masks, ground_truth_masks_resized)
 
                 # Backward pass
-                optimizer.zero_grad()
+                opt.zero_grad()
                 loss.backward()
-                optimizer.step()
+                opt.step()
 
                 # Extract loss value
                 loss_value = loss.item()
@@ -226,12 +297,13 @@ class SAM2Trainer:
                 del outputs, predicted_masks, ground_truth_masks, ground_truth_masks_resized, loss, batch
 
                 # Clear CUDA cache periodically to prevent fragmentation
-                if batch_idx % 100 == 0:
+                if cuda_cache_clear_interval > 0 and batch_idx % cuda_cache_clear_interval == 0:
                     torch.cuda.empty_cache()
 
                 # Log progress
-                _log_progress(batch_idx, total_batches, epoch_start_time,
-                            f"Epoch {epoch+1}/{num_epochs} [Train] ", loss_value)
+                if batch_idx % log_interval == 0 or batch_idx == total_batches:
+                    _log_progress(batch_idx, total_batches, epoch_start_time,
+                                f"Epoch {epoch+1}/{num_epochs} [Train] ", loss_value)
 
             # Calculate mean training loss
             epoch_mean_train_loss = mean(epoch_train_losses)
@@ -252,7 +324,7 @@ class SAM2Trainer:
                         outputs = model(
                             pixel_values=batch["pixel_values"].to(self.device),
                             input_boxes=batch["input_boxes"].to(self.device),
-                            multimask_output=False,
+                            multimask_output=multimask_output,
                         )
 
                         predicted_masks = outputs.pred_masks.squeeze(1)
@@ -277,12 +349,13 @@ class SAM2Trainer:
                         del outputs, predicted_masks, ground_truth_masks, ground_truth_masks_resized, loss, batch
 
                         # Clear CUDA cache periodically
-                        if batch_idx % 100 == 0:
+                        if cuda_cache_clear_interval > 0 and batch_idx % cuda_cache_clear_interval == 0:
                             torch.cuda.empty_cache()
 
                         # Log progress
-                        _log_progress(batch_idx, total_val_batches, val_start_time,
-                                    f"Epoch {epoch+1}/{num_epochs} [Val] ", loss_value)
+                        if batch_idx % log_interval == 0 or batch_idx == total_val_batches:
+                            _log_progress(batch_idx, total_val_batches, val_start_time,
+                                        f"Epoch {epoch+1}/{num_epochs} [Val] ", loss_value)
 
                 epoch_val_loss = mean(epoch_val_losses)
                 val_losses.append(epoch_val_loss)

@@ -19,3 +19,39 @@ training:
   learning_rate: 1.0e-5
   model_checkpoint: large  # tiny, small, base_plus, or large
   output_dir: ./training_output
+
+  # Optimizer settings
+  optimizer: adam          # adam, adamw, sgd
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  momentum: 0.9           # For SGD
+
+  # Loss function settings
+  loss_function: dicece   # dicece, dice, ce, focal
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean    # mean, sum
+
+  # Model architecture settings
+  multimask_output: false  # SAM can output 1 mask (false) or 3 masks (true)
+  freeze_vision_encoder: true
+  freeze_prompt_encoder: true
+
+  # Data augmentation
+  bbox_perturbation: 20   # Random bbox expansion in pixels (0 = no perturbation)
+
+  # DataLoader performance settings
+  num_workers: 4           # Parallel data loading workers (0 = main process only)
+  cache_size: 4            # Number of batch files to cache in RAM per worker
+  prefetch_factor: 2       # Batches to prefetch per worker
+  persistent_workers: true # Keep workers alive between epochs
+  pin_memory: true         # Pin memory for faster GPU transfer
+
+  # Training optimization
+  log_interval: 100        # Log progress every N batches
+  cuda_cache_clear_interval: 100  # Clear CUDA cache every N batches (0 = never)
+
+  # Output settings
+  plot: true              # Save loss curve plots
+  save_model: true        # Save model checkpoints

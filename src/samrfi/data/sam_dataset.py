@@ -23,16 +23,18 @@ class SAMDataset(TorchDataset):
         >>> dataloader = DataLoader(sam_dataset, batch_size=4)
     """
 
-    def __init__(self, dataset, processor):
+    def __init__(self, dataset, processor, bbox_perturbation=20):
         """
         Initialize SAM dataset.
 
         Args:
             dataset: HuggingFace Dataset with 'image' and 'label' fields
             processor: SAM2Processor from transformers
+            bbox_perturbation: Random bbox expansion in pixels (0 = no perturbation)
         """
         self.dataset = dataset
         self.processor = processor
+        self.bbox_perturbation = bbox_perturbation
 
     def __len__(self):
         return len(self.dataset)
@@ -86,12 +88,13 @@ class SAMDataset(TorchDataset):
         x_min, x_max = np.min(x_indices), np.max(x_indices)
         y_min, y_max = np.min(y_indices), np.max(y_indices)
 
-        # Add random perturbation (±20 pixels)
+        # Add random perturbation (configurable)
         H, W = mask.shape
-        x_min = max(0, x_min - np.random.randint(0, 20))
-        x_max = min(W, x_max + np.random.randint(0, 20))
-        y_min = max(0, y_min - np.random.randint(0, 20))
-        y_max = min(H, y_max + np.random.randint(0, 20))
+        if self.bbox_perturbation > 0:
+            x_min = max(0, x_min - np.random.randint(0, self.bbox_perturbation))
+            x_max = min(W, x_max + np.random.randint(0, self.bbox_perturbation))
+            y_min = max(0, y_min - np.random.randint(0, self.bbox_perturbation))
+            y_max = min(H, y_max + np.random.randint(0, self.bbox_perturbation))
 
         # Convert to native Python int (processor doesn't accept numpy.int64)
         return [int(x_min), int(y_min), int(x_max), int(y_max)]

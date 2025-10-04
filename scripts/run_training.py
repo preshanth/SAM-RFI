@@ -73,17 +73,18 @@ def main():
     # Step 3: Train
     print("\n[3/3] Training SAM2...")
 
-    # Load datasets with large cache to keep all batches in RAM
+    # Load datasets
+    cache_size = config['training'].get('cache_size', 3)
     train_path = Path(config['data']['train_dataset']) / config['data']['mask_type']
     print(f"Loading training dataset: {train_path}")
-    train_dataset = BatchedDataset(train_path, cache_size=9999)  # Cache all batches
+    train_dataset = BatchedDataset(train_path, cache_size=cache_size)
     print(f"  {len(train_dataset)} samples")
 
     val_dataset = None
     if 'val_dataset' in config['data']:
         val_path = Path(config['data']['val_dataset']) / config['data']['mask_type']
         print(f"Loading validation dataset: {val_path}")
-        val_dataset = BatchedDataset(val_path, cache_size=9999)  # Cache all batches
+        val_dataset = BatchedDataset(val_path, cache_size=cache_size)
         print(f"  {len(val_dataset)} samples")
 
     # Wrap datasets
@@ -103,14 +104,43 @@ def main():
     print(f"  Learning rate: {config['training']['learning_rate']}")
     print(f"  Model: {config['training']['model_checkpoint']}")
 
+    # Extract training config with defaults
+    train_cfg = config['training']
+
     trainer.train(
-        num_epochs=config['training']['num_epochs'],
-        batch_size=config['training']['batch_size'],
-        sam_checkpoint=config['training']['model_checkpoint'],
-        learning_rate=config['training']['learning_rate'],
+        num_epochs=train_cfg['num_epochs'],
+        batch_size=train_cfg['batch_size'],
+        sam_checkpoint=train_cfg['model_checkpoint'],
+        learning_rate=train_cfg['learning_rate'],
         validation_dataset=val_dataset,
-        plot=True,
-        save_model=True
+        # Optimizer
+        optimizer=train_cfg.get('optimizer', 'adam'),
+        weight_decay=train_cfg.get('weight_decay', 0.0),
+        adam_betas=tuple(train_cfg.get('adam_betas', [0.9, 0.999])),
+        adam_eps=train_cfg.get('adam_eps', 1e-8),
+        momentum=train_cfg.get('momentum', 0.9),
+        # Loss function
+        loss_function=train_cfg.get('loss_function', 'dicece'),
+        loss_sigmoid=train_cfg.get('loss_sigmoid', True),
+        loss_squared_pred=train_cfg.get('loss_squared_pred', True),
+        loss_reduction=train_cfg.get('loss_reduction', 'mean'),
+        # Model architecture
+        multimask_output=train_cfg.get('multimask_output', False),
+        freeze_vision_encoder=train_cfg.get('freeze_vision_encoder', True),
+        freeze_prompt_encoder=train_cfg.get('freeze_prompt_encoder', True),
+        # Data augmentation
+        bbox_perturbation=train_cfg.get('bbox_perturbation', 20),
+        # DataLoader
+        num_workers=train_cfg.get('num_workers', 0),
+        prefetch_factor=train_cfg.get('prefetch_factor', 2),
+        persistent_workers=train_cfg.get('persistent_workers', True),
+        pin_memory=train_cfg.get('pin_memory', True),
+        # Training optimization
+        log_interval=train_cfg.get('log_interval', 100),
+        cuda_cache_clear_interval=train_cfg.get('cuda_cache_clear_interval', 100),
+        # Output
+        plot=train_cfg.get('plot', True),
+        save_model=train_cfg.get('save_model', True)
     )
 
     print("\n✓ Training complete!")
