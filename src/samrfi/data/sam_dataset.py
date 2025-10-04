@@ -23,17 +23,17 @@ class SAMDataset(TorchDataset):
         >>> dataloader = DataLoader(sam_dataset, batch_size=4)
     """
 
-    def __init__(self, dataset, processor, bbox_perturbation=20):
+    def __init__(self, dataset, processor=None, bbox_perturbation=20):
         """
         Initialize SAM dataset.
 
         Args:
             dataset: HuggingFace Dataset with 'image' and 'label' fields
-            processor: SAM2Processor from transformers
+            processor: SAM2Processor from transformers (deprecated - normalization done offline)
             bbox_perturbation: Random bbox expansion in pixels (0 = no perturbation)
         """
         self.dataset = dataset
-        self.processor = processor
+        self.processor = processor  # No longer used - kept for backward compatibility
         self.bbox_perturbation = bbox_perturbation
 
     def __len__(self):
@@ -50,22 +50,24 @@ class SAMDataset(TorchDataset):
                 - input_boxes: Bounding box prompt
         """
         item = self.dataset[idx]
-        image = item["image"]
+        image = item["image"]  # Already normalized with ImageNet stats during generation
         ground_truth_mask = np.array(item["label"])
 
         # Get bounding box from mask
         bbox = self._get_bounding_box(ground_truth_mask)
 
-        # Process image and prompt
-        inputs = self.processor(image, input_boxes=[[bbox]], return_tensors="pt")
+        # Convert to tensors (skip processor - normalization already done offline)
+        # Image is already (H, W, 3) normalized, need (3, H, W) for PyTorch
+        pixel_values = torch.from_numpy(image).permute(2, 0, 1)  # (H,W,3) -> (3,H,W)
 
-        # Remove batch dimension added by processor
-        inputs = {k: v.squeeze(0) for k, v in inputs.items()}
+        # Process bounding boxes to SAM2 format
+        input_boxes = torch.tensor([[bbox]], dtype=torch.float32)
 
-        # Add ground truth mask
-        inputs["ground_truth_mask"] = ground_truth_mask
-
-        return inputs
+        return {
+            "pixel_values": pixel_values,
+            "input_boxes": input_boxes,
+            "ground_truth_mask": ground_truth_mask
+        }
 
     def _get_bounding_box(self, mask):
         """

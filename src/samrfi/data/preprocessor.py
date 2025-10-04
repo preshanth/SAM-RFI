@@ -260,6 +260,11 @@ class Preprocessor:
 
         # Convert lists to numpy arrays
         images_array = np.array(images_3ch, dtype=np.float32)
+
+        # Apply SAM2 ImageNet normalization (preprocess once, not during training)
+        print(f"    Applying SAM2 ImageNet normalization...")
+        images_array = self._apply_sam2_normalization(images_array)
+
         labels_array = np.array(self.patch_flags, dtype=np.uint8)
 
         # Create metadata
@@ -372,7 +377,13 @@ class Preprocessor:
 
         gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
 
-        # Normalize each channel to [0, 1] independently (preserves relative DR)
+        # Normalize channels
+        # Log amplitude: fixed physical scale (preserves absolute intensity across patches)
+        LOG_MIN = -3.0  # log10(1 mJy noise)
+        LOG_MAX = 4.0   # log10(10,000 Jy max RFI)
+        log_amp_norm = np.clip((log_amp - LOG_MIN) / (LOG_MAX - LOG_MIN), 0, 1)
+
+        # Gradient: per-patch normalization (relative feature)
         def normalize_channel(data):
             data_min, data_max = np.nanmin(data), np.nanmax(data)
             if data_max > data_min:
@@ -380,7 +391,6 @@ class Preprocessor:
             return np.zeros_like(data)
 
         gradient_norm = normalize_channel(gradient)
-        log_amp_norm = normalize_channel(log_amp)
         phase_norm = (phase + np.pi) / (2 * np.pi)  # Phase already bounded, map to [0,1]
 
         # Stack as (H, W, 3) - [gradient, log_amp, phase]
@@ -536,3 +546,23 @@ class Preprocessor:
 
         self.patches = self.patches[indices]
         self.patch_flags = self.patch_flags[indices]
+
+    def _apply_sam2_normalization(self, images):
+        """
+        Apply SAM2 ImageNet normalization: (pixel - mean) / std
+
+        SAM2 uses ImageNet stats per channel:
+        - mean = [0.485, 0.456, 0.406]
+        - std = [0.229, 0.224, 0.225]
+
+        Args:
+            images: numpy array (N, H, W, 3) in range [0, 1]
+
+        Returns:
+            Normalized images (N, H, W, 3)
+        """
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+        # Apply: (image - mean) / std
+        return (images - mean) / std
