@@ -124,13 +124,27 @@ class SAM2Trainer:
 
         # Create dataset using SAMDataset wrapper
         train_dataset = SAMDataset(dataset=self.RFIDataset.dataset, processor=processor)
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=12,
+            prefetch_factor=2,
+            persistent_workers=True
+        )
 
         # Create validation dataloader if provided
         val_dataloader = None
         if validation_dataset is not None:
             val_dataset = SAMDataset(dataset=validation_dataset, processor=processor)
-            val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            val_dataloader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=12,
+                prefetch_factor=2,
+                persistent_workers=True
+            )
             print(f"  Validation samples: {len(validation_dataset)}")
 
         # Freeze vision encoder and prompt encoder (only train mask decoder)

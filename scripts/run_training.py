@@ -73,17 +73,17 @@ def main():
     # Step 3: Train
     print("\n[3/3] Training SAM2...")
 
-    # Load datasets
+    # Load datasets with large cache to keep all batches in RAM
     train_path = Path(config['data']['train_dataset']) / config['data']['mask_type']
     print(f"Loading training dataset: {train_path}")
-    train_dataset = BatchedDataset(train_path)
+    train_dataset = BatchedDataset(train_path, cache_size=9999)  # Cache all batches
     print(f"  {len(train_dataset)} samples")
 
     val_dataset = None
     if 'val_dataset' in config['data']:
         val_path = Path(config['data']['val_dataset']) / config['data']['mask_type']
         print(f"Loading validation dataset: {val_path}")
-        val_dataset = BatchedDataset(val_path)
+        val_dataset = BatchedDataset(val_path, cache_size=9999)  # Cache all batches
         print(f"  {len(val_dataset)} samples")
 
     # Wrap datasets
