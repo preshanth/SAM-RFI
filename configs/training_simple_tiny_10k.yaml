@@ -1,0 +1,63 @@
+# Simple SAM2 training - No LoRA, just fine-tune decoder (and optionally encoder)
+# Based on SAM2-UNeXT approach: freeze most, train task-specific layers
+
+data:
+  # Training dataset
+  train_generation_config: configs/synthetic_train_10k.yaml
+  train_dataset: ./datasets/train_10000
+
+  # Validation dataset
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000
+
+  # Which masks to use
+  mask_type: exact_masks  # or mad_masks
+
+training:
+  device: cuda
+  num_epochs: 10
+  batch_size: 4           # Safe for 1080Ti with SAM2-tiny
+  learning_rate: 1.0e-4   # Standard fine-tuning LR
+  model_checkpoint: tiny  # tiny model fits in 1080Ti at native resolution
+  output_dir: ./training_output_simple_tiny_10k
+
+  # Optimizer settings
+  optimizer: adamw         # AdamW for fine-tuning
+  weight_decay: 0.01       # Small weight decay for regularization
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  momentum: 0.9           # For SGD
+
+  # Loss function settings
+  loss_function: dicece   # dicece, dice, ce, focal
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean    # mean, sum
+
+  # Model architecture settings
+  multimask_output: false  # Single mask output
+
+  # Freezing strategy (following SAM2-UNeXT)
+  freeze_vision_encoder: true   # Set false to train encoder too
+  freeze_prompt_encoder: true   # Keep frozen (bboxes don't need training)
+
+  # LoRA settings - DISABLED
+  use_lora: false          # No LoRA - direct fine-tuning
+
+  # Data augmentation
+  bbox_perturbation: 20   # Random bbox expansion in pixels (0 = no perturbation)
+
+  # DataLoader performance settings
+  num_workers: 2           # Parallel data loading workers (0 = main process only)
+  cache_size: 2            # Number of batch files to cache in RAM per worker
+  prefetch_factor: 2       # Batches to prefetch per worker
+  persistent_workers: true # Keep workers alive between epochs
+  pin_memory: true         # Pin memory for faster GPU transfer
+
+  # Training optimization
+  log_interval: 50         # Log progress every N batches
+  cuda_cache_clear_interval: 50  # Clear CUDA cache every N batches
+
+  # Output settings
+  plot: true              # Save loss curve plots
+  save_model: true        # Save model checkpoints

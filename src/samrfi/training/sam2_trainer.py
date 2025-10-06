@@ -221,6 +221,14 @@ class SAM2Trainer:
 
             model = get_peft_model(model, lora_config)
             model.print_trainable_parameters()
+        else:
+            # Print trainable parameters for non-LoRA training
+            total_params = sum(p.numel() for p in model.parameters())
+            trainable_params_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"\nTrainable parameters:")
+            print(f"  Total params: {total_params:,}")
+            print(f"  Trainable params: {trainable_params_count:,}")
+            print(f"  Trainable %: {100 * trainable_params_count / total_params:.2f}%")
 
         # Setup optimizer
         trainable_params = [p for p in model.parameters() if p.requires_grad]
