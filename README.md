@@ -112,7 +112,11 @@ This generates **two datasets**:
 - `exact_masks/` - Perfect ground truth (train on this!)
 - `mad_masks/` - MAD-based masks (for comparison)
 
+**Note:** Datasets are generated locally and saved to disk. They are NOT uploaded to HuggingFace by default.
+
 ### 2. Train SAM2 Model
+
+**SAM2 models auto-download from HuggingFace on first use** (~850MB for `large`). This is a one-time download, cached at `~/.cache/huggingface/hub/`.
 
 Train on the synthetic data with exact ground truth:
 
@@ -409,6 +413,52 @@ Unlike real data, synthetic data provides **perfect masks**:
 - Compare against MAD-based masks to quantify improvement
 
 ---
+
+## Model Management
+
+### Auto-Download Behavior
+
+SAM2 models are **automatically downloaded from HuggingFace** when first needed:
+
+```python
+from samrfi.training import SAM2Trainer
+
+# Model auto-downloads on first train() call
+trainer = SAM2Trainer(dataset, device='cuda')
+trainer.train(num_epochs=10, sam_checkpoint='large')  # Downloads ~850MB if not cached
+```
+
+**Available models:**
+- `tiny` - 40 MB (fastest, lower accuracy)
+- `small` - 180 MB (balanced)
+- `base_plus` - 330 MB (good accuracy)
+- `large` - 850 MB (best accuracy, **recommended**)
+
+**Models are cached at:** `~/.cache/huggingface/hub/`
+
+### Pre-Download Models (Optional)
+
+To download models before training:
+
+```python
+from samrfi.utils import ModelCache
+
+cache = ModelCache()
+cache.download_model('large', show_progress=True)  # One-time download with progress bar
+```
+
+Or via command line:
+
+```bash
+python -c "from samrfi.utils import ModelCache; ModelCache().download_model('large')"
+```
+
+### Custom Cache Location
+
+```bash
+export HF_HOME=/path/to/custom/cache
+samrfi train --config config.yaml --dataset dataset.npz
+```
 
 ## Training Tips
 

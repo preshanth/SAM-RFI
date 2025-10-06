@@ -12,14 +12,22 @@
 #
 import os
 import sys
-sys.path.insert(0, os.path.abspath('../'))
 
+# Add src directory to path for importing samrfi
+sys.path.insert(0, os.path.abspath('../src'))
+
+# Create casatools directory for ReadTheDocs build
 casatools_directory = "/home/docs/.casa/data"
 
 if not os.path.exists(casatools_directory):
     os.makedirs(casatools_directory)
 
-import samrfi
+# Import samrfi to make modules available for autodoc
+try:
+    import samrfi
+except ImportError as e:
+    print(f"Warning: Could not import samrfi: {e}")
+    print("Continuing with mock imports...")
 
 # -- Project information -----------------------------------------------------
 
@@ -53,7 +61,16 @@ html_sidebars = {'**':['globaltoc.html', 'localtoc.html', 'relations.html',
 # This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
-autodoc_mock_imports = ['casatools']
+# Mock imports for modules not available during ReadTheDocs build
+autodoc_mock_imports = [
+    'casatools',
+    'casatasks',
+    'torch',
+    'transformers',
+    'monai',
+    'datasets',
+    'pynvml',
+]
 
 # -- Options for HTML output -------------------------------------------------
 # The theme to use for HTML and HTML Help pages.  See the documentation for

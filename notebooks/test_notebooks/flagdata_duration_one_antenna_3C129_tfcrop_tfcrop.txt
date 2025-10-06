@@ -1,1 +1,0 @@
-Flagdata operation on one_antenna_3C129_tfcrop.ms took 86.35 seconds on tfcrop.
