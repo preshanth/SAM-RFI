@@ -1,9 +1,9 @@
-# Full training pipeline config
+# Training config for 10K dataset with LoRA fine-tuning
 
 data:
   # Training dataset
-  train_generation_config: configs/synthetic_train_4k.yaml
-  train_dataset: ./datasets/train_4000
+  train_generation_config: configs/synthetic_train_10k.yaml
+  train_dataset: ./datasets/train_10000
 
   # Validation dataset
   val_generation_config: configs/synthetic_val_1k.yaml
@@ -16,13 +16,13 @@ training:
   device: cuda
   num_epochs: 10
   batch_size: 16
-  learning_rate: 1.0e-5
+  learning_rate: 1.0e-4  # Higher LR for LoRA (1e-4 vs 1e-5)
   model_checkpoint: large  # tiny, small, base_plus, or large
-  output_dir: ./training_output
+  output_dir: ./training_output_lora_10k
 
   # Optimizer settings
-  optimizer: adam          # adam, adamw, sgd
-  weight_decay: 0.0
+  optimizer: adamw         # AdamW recommended for LoRA
+  weight_decay: 0.01       # Small weight decay for regularization
   adam_betas: [0.9, 0.999]
   adam_eps: 1.0e-8
   momentum: 0.9           # For SGD
@@ -35,11 +35,11 @@ training:
 
   # Model architecture settings
   multimask_output: false  # SAM can output 1 mask (false) or 3 masks (true)
-  freeze_vision_encoder: true
-  freeze_prompt_encoder: true
+  freeze_vision_encoder: true   # Freeze base weights
+  freeze_prompt_encoder: true   # Freeze base weights
 
   # LoRA (parameter-efficient fine-tuning) settings
-  use_lora: false          # Enable LoRA adapters
+  use_lora: true           # Enable LoRA adapters
   lora_rank: 16            # LoRA rank (4, 8, 16, 32)
   lora_alpha: 32           # LoRA alpha (usually 2x rank)
   lora_dropout: 0.1        # Dropout for LoRA layers

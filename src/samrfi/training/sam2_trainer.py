@@ -92,6 +92,12 @@ class SAM2Trainer:
         multimask_output=False,
         freeze_vision_encoder=True,
         freeze_prompt_encoder=True,
+        # LoRA settings
+        use_lora=False,
+        lora_rank=16,
+        lora_alpha=32,
+        lora_dropout=0.1,
+        lora_target_modules=["q_proj", "v_proj"],
         # Data augmentation
         bbox_perturbation=20,
         # DataLoader settings
@@ -193,6 +199,28 @@ class SAM2Trainer:
         if model_path:
             print(f"Loading pretrained weights from: {model_path}")
             model.load_state_dict(torch.load(model_path))
+
+        # Apply LoRA if enabled
+        if use_lora:
+            from peft import LoraConfig, get_peft_model
+
+            print(f"\nApplying LoRA adapters:")
+            print(f"  Rank: {lora_rank}")
+            print(f"  Alpha: {lora_alpha}")
+            print(f"  Dropout: {lora_dropout}")
+            print(f"  Target modules: {lora_target_modules}")
+
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                target_modules=lora_target_modules,
+                lora_dropout=lora_dropout,
+                bias="none",
+                task_type="FEATURE_EXTRACTION"  # SAM2 is a vision model
+            )
+
+            model = get_peft_model(model, lora_config)
+            model.print_trainable_parameters()
 
         # Setup optimizer
         trainable_params = [p for p in model.parameters() if p.requires_grad]

@@ -128,6 +128,12 @@ def main():
         multimask_output=train_cfg.get('multimask_output', False),
         freeze_vision_encoder=train_cfg.get('freeze_vision_encoder', True),
         freeze_prompt_encoder=train_cfg.get('freeze_prompt_encoder', True),
+        # LoRA settings
+        use_lora=train_cfg.get('use_lora', False),
+        lora_rank=train_cfg.get('lora_rank', 16),
+        lora_alpha=train_cfg.get('lora_alpha', 32),
+        lora_dropout=train_cfg.get('lora_dropout', 0.1),
+        lora_target_modules=train_cfg.get('lora_target_modules', ["q_proj", "v_proj"]),
         # Data augmentation
         bbox_perturbation=train_cfg.get('bbox_perturbation', 20),
         # DataLoader

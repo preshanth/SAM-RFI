@@ -168,10 +168,14 @@ class BatchedDataset(TorchDataset):
         """Load batch file from disk (wrapped by LRU cache)"""
         batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
         data = np.load(batch_file)
-        return {
-            'images': data['images'],
-            'labels': data['labels']
+        # Copy arrays to prevent memory leak - ensures file handle closes
+        # and arrays don't keep np.load's internal buffer alive
+        result = {
+            'images': data['images'].copy(),
+            'labels': data['labels'].copy()
         }
+        data.close()  # Explicit close to release file handle
+        return result
 
     def __repr__(self):
         return (f"BatchedDataset(samples={self.num_samples}, "
