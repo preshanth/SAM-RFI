@@ -10,8 +10,11 @@ import argparse
 import sys
 import yaml
 import subprocess
+import logging
 from pathlib import Path
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,10 +22,45 @@ from src.samrfi.training.sam2_trainer import SAM2Trainer
 from src.samrfi.data import BatchedDataset
 
 
-def log(msg):
-    """Print with timestamp"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
+def setup_logging(output_dir):
+    """Setup logging to both console and file"""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Create log filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = output_path / f"training_{timestamp}.log"
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        '[%(asctime)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(console_formatter)
+
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter(
+        '[%(asctime)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_formatter)
+
+    # Add handlers
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+
+    return log_file
 
 
 class DatasetWrapper:
@@ -41,13 +79,18 @@ def main():
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    log("="*60)
-    log("SAM-RFI Training Pipeline")
-    log("="*60)
+    # Setup logging to file and console
+    log_file = setup_logging(config['training']['output_dir'])
+
+    logger.info("="*60)
+    logger.info("SAM-RFI Training Pipeline")
+    logger.info("="*60)
+    logger.info(f"Log file: {log_file}")
+    logger.info("")
 
     # Step 1: Generate training dataset
     if not args.skip_generation:
-        log("\n[1/3] Generating training dataset...")
+        logger.info("\n[1/3] Generating training dataset...")
         train_gen_config = config['data']['train_generation_config']
         train_output = config['data']['train_dataset']
 
@@ -57,12 +100,12 @@ def main():
             '--config', train_gen_config,
             '--output', train_output
         ]
-        log(f"Running: {' '.join(cmd)}")
+        logger.info(f"Running: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
 
         # Step 2: Generate validation dataset
         if 'val_generation_config' in config['data']:
-            log("\n[2/3] Generating validation dataset...")
+            logger.info("\n[2/3] Generating validation dataset...")
             val_gen_config = config['data']['val_generation_config']
             val_output = config['data']['val_dataset']
 
@@ -72,27 +115,27 @@ def main():
                 '--config', val_gen_config,
                 '--output', val_output
             ]
-            log(f"Running: {' '.join(cmd)}")
+            logger.info(f"Running: {' '.join(cmd)}")
             subprocess.run(cmd, check=True)
     else:
-        log("\n[1/3] Skipping dataset generation...")
+        logger.info("\n[1/3] Skipping dataset generation...")
 
     # Step 3: Train
-    log("\n[3/3] Training SAM2...")
+    logger.info("\n[3/3] Training SAM2...")
 
     # Load datasets
     cache_size = config['training'].get('cache_size', 3)
     train_path = Path(config['data']['train_dataset']) / config['data']['mask_type']
-    log(f"Loading training dataset: {train_path}")
+    logger.info(f"Loading training dataset: {train_path}")
     train_dataset = BatchedDataset(train_path, cache_size=cache_size)
-    log(f"  {len(train_dataset)} samples")
+    logger.info(f"  {len(train_dataset)} samples")
 
     val_dataset = None
     if 'val_dataset' in config['data']:
         val_path = Path(config['data']['val_dataset']) / config['data']['mask_type']
-        log(f"Loading validation dataset: {val_path}")
+        logger.info(f"Loading validation dataset: {val_path}")
         val_dataset = BatchedDataset(val_path, cache_size=cache_size)
-        log(f"  {len(val_dataset)} samples")
+        logger.info(f"  {len(val_dataset)} samples")
 
     # Wrap datasets
     train_wrapper = DatasetWrapper(train_dataset)
@@ -105,11 +148,11 @@ def main():
     )
 
     # Train
-    log(f"\nStarting training:")
-    log(f"  Epochs: {config['training']['num_epochs']}")
-    log(f"  Batch size: {config['training']['batch_size']}")
-    log(f"  Learning rate: {config['training']['learning_rate']}")
-    log(f"  Model: {config['training']['model_checkpoint']}")
+    logger.info(f"\nStarting training:")
+    logger.info(f"  Epochs: {config['training']['num_epochs']}")
+    logger.info(f"  Batch size: {config['training']['batch_size']}")
+    logger.info(f"  Learning rate: {config['training']['learning_rate']}")
+    logger.info(f"  Model: {config['training']['model_checkpoint']}")
 
     # Extract training config with defaults
     train_cfg = config['training']
@@ -150,8 +193,9 @@ def main():
         save_model=train_cfg.get('save_model', True)
     )
 
-    log("\n✓ Training complete!")
-    log(f"  Output: {config['training']['output_dir']}")
+    logger.info("\n✓ Training complete!")
+    logger.info(f"  Output: {config['training']['output_dir']}")
+    logger.info(f"  Log file: {log_file}")
 
 
 if __name__ == "__main__":
