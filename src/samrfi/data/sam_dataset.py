@@ -104,7 +104,7 @@ class SAMDataset(TorchDataset):
 
 class BatchedDataset(TorchDataset):
     """
-    Loads data from multiple batch files with LRU caching.
+    Loads data from multiple batch files with shared RAM preloading.
 
     Compatible with SAMDataset wrapper - provides same __getitem__ interface.
 
@@ -117,15 +117,17 @@ class BatchedDataset(TorchDataset):
 
     Args:
         data_dir: Path to directory containing batch_*.npz files
-        cache_size: Number of batch files to keep in RAM (default: 3)
+        ram_budget_gb: RAM budget in GB for preloading batches (default: None = old LRU behavior)
+        cache_size: [Deprecated] Number of batch files for LRU cache (only if ram_budget_gb=None)
     """
 
-    def __init__(self, data_dir, cache_size=3):
+    def __init__(self, data_dir, ram_budget_gb=None, cache_size=3):
         import json
+        import logging
         from pathlib import Path
-        from functools import lru_cache
 
         self.data_dir = Path(data_dir)
+        logger = logging.getLogger(__name__)
 
         # Load metadata
         metadata_path = self.data_dir / "metadata.json"
@@ -139,9 +141,30 @@ class BatchedDataset(TorchDataset):
         self.samples_per_batch = self.metadata['samples_per_batch']
         self.num_batches = self.metadata['num_batches']
 
-        # LRU cache for batch files
-        self._cache_size = cache_size
-        self._load_batch = lru_cache(maxsize=cache_size)(self._load_batch_uncached)
+        # Determine batch file size by probing first file
+        probe_file = self.data_dir / "batch_000.npz"
+        probe_data = np.load(probe_file)
+        batch_size_bytes = probe_data['images'].nbytes + probe_data['labels'].nbytes
+        self.batch_size_gb = batch_size_bytes / 1e9
+        del probe_data  # Free memory
+
+        # Choose caching strategy
+        if ram_budget_gb is not None:
+            # New: Shared preload cache
+            self._use_preload = True
+            self.batches_to_cache = int(ram_budget_gb / self.batch_size_gb)
+            self.batches_to_cache = min(self.batches_to_cache, self.num_batches)
+
+            logger.info(f"Preloading {self.batches_to_cache} batches ({self.batches_to_cache * self.batch_size_gb:.1f} GB) into RAM")
+            self._preload_cache(0, self.batches_to_cache)
+            logger.info(f"Cache loaded: {self.batches_to_cache}/{self.num_batches} batches ({100*self.batches_to_cache/self.num_batches:.1f}%)")
+        else:
+            # Old: Per-worker LRU cache (deprecated)
+            from functools import lru_cache
+            self._use_preload = False
+            self._cache_size = cache_size
+            self._load_batch = lru_cache(maxsize=cache_size)(self._load_batch_uncached)
+            logger.warning(f"Using deprecated LRU cache (cache_size={cache_size}). Consider using ram_budget_gb instead.")
 
     def __len__(self):
         return self.num_samples
@@ -156,16 +179,49 @@ class BatchedDataset(TorchDataset):
         batch_num = idx // self.samples_per_batch
         local_idx = idx % self.samples_per_batch
 
-        # Load batch (from cache or disk)
-        batch = self._load_batch(batch_num)
+        if self._use_preload:
+            # Check if batch is in preloaded cache
+            cache_offset = batch_num - self._cache_start_batch
+            if 0 <= cache_offset < len(self._cached_batches):
+                # Hit: return from preloaded cache
+                batch = self._cached_batches[cache_offset]
+            else:
+                # Miss: load from disk (shouldn't happen often with proper config)
+                batch = self._load_batch_from_disk(batch_num)
+        else:
+            # Old LRU cache behavior
+            batch = self._load_batch(batch_num)
 
         return {
             'image': batch['images'][local_idx],
             'label': batch['labels'][local_idx]
         }
 
-    def _load_batch_uncached(self, batch_num):
-        """Load batch file from disk (wrapped by LRU cache)"""
+    def _preload_cache(self, start_batch, num_batches):
+        """Preload multiple batch files into RAM (shared across workers)"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        self._cache_start_batch = start_batch
+        self._cached_batches = []
+
+        for i in range(num_batches):
+            batch_num = start_batch + i
+            if batch_num >= self.num_batches:
+                break
+
+            batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
+            data = np.load(batch_file)
+            self._cached_batches.append({
+                'images': data['images'],
+                'labels': data['labels']
+            })
+
+            if (i + 1) % 10 == 0:
+                logger.info(f"  Loaded {i+1}/{num_batches} batches...")
+
+    def _load_batch_from_disk(self, batch_num):
+        """Load single batch from disk (fallback for cache misses)"""
         batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
         data = np.load(batch_file)
         return {
@@ -173,8 +229,18 @@ class BatchedDataset(TorchDataset):
             'labels': data['labels']
         }
 
+    def _load_batch_uncached(self, batch_num):
+        """Load batch file from disk (wrapped by LRU cache) - deprecated path"""
+        return self._load_batch_from_disk(batch_num)
+
     def __repr__(self):
-        return (f"BatchedDataset(samples={self.num_samples}, "
-                f"batches={self.num_batches}, "
-                f"samples_per_batch={self.samples_per_batch}, "
-                f"cache_size={self._cache_size})")
+        if self._use_preload:
+            return (f"BatchedDataset(samples={self.num_samples}, "
+                    f"batches={self.num_batches}, "
+                    f"cached={self.batches_to_cache}, "
+                    f"ram_budget={self.batches_to_cache * self.batch_size_gb:.1f}GB)")
+        else:
+            return (f"BatchedDataset(samples={self.num_samples}, "
+                    f"batches={self.num_batches}, "
+                    f"samples_per_batch={self.samples_per_batch}, "
+                    f"cache_size={self._cache_size})")

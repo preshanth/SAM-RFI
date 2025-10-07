@@ -1,9 +1,9 @@
-# H100 Training Config
-# GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores
+# V100 Training Config
+# GPU: 32GB VRAM | System RAM: Assume 128GB | CPU: Assume 16 cores
 #
 # Memory calculations (per batch file: 1.36GB for 100 samples):
-# - Data cache: 172GB for training data (75% of RAM)
-# - ~126 batches cached (78% of train_4000, or 31% of train_10000)
+# - Data cache: 80GB for training data
+# - ~59 batches cached (37% of typical 10k dataset)
 
 data:
   train_generation_config: configs/synthetic_train_4k.yaml
@@ -15,9 +15,9 @@ data:
 training:
   device: cuda
   num_epochs: 10
-  batch_size: 16          # Conservative for stability (can increase to 32)
+  batch_size: 12          # Moderate batch for 32GB VRAM
   learning_rate: 1.0e-5
-  model_checkpoint: large
+  model_checkpoint: base_plus  # base_plus or large
   output_dir: ./training_output
 
   # Optimizer settings
@@ -40,9 +40,9 @@ training:
   # Data augmentation
   bbox_perturbation: 20
 
-  # DataLoader settings - Optimized for H100 with shared cache
-  num_workers: 12
-  data_cache_ram_gb: 172   # 172GB for training data cache (75% of 230GB RAM)
+  # DataLoader settings - Optimized for V100
+  num_workers: 8
+  data_cache_ram_gb: 80    # 80GB for training data cache
   val_data_cache_ram_gb: 20  # 20GB for validation
   prefetch_factor: 2
   persistent_workers: true
