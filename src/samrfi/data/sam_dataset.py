@@ -219,9 +219,16 @@ class BatchedDataset(TorchDataset):
 
             batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
             data = np.load(batch_file)
+
+            # Mark arrays as read-only to prevent copy-on-write in forked workers
+            images = data['images']
+            labels = data['labels']
+            images.flags.writeable = False
+            labels.flags.writeable = False
+
             self._cached_batches.append({
-                'images': data['images'],
-                'labels': data['labels']
+                'images': images,
+                'labels': labels
             })
 
             if (i + 1) % 10 == 0:
