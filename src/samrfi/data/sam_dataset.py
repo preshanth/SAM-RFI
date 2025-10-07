@@ -152,10 +152,17 @@ class BatchedDataset(TorchDataset):
         if ram_budget_gb is not None:
             # New: Shared preload cache
             self._use_preload = True
-            self.batches_to_cache = int(ram_budget_gb / self.batch_size_gb)
-            self.batches_to_cache = min(self.batches_to_cache, self.num_batches)
 
-            logger.info(f"Preloading {self.batches_to_cache} batches ({self.batches_to_cache * self.batch_size_gb:.1f} GB) into RAM")
+            # Special case: ram_budget_gb = -1 means "load all data"
+            if ram_budget_gb < 0:
+                self.batches_to_cache = self.num_batches
+                total_size_gb = self.num_batches * self.batch_size_gb
+                logger.info(f"Loading ALL data: {self.num_batches} batches ({total_size_gb:.1f} GB)")
+            else:
+                self.batches_to_cache = int(ram_budget_gb / self.batch_size_gb)
+                self.batches_to_cache = min(self.batches_to_cache, self.num_batches)
+                logger.info(f"Preloading {self.batches_to_cache} batches ({self.batches_to_cache * self.batch_size_gb:.1f} GB) into RAM")
+
             self._preload_cache(0, self.batches_to_cache)
             logger.info(f"Cache loaded: {self.batches_to_cache}/{self.num_batches} batches ({100*self.batches_to_cache/self.num_batches:.1f}%)")
         else:

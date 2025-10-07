@@ -1,13 +1,14 @@
 # H100 Training Config
 # GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores
 #
-# Memory calculations (per batch file: 1.36GB for 100 samples):
-# - Data cache: 172GB for training data (75% of RAM)
-# - ~126 batches cached (78% of train_4000, or 31% of train_10000)
+# Memory allocation strategy (50% of RAM = 115 GB):
+# - Validation: ALL data (~14 GB for 1000 samples)
+# - Training: Remaining ~101 GB (~74 batches, 46% of train_4000)
+# - Per batch file: 1.36GB for 100 samples
 
 data:
   train_generation_config: configs/synthetic_train_4k.yaml
-  train_dataset: ./datasets/train_10000
+  train_dataset: ./datasets/train_4000
   val_generation_config: configs/synthetic_val_1k.yaml
   val_dataset: ./datasets/val_1000
   mask_type: exact_masks
@@ -40,10 +41,10 @@ training:
   # Data augmentation
   bbox_perturbation: 20
 
-  # DataLoader settings - Optimized for H100 with shared cache
+  # DataLoader settings - Conservative 50% RAM usage
   num_workers: 12
-  data_cache_ram_gb: 172   # 172GB for training data cache (75% of 230GB RAM)
-  val_data_cache_ram_gb: 20  # 20GB for validation
+  data_cache_ram_gb: 101   # Training data cache (50% RAM - validation)
+  val_data_cache_ram_gb: null  # Load ALL validation data (auto-calculated)
   prefetch_factor: 2
   persistent_workers: true
   pin_memory: true
