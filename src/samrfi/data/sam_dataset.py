@@ -7,6 +7,7 @@ Wraps HuggingFace Dataset to provide batches for SAM training.
 import numpy as np
 import torch
 from torch.utils.data import Dataset as TorchDataset
+from torch.multiprocessing import Manager
 
 
 class SAMDataset(TorchDataset):
@@ -51,7 +52,7 @@ class SAMDataset(TorchDataset):
         """
         item = self.dataset[idx]
         image = item["image"]  # Already normalized with ImageNet stats during generation
-        ground_truth_mask = np.array(item["label"])
+        ground_truth_mask = item["label"]  # Use view directly, no copy
 
         # Get bounding box from mask
         bbox = self._get_bounding_box(ground_truth_mask)
@@ -190,26 +191,37 @@ class BatchedDataset(TorchDataset):
             # Check if batch is in preloaded cache
             cache_offset = batch_num - self._cache_start_batch
             if 0 <= cache_offset < len(self._cached_batches):
-                # Hit: return from preloaded cache
+                # Hit: return from preloaded cache (shared memory tensors)
                 batch = self._cached_batches[cache_offset]
+                # Convert back to numpy for compatibility with SAMDataset
+                return {
+                    'image': batch['images'][local_idx].numpy(),
+                    'label': batch['labels'][local_idx].numpy()
+                }
             else:
                 # Miss: load from disk (shouldn't happen often with proper config)
                 batch = self._load_batch_from_disk(batch_num)
+                return {
+                    'image': batch['images'][local_idx],
+                    'label': batch['labels'][local_idx]
+                }
         else:
             # Old LRU cache behavior
             batch = self._load_batch(batch_num)
-
-        return {
-            'image': batch['images'][local_idx],
-            'label': batch['labels'][local_idx]
-        }
+            return {
+                'image': batch['images'][local_idx],
+                'label': batch['labels'][local_idx]
+            }
 
     def _preload_cache(self, start_batch, num_batches):
-        """Preload multiple batch files into RAM (shared across workers)"""
+        """Preload multiple batch files into RAM using shared memory"""
         import logging
         logger = logging.getLogger(__name__)
 
         self._cache_start_batch = start_batch
+
+        # Use shared memory for arrays that workers can access
+        # Convert numpy arrays to torch tensors in shared memory
         self._cached_batches = []
 
         for i in range(num_batches):
@@ -220,15 +232,13 @@ class BatchedDataset(TorchDataset):
             batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
             data = np.load(batch_file)
 
-            # Mark arrays as read-only to prevent copy-on-write in forked workers
-            images = data['images']
-            labels = data['labels']
-            images.flags.writeable = False
-            labels.flags.writeable = False
+            # Convert to torch tensors in shared memory (accessible by all workers)
+            images_tensor = torch.from_numpy(data['images']).share_memory_()
+            labels_tensor = torch.from_numpy(data['labels']).share_memory_()
 
             self._cached_batches.append({
-                'images': images,
-                'labels': labels
+                'images': images_tensor,
+                'labels': labels_tensor
             })
 
             if (i + 1) % 10 == 0:
