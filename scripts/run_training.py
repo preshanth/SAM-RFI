@@ -11,11 +11,18 @@ import sys
 import yaml
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.samrfi.training.sam2_trainer import SAM2Trainer
 from src.samrfi.data import BatchedDataset
+
+
+def log(msg):
+    """Print with timestamp"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
 
 
 class DatasetWrapper:
@@ -34,13 +41,13 @@ def main():
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    print("="*60)
-    print("SAM-RFI Training Pipeline")
-    print("="*60)
+    log("="*60)
+    log("SAM-RFI Training Pipeline")
+    log("="*60)
 
     # Step 1: Generate training dataset
     if not args.skip_generation:
-        print("\n[1/3] Generating training dataset...")
+        log("\n[1/3] Generating training dataset...")
         train_gen_config = config['data']['train_generation_config']
         train_output = config['data']['train_dataset']
 
@@ -50,12 +57,12 @@ def main():
             '--config', train_gen_config,
             '--output', train_output
         ]
-        print(f"Running: {' '.join(cmd)}")
+        log(f"Running: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
 
         # Step 2: Generate validation dataset
         if 'val_generation_config' in config['data']:
-            print("\n[2/3] Generating validation dataset...")
+            log("\n[2/3] Generating validation dataset...")
             val_gen_config = config['data']['val_generation_config']
             val_output = config['data']['val_dataset']
 
@@ -65,27 +72,27 @@ def main():
                 '--config', val_gen_config,
                 '--output', val_output
             ]
-            print(f"Running: {' '.join(cmd)}")
+            log(f"Running: {' '.join(cmd)}")
             subprocess.run(cmd, check=True)
     else:
-        print("\n[1/3] Skipping dataset generation...")
+        log("\n[1/3] Skipping dataset generation...")
 
     # Step 3: Train
-    print("\n[3/3] Training SAM2...")
+    log("\n[3/3] Training SAM2...")
 
     # Load datasets
     cache_size = config['training'].get('cache_size', 3)
     train_path = Path(config['data']['train_dataset']) / config['data']['mask_type']
-    print(f"Loading training dataset: {train_path}")
+    log(f"Loading training dataset: {train_path}")
     train_dataset = BatchedDataset(train_path, cache_size=cache_size)
-    print(f"  {len(train_dataset)} samples")
+    log(f"  {len(train_dataset)} samples")
 
     val_dataset = None
     if 'val_dataset' in config['data']:
         val_path = Path(config['data']['val_dataset']) / config['data']['mask_type']
-        print(f"Loading validation dataset: {val_path}")
+        log(f"Loading validation dataset: {val_path}")
         val_dataset = BatchedDataset(val_path, cache_size=cache_size)
-        print(f"  {len(val_dataset)} samples")
+        log(f"  {len(val_dataset)} samples")
 
     # Wrap datasets
     train_wrapper = DatasetWrapper(train_dataset)
@@ -98,11 +105,11 @@ def main():
     )
 
     # Train
-    print(f"\nStarting training:")
-    print(f"  Epochs: {config['training']['num_epochs']}")
-    print(f"  Batch size: {config['training']['batch_size']}")
-    print(f"  Learning rate: {config['training']['learning_rate']}")
-    print(f"  Model: {config['training']['model_checkpoint']}")
+    log(f"\nStarting training:")
+    log(f"  Epochs: {config['training']['num_epochs']}")
+    log(f"  Batch size: {config['training']['batch_size']}")
+    log(f"  Learning rate: {config['training']['learning_rate']}")
+    log(f"  Model: {config['training']['model_checkpoint']}")
 
     # Extract training config with defaults
     train_cfg = config['training']
@@ -143,8 +150,8 @@ def main():
         save_model=train_cfg.get('save_model', True)
     )
 
-    print("\n✓ Training complete!")
-    print(f"  Output: {config['training']['output_dir']}")
+    log("\n✓ Training complete!")
+    log(f"  Output: {config['training']['output_dir']}")
 
 
 if __name__ == "__main__":

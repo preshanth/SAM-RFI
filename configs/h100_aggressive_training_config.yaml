@@ -1,0 +1,59 @@
+# H100 Aggressive Training Config - Full Model Fine-tuning
+# H100: 80GB VRAM, 230GB RAM, 20 CPU cores
+# WARNING: This unfreezes the vision encoder for full fine-tuning
+
+data:
+  # Training dataset
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_4000
+
+  # Validation dataset
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000
+
+  # Which masks to use
+  mask_type: exact_masks  # or mad_masks
+
+training:
+  device: cuda
+  num_epochs: 10
+  batch_size: 32          # Reduced due to unfrozen encoder (uses more VRAM)
+  learning_rate: 5.0e-6   # Lower LR for full fine-tuning
+  model_checkpoint: large  # tiny, small, base_plus, or large
+  output_dir: ./training_output_aggressive
+
+  # Optimizer settings
+  optimizer: adamw         # AdamW with weight decay for full fine-tuning
+  weight_decay: 0.05       # Higher weight decay for unfrozen model
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  momentum: 0.9           # For SGD
+
+  # Loss function settings
+  loss_function: dicece   # dicece, dice, ce, focal
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean    # mean, sum
+
+  # Model architecture settings - UNFROZEN FOR FULL TRAINING
+  multimask_output: false
+  freeze_vision_encoder: false  # UNFROZEN - full fine-tuning
+  freeze_prompt_encoder: false  # UNFROZEN - full fine-tuning
+
+  # Data augmentation
+  bbox_perturbation: 20   # Random bbox expansion in pixels (0 = no perturbation)
+
+  # DataLoader performance settings - OPTIMIZED FOR H100
+  num_workers: 16          # 16 of 20 cores (leave some for system)
+  cache_size: 12           # 3x increase - utilize 230GB RAM
+  prefetch_factor: 4       # 2x increase for better pipeline
+  persistent_workers: true # Keep workers alive between epochs
+  pin_memory: true         # Pin memory for faster GPU transfer
+
+  # Training optimization
+  log_interval: 50         # Log more frequently
+  cuda_cache_clear_interval: 50  # Clear more frequently
+
+  # Output settings
+  plot: true              # Save loss curve plots
+  save_model: true        # Save model checkpoints
