@@ -24,6 +24,12 @@ import matplotlib.pyplot as plt
 from samrfi.data import SAMDataset
 
 
+def _log(msg):
+    """Print with timestamp"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
+
+
 def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=None):
     """
     Log training progress without TQDM overhead.
@@ -33,7 +39,8 @@ def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=
     eta_sec = (total_batches - batch_idx) / rate if rate > 0 else 0
 
     loss_str = f", Loss: {current_loss:.6f}" if current_loss is not None else ""
-    print(f"{prefix}[{batch_idx}/{total_batches}] "
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {prefix}[{batch_idx}/{total_batches}] "
           f"Rate: {rate:.1f} batch/s, ETA: {eta_sec/60:.1f}m{loss_str}")
 
 
@@ -139,7 +146,7 @@ class SAM2Trainer:
 
         model_name = checkpoint_map[sam_checkpoint]
 
-        print(f"\nLoading SAM2 model: {model_name}")
+        _log(f"\nLoading SAM2 model: {model_name}")
 
         # Load processor and model from HuggingFace
         processor = Sam2Processor.from_pretrained(model_name)
@@ -180,7 +187,7 @@ class SAM2Trainer:
             val_kwargs['shuffle'] = False
 
             val_dataloader = DataLoader(val_dataset, **val_kwargs)
-            print(f"  Validation samples: {len(validation_dataset)}")
+            _log(f"  Validation samples: {len(validation_dataset)}")
 
         # Freeze layers based on config
         for name, param in model.named_parameters():
@@ -191,7 +198,7 @@ class SAM2Trainer:
 
         # Load pretrained weights if provided
         if model_path:
-            print(f"Loading pretrained weights from: {model_path}")
+            _log(f"Loading pretrained weights from: {model_path}")
             model.load_state_dict(torch.load(model_path))
 
         # Setup optimizer
@@ -236,11 +243,11 @@ class SAM2Trainer:
         model.to(self.device)
         model.train()
 
-        print(f"\nTraining SAM2 model...")
-        print(f"  Epochs: {num_epochs}")
-        print(f"  Batch size: {batch_size}")
-        print(f"  Learning rate: {learning_rate}")
-        print(f"  Device: {self.device}")
+        _log(f"\nTraining SAM2 model...")
+        _log(f"  Epochs: {num_epochs}")
+        _log(f"  Batch size: {batch_size}")
+        _log(f"  Learning rate: {learning_rate}")
+        _log(f"  Device: {self.device}")
 
         # Training loop
         train_losses = []
@@ -253,7 +260,7 @@ class SAM2Trainer:
 
             total_batches = len(train_dataloader)
             epoch_start_time = time.time()
-            print(f"\nEpoch {epoch+1}/{num_epochs} [Train]: Starting {total_batches} batches")
+            _log(f"\nEpoch {epoch+1}/{num_epochs} [Train]: Starting {total_batches} batches")
 
             for batch_idx, batch in enumerate(train_dataloader, 1):
                 # Forward pass
@@ -317,7 +324,7 @@ class SAM2Trainer:
 
                 total_val_batches = len(val_dataloader)
                 val_start_time = time.time()
-                print(f"\nEpoch {epoch+1}/{num_epochs} [Val]: Starting {total_val_batches} batches")
+                _log(f"\nEpoch {epoch+1}/{num_epochs} [Val]: Starting {total_val_batches} batches")
 
                 with torch.no_grad():
                     for batch_idx, batch in enumerate(val_dataloader, 1):
@@ -364,7 +371,7 @@ class SAM2Trainer:
             log_msg = f"EPOCH: {epoch+1}/{num_epochs} | Train loss: {epoch_mean_train_loss:.6f}"
             if epoch_val_loss is not None:
                 log_msg += f" | Val loss: {epoch_val_loss:.6f}"
-            print(log_msg)
+            _log(log_msg)
 
             # Force garbage collection at end of epoch
             gc.collect()
@@ -381,7 +388,7 @@ class SAM2Trainer:
         if plot:
             self._plot_loss_curve(sam_checkpoint, num_epochs)
 
-        print(f"\nTraining complete!")
+        _log(f"\nTraining complete!")
 
         # Return losses
         if self.val_losses:
@@ -424,15 +431,15 @@ class SAM2Trainer:
         if trained_model_path:
             try:
                 torch.save(model.state_dict(), trained_model_path)
-                print(f"Model saved to: {trained_model_path}")
+                _log(f"Model saved to: {trained_model_path}")
             except Exception as e:
-                print(f"Could not save to {trained_model_path}: {e}")
-                print(f"Saving to default location: {os.path.join(method_dir, filename)}")
+                _log(f"Could not save to {trained_model_path}: {e}")
+                _log(f"Saving to default location: {os.path.join(method_dir, filename)}")
                 torch.save(model.state_dict(), os.path.join(method_dir, filename))
         else:
             save_path = os.path.join(method_dir, filename)
             torch.save(model.state_dict(), save_path)
-            print(f"Model saved to: {save_path}")
+            _log(f"Model saved to: {save_path}")
 
     def _plot_loss_curve(self, sam_checkpoint, num_epochs):
         """Plot and save training and validation loss curves"""
@@ -503,5 +510,5 @@ class SAM2Trainer:
         )
 
         fig.savefig(os.path.join(method_dir, filename))
-        print(f"Loss plot saved to: {os.path.join(method_dir, filename)}")
+        _log(f"Loss plot saved to: {os.path.join(method_dir, filename)}")
         plt.close()
