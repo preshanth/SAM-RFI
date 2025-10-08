@@ -1,8 +1,8 @@
-# Synthetic training data generation - 10000 samples
+# Synthetic training data generation - 4000 samples
 # Physically realistic RFI with exact ground truth masks
 
 synthetic:
-  num_samples: 10000
+  num_samples: 4000
   num_channels: 1024  # Square shape for SAM2 native resolution
   num_times: 1024     # Square shape for SAM2 native resolution
 

@@ -1,15 +1,19 @@
 # H100 Training Config
-# GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores
+# GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores | Disk: 400 GB
+#
+# Dataset sizes:
+# - Training: 4000 samples → 16000 patches (4x augmentation) → ~216 GB
+# - Validation: 1000 samples → 4000 patches (4x augmentation) → ~54 GB
+# - Total: ~270 GB (leaves 130 GB free for outputs/checkpoints)
 #
 # Memory strategy: Streaming multiprocessing
 # - Workers load batches on-demand (parallel disk I/O)
 # - Each worker caches 3 batches (~4 GB per worker)
 # - Total RAM: 12 workers × 4 GB = ~48 GB (leaving 182 GB free)
-# - OS filesystem cache handles repeated batch access
 
 data:
-  train_generation_config: configs/synthetic_train_10k.yaml
-  train_dataset: ./datasets/train_10000
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_4000
   val_generation_config: configs/synthetic_val_1k.yaml
   val_dataset: ./datasets/val_1000
   mask_type: exact_masks

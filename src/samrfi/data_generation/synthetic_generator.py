@@ -11,41 +11,52 @@ import numpy as np
 from samrfi.data import Preprocessor
 
 
-# Module-level function for multiprocessing (must be picklable)
-def _generate_and_preprocess_single_sample(generator_instance, proc_config, **gen_kwargs):
+# Global generator instance for multiprocessing workers
+_global_generator = None
+_global_proc_config = None
+
+
+def _init_worker(config_dict):
+    """Initialize worker process with generator instance."""
+    global _global_generator, _global_proc_config
+
+    from types import SimpleNamespace
+
+    # Convert dict to namespace
+    def dict_to_namespace(d):
+        if isinstance(d, dict):
+            return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+        return d
+
+    config = dict_to_namespace(config_dict)
+    _global_generator = SyntheticDataGenerator(config)
+    _global_proc_config = config_dict.get('processing', {})
+
+
+def _worker_generate_and_preprocess(**gen_kwargs):
     """
-    Generate and preprocess a single sample (called by worker processes).
+    Worker function: Generate and preprocess one sample.
 
-    Each worker:
-      1. Generates 1 raw sample (complex128)
-      2. Preprocesses it with augmentation (inline, no nested parallelism)
-      3. Returns processed patches (float32)
-
-    Args:
-        generator_instance: SyntheticDataGenerator instance
-        proc_config: Processing configuration dict
-        **gen_kwargs: Arguments for _generate_single_sample()
-
-    Returns:
-        TorchDataset with processed patches from this one sample
+    Uses global generator instance initialized by _init_worker.
     """
+    global _global_generator, _global_proc_config
+
     # Generate one sample
-    waterfall, exact_mask, rfi_params = generator_instance._generate_single_sample(**gen_kwargs)
+    waterfall, exact_mask, rfi_params = _global_generator._generate_single_sample(**gen_kwargs)
 
-    # Preprocess this ONE sample with augmentation
-    # Note: num_workers=0 to avoid nested parallelism
+    # Preprocess with augmentation (no nested parallelism)
     preprocessor = Preprocessor(waterfall, flags=exact_mask)
     dataset = preprocessor.create_dataset(
-        patch_size=proc_config.get("patch_size", 128),
-        stretch=proc_config.get("stretch", None),
-        flag_sigma=proc_config.get("flag_sigma", 5),
+        patch_size=_global_proc_config.get("patch_size", 128),
+        stretch=_global_proc_config.get("stretch", None),
+        flag_sigma=_global_proc_config.get("flag_sigma", 5),
         use_custom_flags=True,
-        num_patches=proc_config.get("num_patches", None),
-        normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-        normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-        num_workers=0,  # CRITICAL: No nested parallelism
-        enable_augmentation=proc_config.get("enable_augmentation", True),
-        augmentation_rotations=proc_config.get("augmentation_rotations", 4),
+        num_patches=_global_proc_config.get("num_patches", None),
+        normalize_before_stretch=_global_proc_config.get("normalize_before_stretch", True),
+        normalize_after_stretch=_global_proc_config.get("normalize_after_stretch", False),
+        num_workers=0,  # No nested parallelism
+        enable_augmentation=_global_proc_config.get("enable_augmentation", True),
+        augmentation_rotations=_global_proc_config.get("augmentation_rotations", 4),
     )
 
     return dataset, rfi_params
@@ -206,14 +217,21 @@ class SyntheticDataGenerator:
                 from multiprocessing import Pool
                 from functools import partial
 
-                worker_func = partial(
-                    _generate_and_preprocess_single_sample,
-                    generator_instance=self,
-                    proc_config=proc_config,
-                    **gen_kwargs
-                )
+                # Convert config to dict for pickling
+                def namespace_to_dict(obj):
+                    if hasattr(obj, '__dict__'):
+                        return {k: namespace_to_dict(v) for k, v in obj.__dict__.items()}
+                    elif isinstance(obj, dict):
+                        return {k: namespace_to_dict(v) for k, v in obj.items()}
+                    return obj
 
-                with Pool(generation_workers) as pool:
+                config_dict = namespace_to_dict(self.config)
+
+                # Create worker function with fixed kwargs
+                worker_func = partial(_worker_generate_and_preprocess, **gen_kwargs)
+
+                # Initialize pool with config (each worker gets generator instance)
+                with Pool(generation_workers, initializer=_init_worker, initargs=(config_dict,)) as pool:
                     async_results = [pool.apply_async(worker_func) for _ in range(batch_samples)]
 
                     results = []
@@ -229,9 +247,22 @@ class SyntheticDataGenerator:
             else:
                 # Sequential: generate + preprocess one at a time
                 for i in tqdm(range(batch_samples), desc=f"    Generating"):
-                    dataset, rfi_params = _generate_and_preprocess_single_sample(
-                        self, proc_config, **gen_kwargs
+                    waterfall, exact_mask, rfi_params = self._generate_single_sample(**gen_kwargs)
+
+                    preprocessor = Preprocessor(waterfall, flags=exact_mask)
+                    dataset = preprocessor.create_dataset(
+                        patch_size=proc_config.get("patch_size", 128),
+                        stretch=proc_config.get("stretch", None),
+                        flag_sigma=proc_config.get("flag_sigma", 5),
+                        use_custom_flags=True,
+                        num_patches=proc_config.get("num_patches", None),
+                        normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                        normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                        num_workers=0,
+                        enable_augmentation=proc_config.get("enable_augmentation", True),
+                        augmentation_rotations=proc_config.get("augmentation_rotations", 4),
                     )
+
                     exact_writer.add_batch(dataset)
                     all_rfi_parameters.append(rfi_params)
                     total_patches_written += len(dataset)
