@@ -105,9 +105,10 @@ class SAMDataset(TorchDataset):
 
 class BatchedDataset(TorchDataset):
     """
-    Loads data from multiple batch files with shared RAM preloading.
+    Streaming dataset that loads batch files on-demand in worker processes.
 
-    Compatible with SAMDataset wrapper - provides same __getitem__ interface.
+    Uses PyTorch multiprocessing properly: each worker loads batches independently
+    when needed. OS filesystem cache handles repeated access efficiently.
 
     Directory structure:
         data_dir/
@@ -116,13 +117,14 @@ class BatchedDataset(TorchDataset):
         ├── ...
         └── metadata.json
 
+    Memory usage: Only active batches in worker memory (~2-3 batches per worker)
+    No RAM budget needed - relies on OS cache + SSD speed.
+
     Args:
         data_dir: Path to directory containing batch_*.pt files
-        ram_budget_gb: RAM budget in GB for preloading batches (default: None = old LRU behavior)
-        cache_size: [Deprecated] Number of batch files for LRU cache (only if ram_budget_gb=None)
     """
 
-    def __init__(self, data_dir, ram_budget_gb=None, cache_size=3):
+    def __init__(self, data_dir):
         import json
         import logging
         from pathlib import Path
@@ -142,45 +144,23 @@ class BatchedDataset(TorchDataset):
         self.samples_per_batch = self.metadata['samples_per_batch']
         self.num_batches = self.metadata['num_batches']
 
-        # Determine batch file size by probing first file
-        probe_file = self.data_dir / "batch_000.pt"
-        probe_data = torch.load(probe_file)
-        batch_size_bytes = (probe_data['images'].element_size() * probe_data['images'].numel() +
-                            probe_data['labels'].element_size() * probe_data['labels'].numel())
-        self.batch_size_gb = batch_size_bytes / 1e9
-        del probe_data  # Free memory
+        # Per-worker batch cache (initialized in each worker process)
+        # This is a class attribute that will be separate in each forked worker
+        self._worker_cache = {}
+        self._worker_cache_max_size = 3  # Keep last 3 batches per worker
 
-        # Choose caching strategy
-        if ram_budget_gb is not None:
-            # New: Shared preload cache
-            self._use_preload = True
-
-            # Special case: ram_budget_gb = -1 means "load all data"
-            if ram_budget_gb < 0:
-                self.batches_to_cache = self.num_batches
-                total_size_gb = self.num_batches * self.batch_size_gb
-                logger.info(f"Loading ALL data: {self.num_batches} batches ({total_size_gb:.1f} GB)")
-            else:
-                self.batches_to_cache = int(ram_budget_gb / self.batch_size_gb)
-                self.batches_to_cache = min(self.batches_to_cache, self.num_batches)
-                logger.info(f"Preloading {self.batches_to_cache} batches ({self.batches_to_cache * self.batch_size_gb:.1f} GB) into RAM")
-
-            self._preload_cache(0, self.batches_to_cache)
-            logger.info(f"Cache loaded: {self.batches_to_cache}/{self.num_batches} batches ({100*self.batches_to_cache/self.num_batches:.1f}%)")
-        else:
-            # Old: Per-worker LRU cache (deprecated)
-            from functools import lru_cache
-            self._use_preload = False
-            self._cache_size = cache_size
-            self._load_batch = lru_cache(maxsize=cache_size)(self._load_batch_uncached)
-            logger.warning(f"Using deprecated LRU cache (cache_size={cache_size}). Consider using ram_budget_gb instead.")
+        logger.info(f"BatchedDataset: {self.num_samples} samples across {self.num_batches} batch files")
+        logger.info(f"  Streaming mode: Workers load batches on-demand (OS cache handles efficiency)")
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
         """
-        Get sample by index.
+        Get sample by index. Loads batch file on-demand in worker process.
+
+        This runs in the DataLoader worker, so disk I/O is parallelized
+        across workers. Each worker maintains a small LRU cache.
 
         Returns:
             dict with 'image' and 'label' keys (compatible with SAMDataset)
@@ -188,84 +168,49 @@ class BatchedDataset(TorchDataset):
         batch_num = idx // self.samples_per_batch
         local_idx = idx % self.samples_per_batch
 
-        if self._use_preload:
-            # Check if batch is in preloaded cache
-            cache_offset = batch_num - self._cache_start_batch
-            if 0 <= cache_offset < len(self._cached_batches):
-                # Hit: return from preloaded cache (shared memory tensors)
-                batch = self._cached_batches[cache_offset]
-                # Return torch tensors directly (no numpy conversion!)
-                return {
-                    'image': batch['images'][local_idx].contiguous(),
-                    'label': batch['labels'][local_idx].contiguous()
-                }
-            else:
-                # Miss: load from disk (shouldn't happen often with proper config)
-                batch = self._load_batch_from_disk(batch_num)
-                return {
-                    'image': batch['images'][local_idx].contiguous(),
-                    'label': batch['labels'][local_idx].contiguous()
-                }
-        else:
-            # Old LRU cache behavior
-            batch = self._load_batch(batch_num)
-            return {
-                'image': batch['images'][local_idx],
-                'label': batch['labels'][local_idx]
-            }
+        # Load batch (with per-worker caching)
+        batch = self._load_batch_cached(batch_num)
 
-    def _preload_cache(self, start_batch, num_batches):
-        """Preload multiple batch files into RAM using shared memory"""
-        import logging
-        logger = logging.getLogger(__name__)
+        return {
+            'image': batch['images'][local_idx].contiguous(),
+            'label': batch['labels'][local_idx].contiguous()
+        }
 
-        self._cache_start_batch = start_batch
+    def _load_batch_cached(self, batch_num):
+        """
+        Load batch with simple LRU caching per worker.
 
-        # Use shared memory for arrays that workers can access
-        # Convert numpy arrays to torch tensors in shared memory
-        self._cached_batches = []
+        Each worker maintains its own cache (3 batches), so with 12 workers
+        we have at most 12 * 3 * 1.36 GB = ~49 GB total across all workers.
+        """
+        # Check cache
+        if batch_num in self._worker_cache:
+            return self._worker_cache[batch_num]
 
-        for i in range(num_batches):
-            batch_num = start_batch + i
-            if batch_num >= self.num_batches:
-                break
+        # Load from disk (THIS RUNS IN WORKER PROCESS - parallel I/O!)
+        batch = self._load_batch_from_disk(batch_num)
 
-            batch_file = self.data_dir / f"batch_{batch_num:03d}.pt"
-            data = torch.load(batch_file)
+        # Simple LRU: if cache full, remove oldest
+        if len(self._worker_cache) >= self._worker_cache_max_size:
+            # Remove first (oldest) item
+            oldest_key = next(iter(self._worker_cache))
+            del self._worker_cache[oldest_key]
 
-            # Put tensors in shared memory (accessible by all workers)
-            images_tensor = data['images'].share_memory_()
-            labels_tensor = data['labels'].share_memory_()
-
-            self._cached_batches.append({
-                'images': images_tensor,
-                'labels': labels_tensor
-            })
-
-            if (i + 1) % 10 == 0:
-                logger.info(f"  Loaded {i+1}/{num_batches} batches...")
+        # Add to cache
+        self._worker_cache[batch_num] = batch
+        return batch
 
     def _load_batch_from_disk(self, batch_num):
-        """Load single batch from disk (fallback for cache misses)"""
+        """Load single batch from disk."""
         batch_file = self.data_dir / f"batch_{batch_num:03d}.pt"
-        data = torch.load(batch_file)
+        data = torch.load(batch_file, weights_only=False)
         return {
             'images': data['images'],
             'labels': data['labels']
         }
 
-    def _load_batch_uncached(self, batch_num):
-        """Load batch file from disk (wrapped by LRU cache) - deprecated path"""
-        return self._load_batch_from_disk(batch_num)
-
     def __repr__(self):
-        if self._use_preload:
-            return (f"BatchedDataset(samples={self.num_samples}, "
-                    f"batches={self.num_batches}, "
-                    f"cached={self.batches_to_cache}, "
-                    f"ram_budget={self.batches_to_cache * self.batch_size_gb:.1f}GB)")
-        else:
-            return (f"BatchedDataset(samples={self.num_samples}, "
-                    f"batches={self.num_batches}, "
-                    f"samples_per_batch={self.samples_per_batch}, "
-                    f"cache_size={self._cache_size})")
+        return (f"BatchedDataset(samples={self.num_samples}, "
+                f"batches={self.num_batches}, "
+                f"samples_per_batch={self.samples_per_batch}, "
+                f"streaming=True)")

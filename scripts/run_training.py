@@ -121,25 +121,18 @@ def main():
     # Step 3: Train
     logger.info("\n[3/3] Training SAM2...")
 
-    # Load datasets with RAM budget
-    ram_budget_gb = config['training'].get('data_cache_ram_gb', None)
-    cache_size = config['training'].get('cache_size', 3)  # Fallback for old configs
-
+    # Load datasets with streaming workers
     train_path = Path(config['data']['train_dataset']) / config['data']['mask_type']
     logger.info(f"Loading training dataset: {train_path}")
-    train_dataset = BatchedDataset(train_path, ram_budget_gb=ram_budget_gb, cache_size=cache_size)
-    logger.info(f"  {len(train_dataset)} samples")
+    train_dataset = BatchedDataset(train_path)
+    logger.info(f"  {train_dataset}")
 
     val_dataset = None
     if 'val_dataset' in config['data']:
-        val_ram_budget = config['training'].get('val_data_cache_ram_gb', None)
-        # If val_data_cache_ram_gb is None, use -1 to mean "load all"
-        if val_ram_budget is None:
-            val_ram_budget = -1
         val_path = Path(config['data']['val_dataset']) / config['data']['mask_type']
         logger.info(f"Loading validation dataset: {val_path}")
-        val_dataset = BatchedDataset(val_path, ram_budget_gb=val_ram_budget, cache_size=cache_size)
-        logger.info(f"  {len(val_dataset)} samples")
+        val_dataset = BatchedDataset(val_path)
+        logger.info(f"  {val_dataset}")
 
     # Wrap datasets
     train_wrapper = DatasetWrapper(train_dataset)

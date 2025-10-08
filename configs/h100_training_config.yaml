@@ -1,10 +1,11 @@
 # H100 Training Config
 # GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores
 #
-# Memory allocation strategy (50% of RAM = 115 GB):
-# - Validation: ALL data (~14 GB for 1000 samples → 4000 patches after 4x augmentation)
-# - Training: Remaining ~101 GB (~185 batches, 46% of train_10000)
-# - Per batch file: ~1.36 GB for 100 patches
+# Memory strategy: Streaming multiprocessing
+# - Workers load batches on-demand (parallel disk I/O)
+# - Each worker caches 3 batches (~4 GB per worker)
+# - Total RAM: 12 workers × 4 GB = ~48 GB (leaving 182 GB free)
+# - OS filesystem cache handles repeated batch access
 
 data:
   train_generation_config: configs/synthetic_train_10k.yaml
@@ -16,7 +17,7 @@ data:
 training:
   device: cuda
   num_epochs: 10
-  batch_size: 16          # Conservative for stability (can increase to 32)
+  batch_size: 16          # H100 can handle up to 32-48 with proper data pipeline
   learning_rate: 1.0e-5
   model_checkpoint: large
   output_dir: ./training_output
@@ -41,13 +42,11 @@ training:
   # Data augmentation
   bbox_perturbation: 20
 
-  # DataLoader settings - Conservative 50% RAM usage
-  num_workers: 12
-  data_cache_ram_gb: 101   # Training data cache (50% RAM - validation)
-  val_data_cache_ram_gb: null  # Load ALL validation data (auto-calculated)
-  prefetch_factor: 2
-  persistent_workers: true
-  pin_memory: true
+  # DataLoader settings - Streaming multiprocessing
+  num_workers: 12           # Parallel batch loading (leaves 8 cores for system/generation)
+  prefetch_factor: 2        # Prefetch 2 batches per worker
+  persistent_workers: true  # Keep workers alive between epochs
+  pin_memory: true          # Faster GPU transfer
 
   # Training optimization
   log_interval: 50
