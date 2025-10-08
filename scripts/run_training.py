@@ -9,7 +9,6 @@ Usage:
 import argparse
 import sys
 import yaml
-import subprocess
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -20,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.samrfi.training.sam2_trainer import SAM2Trainer
 from src.samrfi.data import BatchedDataset
+from src.samrfi.data_generation import SyntheticDataGenerator
+from src.samrfi.config.config_loader import ConfigLoader
 
 
 def setup_logging(output_dir):
@@ -91,32 +92,29 @@ def main():
     # Step 1: Generate training dataset
     if not args.skip_generation:
         logger.info("\n[1/3] Generating training dataset...")
-        train_gen_config = config['data']['train_generation_config']
+        train_gen_config_path = config['data']['train_generation_config']
         train_output = config['data']['train_dataset']
 
-        cmd = [
-            'samrfi', 'generate-data',
-            '--source', 'synthetic',
-            '--config', train_gen_config,
-            '--output', train_output
-        ]
-        logger.info(f"Running: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
+        logger.info(f"  Config: {train_gen_config_path}")
+        logger.info(f"  Output: {train_output}")
+
+        # Load generation config and generate
+        train_gen_config = ConfigLoader.load_data(train_gen_config_path)
+        generator = SyntheticDataGenerator(train_gen_config)
+        generator.generate(output_path=train_output)
 
         # Step 2: Generate validation dataset
         if 'val_generation_config' in config['data']:
             logger.info("\n[2/3] Generating validation dataset...")
-            val_gen_config = config['data']['val_generation_config']
+            val_gen_config_path = config['data']['val_generation_config']
             val_output = config['data']['val_dataset']
 
-            cmd = [
-                'samrfi', 'generate-data',
-                '--source', 'synthetic',
-                '--config', val_gen_config,
-                '--output', val_output
-            ]
-            logger.info(f"Running: {' '.join(cmd)}")
-            subprocess.run(cmd, check=True)
+            logger.info(f"  Config: {val_gen_config_path}")
+            logger.info(f"  Output: {val_output}")
+
+            val_gen_config = ConfigLoader.load_data(val_gen_config_path)
+            generator = SyntheticDataGenerator(val_gen_config)
+            generator.generate(output_path=val_output)
     else:
         logger.info("\n[1/3] Skipping dataset generation...")
 
