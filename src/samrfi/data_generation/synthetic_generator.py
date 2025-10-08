@@ -163,13 +163,15 @@ class SyntheticDataGenerator:
                     synth_config=synth_config,
                 )
 
-                # Generate in parallel
+                # Generate in parallel using apply_async (avoids unpicklable lambda)
                 with Pool(generation_workers) as pool:
-                    results = list(tqdm(
-                        pool.imap(lambda _: generate_func(), range(batch_samples)),
-                        total=batch_samples,
-                        desc=f"Batch {batch_idx + 1}/{num_batches}"
-                    ))
+                    # Submit all tasks
+                    async_results = [pool.apply_async(generate_func) for _ in range(batch_samples)]
+
+                    # Collect results with progress bar
+                    results = []
+                    for ar in tqdm(async_results, total=batch_samples, desc=f"Batch {batch_idx + 1}/{num_batches}"):
+                        results.append(ar.get())
 
                 # Unpack results
                 for waterfall, exact_mask, rfi_params in results:
