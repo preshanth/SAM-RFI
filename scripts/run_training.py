@@ -102,21 +102,24 @@ def main():
         train_gen_config = ConfigLoader.load_data(train_gen_config_path)
         generator = SyntheticDataGenerator(train_gen_config)
         generator.generate(output_path=train_output)
-
-        # Step 2: Generate validation dataset
-        if 'val_generation_config' in config['data']:
-            logger.info("\n[2/3] Generating validation dataset...")
-            val_gen_config_path = config['data']['val_generation_config']
-            val_output = config['data']['val_dataset']
-
-            logger.info(f"  Config: {val_gen_config_path}")
-            logger.info(f"  Output: {val_output}")
-
-            val_gen_config = ConfigLoader.load_data(val_gen_config_path)
-            generator = SyntheticDataGenerator(val_gen_config)
-            generator.generate(output_path=val_output)
     else:
         logger.info("\n[1/3] Skipping dataset generation...")
+        
+    # Step 2: (Optional) Generate validation dataset
+    if not args.skip_generation and 'val_generation_config' in config['data']:
+        logger.info("\n[2/3] Generating validation dataset...")
+        val_gen_config_path = config['data']['val_generation_config']
+        val_output = config['data']['val_dataset']
+
+        logger.info(f"  Config: {val_gen_config_path}")
+        logger.info(f"  Output: {val_output}")
+
+        # Load generation config and generate
+        val_gen_config = ConfigLoader.load_data(val_gen_config_path)
+        generator = SyntheticDataGenerator(val_gen_config)
+        generator.generate(output_path=val_output)
+    else:
+        logger.info("\n[2/3] Skipping validation dataset generation...")
 
     # Step 3: Train
     logger.info("\n[3/3] Training SAM2...")
