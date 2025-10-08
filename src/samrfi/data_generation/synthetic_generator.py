@@ -11,6 +11,46 @@ import numpy as np
 from samrfi.data import Preprocessor
 
 
+# Module-level function for multiprocessing (must be picklable)
+def _generate_and_preprocess_single_sample(generator_instance, proc_config, **gen_kwargs):
+    """
+    Generate and preprocess a single sample (called by worker processes).
+
+    Each worker:
+      1. Generates 1 raw sample (complex128)
+      2. Preprocesses it with augmentation (inline, no nested parallelism)
+      3. Returns processed patches (float32)
+
+    Args:
+        generator_instance: SyntheticDataGenerator instance
+        proc_config: Processing configuration dict
+        **gen_kwargs: Arguments for _generate_single_sample()
+
+    Returns:
+        TorchDataset with processed patches from this one sample
+    """
+    # Generate one sample
+    waterfall, exact_mask, rfi_params = generator_instance._generate_single_sample(**gen_kwargs)
+
+    # Preprocess this ONE sample with augmentation
+    # Note: num_workers=0 to avoid nested parallelism
+    preprocessor = Preprocessor(waterfall, flags=exact_mask)
+    dataset = preprocessor.create_dataset(
+        patch_size=proc_config.get("patch_size", 128),
+        stretch=proc_config.get("stretch", None),
+        flag_sigma=proc_config.get("flag_sigma", 5),
+        use_custom_flags=True,
+        num_patches=proc_config.get("num_patches", None),
+        normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+        normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+        num_workers=0,  # CRITICAL: No nested parallelism
+        enable_augmentation=proc_config.get("enable_augmentation", True),
+        augmentation_rotations=proc_config.get("augmentation_rotations", 4),
+    )
+
+    return dataset, rfi_params
+
+
 class SyntheticDataGenerator:
     """
     Generate SAM2 training datasets from synthetic RFI simulations
@@ -104,17 +144,24 @@ class SyntheticDataGenerator:
         print(f"Number of polarizations: {num_polarizations}")
         print(f"Polarization correlation: {pol_corr}")
 
+        # Check augmentation settings for accurate reporting
+        augmentation_rotations = proc_config.get("augmentation_rotations", 4)
+        enable_augmentation = proc_config.get("enable_augmentation", True)
+        effective_rotations = augmentation_rotations if enable_augmentation else 1
+        expected_patches = num_samples * effective_rotations
+
         # Generate samples in batches to avoid memory exhaustion
         print(f"\n[1/5] Generating {num_samples} synthetic samples...")
+        print(f"  With {effective_rotations}x augmentation → {expected_patches} patches expected")
 
         batch_size = synth_config.get("generation_batch_size", 50)  # Samples per generation batch
         num_batches = (num_samples + batch_size - 1) // batch_size
-        print(f"Generation batch size: {batch_size} samples/batch ({num_batches} batches)")
+        print(f"  Generation batch size: {batch_size} raw samples/batch ({num_batches} batches)")
 
         # Check for parallel generation
         generation_workers = synth_config.get("generation_workers", 1)
         if generation_workers > 1:
-            print(f"Using {generation_workers} parallel workers for generation")
+            print(f"  Using {generation_workers} parallel workers (each does generation + augmentation)")
 
         # Initialize BatchWriters for streaming to disk
         from samrfi.data.torch_dataset import BatchWriter
@@ -127,132 +174,73 @@ class SyntheticDataGenerator:
         exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=100)
         mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100) if generate_mad else None
 
+        # Prepare generation kwargs for workers
+        gen_kwargs = {
+            "num_channels": num_channels,
+            "num_times": num_times,
+            "noise_level": noise_level,
+            "rfi_power_min": rfi_power_min,
+            "rfi_power_max": rfi_power_max,
+            "rfi_config": rfi_config,
+            "enable_bandpass": enable_bandpass,
+            "bandpass_order": synth_config.get("bandpass_polynomial_order", 8),
+            "num_polarizations": num_polarizations,
+            "pol_corr": pol_corr,
+            "synth_config": synth_config,
+        }
+
         all_rfi_parameters = []
-        total_rfi_flags = 0
-        total_pixels = 0
-        total_patches = 0
+        total_raw_samples = 0
+        total_patches_written = 0
 
         for batch_idx in range(num_batches):
             start_idx = batch_idx * batch_size
             end_idx = min(start_idx + batch_size, num_samples)
             batch_samples = end_idx - start_idx
 
-            print(f"\n  Processing batch {batch_idx + 1}/{num_batches} (samples {start_idx}-{end_idx})...")
-
-            batch_waterfalls = []
-            batch_exact_masks = []
+            expected_patches_batch = batch_samples * effective_rotations
+            print(f"\n  Batch {batch_idx + 1}/{num_batches}: {batch_samples} raw samples → {expected_patches_batch} patches expected")
 
             if generation_workers > 1:
-                # Parallel generation using multiprocessing
+                # Parallel: each worker generates + preprocesses 1 sample
                 from multiprocessing import Pool
                 from functools import partial
 
-                # Create partial function with fixed parameters
-                generate_func = partial(
-                    self._generate_single_sample,
-                    num_channels=num_channels,
-                    num_times=num_times,
-                    noise_level=noise_level,
-                    rfi_power_min=rfi_power_min,
-                    rfi_power_max=rfi_power_max,
-                    rfi_config=rfi_config,
-                    enable_bandpass=enable_bandpass,
-                    bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
-                    num_polarizations=num_polarizations,
-                    pol_corr=pol_corr,
-                    synth_config=synth_config,
+                worker_func = partial(
+                    _generate_and_preprocess_single_sample,
+                    generator_instance=self,
+                    proc_config=proc_config,
+                    **gen_kwargs
                 )
 
-                # Generate in parallel using apply_async (avoids unpicklable lambda)
                 with Pool(generation_workers) as pool:
-                    # Submit all tasks
-                    async_results = [pool.apply_async(generate_func) for _ in range(batch_samples)]
+                    async_results = [pool.apply_async(worker_func) for _ in range(batch_samples)]
 
-                    # Collect results with progress bar
                     results = []
-                    for ar in tqdm(async_results, total=batch_samples, desc=f"Batch {batch_idx + 1}/{num_batches}"):
+                    for ar in tqdm(async_results, total=batch_samples, desc=f"    Generating"):
                         results.append(ar.get())
 
-                # Unpack results
-                for waterfall, exact_mask, rfi_params in results:
-                    batch_waterfalls.append(waterfall)
-                    batch_exact_masks.append(exact_mask)
+                # Collect all patches from all workers
+                for dataset, rfi_params in results:
+                    exact_writer.add_batch(dataset)
                     all_rfi_parameters.append(rfi_params)
+                    total_patches_written += len(dataset)
+
             else:
-                # Sequential generation (original behavior)
-                for i in tqdm(range(batch_samples), desc=f"Batch {batch_idx + 1}/{num_batches}"):
-                    waterfall, exact_mask, rfi_params = self._generate_single_sample(
-                        num_channels=num_channels,
-                        num_times=num_times,
-                        noise_level=noise_level,
-                        rfi_power_min=rfi_power_min,
-                        rfi_power_max=rfi_power_max,
-                        rfi_config=rfi_config,
-                        enable_bandpass=enable_bandpass,
-                        bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
-                        num_polarizations=num_polarizations,
-                        pol_corr=pol_corr,
-                        synth_config=synth_config,
+                # Sequential: generate + preprocess one at a time
+                for i in tqdm(range(batch_samples), desc=f"    Generating"):
+                    dataset, rfi_params = _generate_and_preprocess_single_sample(
+                        self, proc_config, **gen_kwargs
                     )
-
-                    batch_waterfalls.append(waterfall)
-                    batch_exact_masks.append(exact_mask)
+                    exact_writer.add_batch(dataset)
                     all_rfi_parameters.append(rfi_params)
+                    total_patches_written += len(dataset)
 
-            # Stack this batch
-            batch_data = np.vstack(batch_waterfalls)
-            batch_masks = np.vstack(batch_exact_masks)
-
-            # Track RFI statistics
-            total_rfi_flags += np.sum(batch_masks)
-            total_pixels += batch_masks.size
-
-            print(f"    Batch data shape: {batch_data.shape}")
-            print(f"    Batch masks shape: {batch_masks.shape}")
-
-            # Create datasets for this batch
-            print(f"    Creating datasets for batch {batch_idx + 1}...")
-
-            # Dataset 1: Exact ground truth masks
-            preprocessor_exact = Preprocessor(batch_data, flags=batch_masks)
-            batch_dataset_exact = preprocessor_exact.create_dataset(
-                patch_size=proc_config.get("patch_size", 128),
-                stretch=proc_config.get("stretch", None),
-                flag_sigma=proc_config.get("flag_sigma", 5),
-                use_custom_flags=True,
-                num_patches=proc_config.get("num_patches", None),
-                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-                num_workers=proc_config.get("num_workers", 4),
-            )
-
-            print(f"    Batch {batch_idx + 1} processed: {len(batch_dataset_exact)} patches")
-            total_patches += len(batch_dataset_exact)
-
-            # Write exact masks to disk immediately
-            exact_writer.add_batch(batch_dataset_exact)
+            # Flush all accumulated patches to disk
             exact_writer._flush()
+            total_raw_samples += batch_samples
 
-            # Optional: Generate MAD-based masks
-            if generate_mad:
-                preprocessor_mad = Preprocessor(batch_data, flags=None)
-                batch_dataset_mad = preprocessor_mad.create_dataset(
-                    patch_size=proc_config.get("patch_size", 128),
-                    stretch=proc_config.get("stretch", None),
-                    flag_sigma=proc_config.get("flag_sigma", 5),
-                    use_custom_flags=False,
-                    num_patches=proc_config.get("num_patches", None),
-                    normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                    normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-                    num_workers=proc_config.get("num_workers", 4),
-                )
-                mad_writer.add_batch(batch_dataset_mad)
-                mad_writer._flush()
-                del preprocessor_mad, batch_dataset_mad
-
-            # Clean up batch arrays
-            del batch_waterfalls, batch_exact_masks, batch_data, batch_masks
-            del preprocessor_exact, batch_dataset_exact
+            print(f"    Wrote {total_patches_written} patches so far ({total_raw_samples}/{num_samples} raw samples processed)")
 
         # Finalize batch writing (flush remaining samples + write metadata)
         print("\n[2/5] Finalizing batch files...")
@@ -261,13 +249,12 @@ class SyntheticDataGenerator:
             mad_writer.finalize()
 
         # Summary
-        rfi_fraction = (total_rfi_flags / total_pixels) * 100
         print(f"\n[3/5] Generation summary:")
-        print(f"  Total samples: {num_samples}")
-        print(f"  Total patches: {total_patches}")
+        print(f"  Raw samples generated: {total_raw_samples}")
+        print(f"  Augmentation: {effective_rotations}x rotations")
+        print(f"  Total patches written: {total_patches_written}")
         print(f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}")
-        print(f"  RFI fraction: {rfi_fraction:.2f}%")
-        print(f"  Stretch: {proc_config.get('stretch', 'SQRT')}")
+        print(f"  Stretch: {proc_config.get('stretch', None) or 'None'}")
 
         # Save generation metadata (separate from batch metadata)
         print("\n[4/5] Saving generation metadata...")
@@ -279,7 +266,7 @@ class SyntheticDataGenerator:
                 "rfi_power_max_jy": rfi_power_max,
                 "dynamic_range": float(rfi_power_max * 1000 / noise_level),
             },
-            "num_samples": num_samples,
+            "num_raw_samples": total_raw_samples,
             "num_channels": num_channels,
             "num_times": num_times,
             "rfi_config": {k: v for k, v in rfi_config.items() if v["count"] > 0},
@@ -290,16 +277,16 @@ class SyntheticDataGenerator:
                 ),
             },
             "polarization_correlation": pol_corr,
-            "num_patches": total_patches,
-            "rfi_fraction_percent": float(rfi_fraction),
-            "patch_size": proc_config.get("patch_size", 128),
-            "stretch": proc_config.get("stretch", "SQRT"),
-            "ground_truth": "exact",  # Not MAD-based!
             "augmentation": {
-                "rotations": proc_config.get("augmentation", {}).get("rotations", True)
+                "enabled": enable_augmentation,
+                "rotations": effective_rotations,
             },
+            "num_patches": total_patches_written,
+            "patch_size": proc_config.get("patch_size", 128),
+            "stretch": proc_config.get("stretch", None),
+            "ground_truth": "exact",  # Not MAD-based!
             "batch_processing": {
-                "batch_size": batch_size,
+                "generation_batch_size": batch_size,
                 "num_batches": num_batches,
             },
         }

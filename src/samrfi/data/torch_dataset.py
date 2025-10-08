@@ -124,42 +124,38 @@ class BatchWriter:
             self._flush()
 
     def _flush(self):
-        """Write accumulated data to batch_NNN.pt."""
+        """Write ALL accumulated data to disk, clearing memory."""
         if not self.accumulated_images:
             return
 
+        # Concatenate all accumulated data
         images = torch.cat(self.accumulated_images)
         labels = torch.cat(self.accumulated_labels)
 
-        # Take exactly samples_per_batch (might have a few extra)
-        num_to_write = min(len(images), self.samples_per_batch)
-        images_to_write = images[:num_to_write]
-        labels_to_write = labels[:num_to_write]
+        # Clear accumulators immediately to free memory
+        self.accumulated_images = []
+        self.accumulated_labels = []
 
-        # Write file (uncompressed for fast loading)
-        batch_file = self.output_dir / f"batch_{self.batch_file_idx:03d}.pt"
-        torch.save({
-            'images': images_to_write,
-            'labels': labels_to_write
-        }, batch_file)
+        # Write in chunks of samples_per_batch
+        total_samples = len(images)
+        for start_idx in range(0, total_samples, self.samples_per_batch):
+            end_idx = min(start_idx + self.samples_per_batch, total_samples)
 
-        size_gb = (images_to_write.element_size() * images_to_write.numel() +
-                   labels_to_write.element_size() * labels_to_write.numel()) / 1e9
-        print(f"  Wrote {batch_file.name}: {num_to_write} samples ({size_gb:.2f} GB)")
+            images_chunk = images[start_idx:end_idx]
+            labels_chunk = labels[start_idx:end_idx]
 
-        # Track remainder if any
-        remainder_images = images[num_to_write:]
-        remainder_labels = labels[num_to_write:]
+            batch_file = self.output_dir / f"batch_{self.batch_file_idx:03d}.pt"
+            torch.save({
+                'images': images_chunk,
+                'labels': labels_chunk
+            }, batch_file)
 
-        if len(remainder_images) > 0:
-            self.accumulated_images = [remainder_images]
-            self.accumulated_labels = [remainder_labels]
-        else:
-            self.accumulated_images = []
-            self.accumulated_labels = []
+            size_gb = (images_chunk.element_size() * images_chunk.numel() +
+                       labels_chunk.element_size() * labels_chunk.numel()) / 1e9
+            print(f"    Wrote {batch_file.name}: {len(images_chunk)} patches ({size_gb:.2f} GB)")
 
-        self.total_samples += num_to_write
-        self.batch_file_idx += 1
+            self.total_samples += len(images_chunk)
+            self.batch_file_idx += 1
 
     def finalize(self):
         """Flush remaining samples and write metadata."""

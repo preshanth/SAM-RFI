@@ -2,13 +2,13 @@
 # GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores
 #
 # Memory allocation strategy (50% of RAM = 115 GB):
-# - Validation: ALL data (~14 GB for 1000 samples)
-# - Training: Remaining ~101 GB (~74 batches, 46% of train_4000)
-# - Per batch file: 1.36GB for 100 samples
+# - Validation: ALL data (~14 GB for 1000 samples → 4000 patches after 4x augmentation)
+# - Training: Remaining ~101 GB (~185 batches, 46% of train_10000)
+# - Per batch file: ~1.36 GB for 100 patches
 
 data:
-  train_generation_config: configs/synthetic_train_4k.yaml
-  train_dataset: ./datasets/train_4000
+  train_generation_config: configs/synthetic_train_10k.yaml
+  train_dataset: ./datasets/train_10000
   val_generation_config: configs/synthetic_val_1k.yaml
   val_dataset: ./datasets/val_1000
   mask_type: exact_masks
