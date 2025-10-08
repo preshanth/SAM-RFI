@@ -18,7 +18,7 @@ data : Data loading and preprocessing
     - MSLoader: Load CASA measurement sets
     - Preprocessor: Patchify, normalize, and preprocess data
     - SAMDataset: PyTorch Dataset wrapper
-    - NumpyDataset: Efficient numpy-backed datasets
+    - TorchDataset: Efficient torch-backed datasets with shared memory
 
 data_generation : Dataset generators
     - SyntheticDataGenerator: Generate physically realistic synthetic RFI
@@ -63,7 +63,7 @@ from .data import (
     Preprocessor,
     SAMDataset,
     BatchedDataset,
-    NumpyDataset,
+    TorchDataset,
     BatchWriter,
     HFDatasetWrapper,
 )
@@ -92,7 +92,7 @@ __all__ = [
     "Preprocessor",
     "SAMDataset",
     "BatchedDataset",
-    "NumpyDataset",
+    "TorchDataset",
     "BatchWriter",
     "HFDatasetWrapper",
     # Data generation

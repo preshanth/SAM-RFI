@@ -29,6 +29,9 @@ synthetic:
   bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
   polarization_correlation: 0.8  # Correlated RFI in XX/YY
 
+  # Parallel generation (smaller for tests)
+  generation_workers: 4  # Use 4 workers for testing (faster than 1, not too greedy)
+
 processing:
   normalize_before_stretch: false
   normalize_after_stretch: false
@@ -36,3 +39,7 @@ processing:
   flag_sigma: 5
   patch_size: 1024
   num_workers: 4
+
+  # Data augmentation (disabled for faster testing)
+  enable_augmentation: false  # Disable for speed
+  augmentation_rotations: 1   # No rotations (value ignored when disabled)

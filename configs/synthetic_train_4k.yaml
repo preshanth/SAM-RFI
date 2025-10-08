@@ -24,6 +24,9 @@ synthetic:
   bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
   polarization_correlation: 0.8  # Correlated RFI in XX/YY
 
+  # Parallel generation
+  generation_workers: 16  # Number of parallel workers (use 16 of 20 cores, leave 4 for system)
+
 processing:
   # Normalization: Divide by median to make patches comparable
   # - Real data: Recommended (accounts for baseline length, system temperature)
@@ -55,3 +58,7 @@ processing:
   # - Default: 4 (modest, safe for most systems)
   # - Recommended: Set to (total_cores - 2) to leave headroom for system
   num_workers: 4
+
+  # Data augmentation
+  enable_augmentation: true   # Enable rotation augmentation
+  augmentation_rotations: 4   # Number of rotations (1=none, 2=flip, 4=full)

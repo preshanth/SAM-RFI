@@ -111,8 +111,13 @@ class SyntheticDataGenerator:
         num_batches = (num_samples + batch_size - 1) // batch_size
         print(f"Generation batch size: {batch_size} samples/batch ({num_batches} batches)")
 
+        # Check for parallel generation
+        generation_workers = synth_config.get("generation_workers", 1)
+        if generation_workers > 1:
+            print(f"Using {generation_workers} parallel workers for generation")
+
         # Initialize BatchWriters for streaming to disk
-        from samrfi.data.numpy_dataset import BatchWriter
+        from samrfi.data.torch_dataset import BatchWriter
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,8 +142,14 @@ class SyntheticDataGenerator:
             batch_waterfalls = []
             batch_exact_masks = []
 
-            for i in tqdm(range(batch_samples), desc=f"Batch {batch_idx + 1}/{num_batches}"):
-                waterfall, exact_mask, rfi_params = self._generate_single_sample(
+            if generation_workers > 1:
+                # Parallel generation using multiprocessing
+                from multiprocessing import Pool
+                from functools import partial
+
+                # Create partial function with fixed parameters
+                generate_func = partial(
+                    self._generate_single_sample,
                     num_channels=num_channels,
                     num_times=num_times,
                     noise_level=noise_level,
@@ -152,9 +163,39 @@ class SyntheticDataGenerator:
                     synth_config=synth_config,
                 )
 
-                batch_waterfalls.append(waterfall)
-                batch_exact_masks.append(exact_mask)
-                all_rfi_parameters.append(rfi_params)
+                # Generate in parallel
+                with Pool(generation_workers) as pool:
+                    results = list(tqdm(
+                        pool.imap(lambda _: generate_func(), range(batch_samples)),
+                        total=batch_samples,
+                        desc=f"Batch {batch_idx + 1}/{num_batches}"
+                    ))
+
+                # Unpack results
+                for waterfall, exact_mask, rfi_params in results:
+                    batch_waterfalls.append(waterfall)
+                    batch_exact_masks.append(exact_mask)
+                    all_rfi_parameters.append(rfi_params)
+            else:
+                # Sequential generation (original behavior)
+                for i in tqdm(range(batch_samples), desc=f"Batch {batch_idx + 1}/{num_batches}"):
+                    waterfall, exact_mask, rfi_params = self._generate_single_sample(
+                        num_channels=num_channels,
+                        num_times=num_times,
+                        noise_level=noise_level,
+                        rfi_power_min=rfi_power_min,
+                        rfi_power_max=rfi_power_max,
+                        rfi_config=rfi_config,
+                        enable_bandpass=enable_bandpass,
+                        bandpass_order=synth_config.get("bandpass_polynomial_order", 8),
+                        num_polarizations=num_polarizations,
+                        pol_corr=pol_corr,
+                        synth_config=synth_config,
+                    )
+
+                    batch_waterfalls.append(waterfall)
+                    batch_exact_masks.append(exact_mask)
+                    all_rfi_parameters.append(rfi_params)
 
             # Stack this batch
             batch_data = np.vstack(batch_waterfalls)
@@ -289,7 +330,7 @@ class SyntheticDataGenerator:
         print(
             f"  Mask shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)} (exact binary)"
         )
-        print(f"  Format: Batched numpy files (uncompressed .npz)")
+        print(f"  Format: Batched torch files (uncompressed .pt)")
 
         print("\n✓ Generation Complete!")
         if generate_mad:

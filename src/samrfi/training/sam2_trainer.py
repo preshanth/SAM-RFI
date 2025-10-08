@@ -417,12 +417,12 @@ class SAM2Trainer:
             patch_method = params.get("patch_method", "unknown")
             patch_size = params.get("patch_size", "unknown")
         else:
-            # New format (NumpyDataset) - extract from metadata if available
+            # New format (TorchDataset) - extract from metadata if available
             dataset = self.RFIDataset.dataset
             metadata = getattr(dataset, 'metadata', {})
             stretch = metadata.get("stretch", "unknown")
             flag_sigma = metadata.get("flag_sigma", "unknown")
-            patch_method = "numpy"
+            patch_method = "torch"
             patch_size = metadata.get("patch_size", "unknown")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -461,12 +461,12 @@ class SAM2Trainer:
             patch_method = params.get("patch_method", "unknown")
             patch_size = params.get("patch_size", "unknown")
         else:
-            # New format (NumpyDataset)
+            # New format (TorchDataset)
             dataset = self.RFIDataset.dataset
             metadata = getattr(dataset, 'metadata', {})
             stretch = metadata.get("stretch", "unknown")
             flag_sigma = metadata.get("flag_sigma", "unknown")
-            patch_method = "numpy"
+            patch_method = "torch"
             patch_size = metadata.get("patch_size", "unknown")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

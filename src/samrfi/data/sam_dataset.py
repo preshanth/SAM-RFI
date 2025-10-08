@@ -59,10 +59,10 @@ class SAMDataset(TorchDataset):
 
         # Convert to tensors (skip processor - normalization already done offline)
         # Image is already (H, W, 3) normalized, need (3, H, W) for PyTorch
-        pixel_values = torch.from_numpy(image).permute(2, 0, 1)  # (H,W,3) -> (3,H,W)
+        pixel_values = image.permute(2, 0, 1).contiguous()  # (H,W,3) -> (3,H,W)
 
         # Process bounding boxes to SAM2 format
-        input_boxes = torch.tensor([[bbox]], dtype=torch.float32)
+        input_boxes = torch.tensor([bbox], dtype=torch.float32)
 
         return {
             "pixel_values": pixel_values,
@@ -75,21 +75,21 @@ class SAMDataset(TorchDataset):
         Extract bounding box from mask with random perturbation.
 
         Args:
-            mask: Binary mask array
+            mask: Binary mask tensor
 
         Returns:
             Bounding box [x_min, y_min, x_max, y_max]
         """
         # Find mask extent
-        y_indices, x_indices = np.where(mask > 0)
+        y_indices, x_indices = torch.where(mask > 0)
 
         if len(x_indices) == 0 or len(y_indices) == 0:
             # Empty mask - return center box (as Python int)
             H, W = mask.shape
             return [int(W // 4), int(H // 4), int(3 * W // 4), int(3 * H // 4)]
 
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
+        x_min, x_max = x_indices.min().item(), x_indices.max().item()
+        y_min, y_max = y_indices.min().item(), y_indices.max().item()
 
         # Add random perturbation (configurable)
         H, W = mask.shape
@@ -111,13 +111,13 @@ class BatchedDataset(TorchDataset):
 
     Directory structure:
         data_dir/
-        ├── batch_000.npz  (images, labels)
-        ├── batch_001.npz
+        ├── batch_000.pt  (images, labels)
+        ├── batch_001.pt
         ├── ...
         └── metadata.json
 
     Args:
-        data_dir: Path to directory containing batch_*.npz files
+        data_dir: Path to directory containing batch_*.pt files
         ram_budget_gb: RAM budget in GB for preloading batches (default: None = old LRU behavior)
         cache_size: [Deprecated] Number of batch files for LRU cache (only if ram_budget_gb=None)
     """
@@ -143,9 +143,10 @@ class BatchedDataset(TorchDataset):
         self.num_batches = self.metadata['num_batches']
 
         # Determine batch file size by probing first file
-        probe_file = self.data_dir / "batch_000.npz"
-        probe_data = np.load(probe_file)
-        batch_size_bytes = probe_data['images'].nbytes + probe_data['labels'].nbytes
+        probe_file = self.data_dir / "batch_000.pt"
+        probe_data = torch.load(probe_file)
+        batch_size_bytes = (probe_data['images'].element_size() * probe_data['images'].numel() +
+                            probe_data['labels'].element_size() * probe_data['labels'].numel())
         self.batch_size_gb = batch_size_bytes / 1e9
         del probe_data  # Free memory
 
@@ -193,17 +194,17 @@ class BatchedDataset(TorchDataset):
             if 0 <= cache_offset < len(self._cached_batches):
                 # Hit: return from preloaded cache (shared memory tensors)
                 batch = self._cached_batches[cache_offset]
-                # Convert back to numpy for compatibility with SAMDataset
+                # Return torch tensors directly (no numpy conversion!)
                 return {
-                    'image': batch['images'][local_idx].numpy(),
-                    'label': batch['labels'][local_idx].numpy()
+                    'image': batch['images'][local_idx].contiguous(),
+                    'label': batch['labels'][local_idx].contiguous()
                 }
             else:
                 # Miss: load from disk (shouldn't happen often with proper config)
                 batch = self._load_batch_from_disk(batch_num)
                 return {
-                    'image': batch['images'][local_idx],
-                    'label': batch['labels'][local_idx]
+                    'image': batch['images'][local_idx].contiguous(),
+                    'label': batch['labels'][local_idx].contiguous()
                 }
         else:
             # Old LRU cache behavior
@@ -229,12 +230,12 @@ class BatchedDataset(TorchDataset):
             if batch_num >= self.num_batches:
                 break
 
-            batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
-            data = np.load(batch_file)
+            batch_file = self.data_dir / f"batch_{batch_num:03d}.pt"
+            data = torch.load(batch_file)
 
-            # Convert to torch tensors in shared memory (accessible by all workers)
-            images_tensor = torch.from_numpy(data['images']).share_memory_()
-            labels_tensor = torch.from_numpy(data['labels']).share_memory_()
+            # Put tensors in shared memory (accessible by all workers)
+            images_tensor = data['images'].share_memory_()
+            labels_tensor = data['labels'].share_memory_()
 
             self._cached_batches.append({
                 'images': images_tensor,
@@ -246,8 +247,8 @@ class BatchedDataset(TorchDataset):
 
     def _load_batch_from_disk(self, batch_num):
         """Load single batch from disk (fallback for cache misses)"""
-        batch_file = self.data_dir / f"batch_{batch_num:03d}.npz"
-        data = np.load(batch_file)
+        batch_file = self.data_dir / f"batch_{batch_num:03d}.pt"
+        data = torch.load(batch_file)
         return {
             'images': data['images'],
             'labels': data['labels']

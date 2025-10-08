@@ -5,12 +5,13 @@ Clean rewrite of RFIDataset preprocessing pipeline.
 """
 
 import numpy as np
+import torch
 from scipy import stats
 from patchify import patchify
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from functools import partial
-from .numpy_dataset import NumpyDataset
+from .torch_dataset import TorchDataset
 
 
 # Standalone functions for multiprocessing (must be picklable)
@@ -130,6 +131,8 @@ class Preprocessor:
         normalize_before_stretch=True,
         normalize_after_stretch=False,
         num_workers=4,
+        enable_augmentation=True,
+        augmentation_rotations=4,
     ):
         """
         Create HuggingFace Dataset from waterfall data.
@@ -143,6 +146,8 @@ class Preprocessor:
             normalize_before_stretch: Divide by median before stretching (default True)
             normalize_after_stretch: Divide by median after stretching (default False)
             num_workers: Number of parallel workers for preprocessing (0 for sequential, -1 for all cores, default 4)
+            enable_augmentation: Enable rotation augmentation (default True)
+            augmentation_rotations: Number of rotations (1=none, 2=flip, 4=full, default 4)
 
         Returns:
             HuggingFace Dataset with 'image' and 'label' fields
@@ -155,15 +160,25 @@ class Preprocessor:
         print(f"  Normalize after stretch: {normalize_after_stretch}")
         print(f"  Parallel workers: {num_workers if num_workers else 'sequential'}")
 
-        # Step 1: Augmentation (4-way rotation)
-        print("  [1/7] Applying 4-way rotation augmentation...")
-        augmented_data = self._four_rotations(self.data)
-        print(f"    Augmented to {len(augmented_data)} waterfalls")
+        # Step 1: Augmentation (rotation)
+        if enable_augmentation and augmentation_rotations > 1:
+            print(f"  [1/7] Applying {augmentation_rotations}-way rotation augmentation...")
+            augmented_data = self._apply_rotations(self.data, augmentation_rotations)
+            print(f"    Augmented to {len(augmented_data)} waterfalls")
 
-        if use_custom_flags and self.flags is not None:
-            augmented_flags = self._four_rotations(self.flags)
+            if use_custom_flags and self.flags is not None:
+                augmented_flags = self._apply_rotations(self.flags, augmentation_rotations)
+            else:
+                augmented_flags = None
         else:
-            augmented_flags = None
+            print("  [1/7] Skipping augmentation (disabled or rotations=1)")
+            # Flatten data without rotation
+            augmented_data = [pol for baseline in self.data for pol in baseline]
+            if use_custom_flags and self.flags is not None:
+                augmented_flags = [pol for baseline in self.flags for pol in baseline]
+            else:
+                augmented_flags = None
+            print(f"    Using {len(augmented_data)} waterfalls (no augmentation)")
 
         # Step 2: Patchify (or skip if patch_size >= image dimensions)
         waterfall_shape = augmented_data[0].shape
@@ -240,8 +255,8 @@ class Preprocessor:
             self.patch_flags = self.patch_flags[:num_patches]
             print(f"    Limited to {num_patches} patches")
 
-        # Create NumpyDataset
-        print("\n  Creating NumpyDataset...")
+        # Create TorchDataset
+        print("\n  Creating TorchDataset...")
         print(f"    Extracting 3-channel representations (gradient, log_amp, phase)...")
 
         # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
@@ -258,7 +273,7 @@ class Preprocessor:
             img_3ch = img_3ch.astype(np.float32)
             images_3ch.append(img_3ch)
 
-        # Convert lists to numpy arrays
+        # Convert lists to numpy arrays first
         images_array = np.array(images_3ch, dtype=np.float32)
 
         # Apply SAM2 ImageNet normalization (preprocess once, not during training)
@@ -266,6 +281,11 @@ class Preprocessor:
         images_array = self._apply_sam2_normalization(images_array)
 
         labels_array = np.array(self.patch_flags, dtype=np.uint8)
+
+        # Convert to torch tensors
+        print(f"    Converting to torch tensors...")
+        images_tensor = torch.from_numpy(images_array).to(torch.float32)
+        labels_tensor = torch.from_numpy(labels_array).to(torch.uint8)
 
         # Create metadata
         metadata = {
@@ -276,12 +296,47 @@ class Preprocessor:
             "normalize_after_stretch": normalize_after_stretch,
         }
 
-        self.dataset = NumpyDataset(images_array, labels_array, metadata)
+        self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
         print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
-        print(f"    Image format: numpy float32 (H, W, 3), channels=[gradient, log_amp, phase]")
+        print(f"    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
         print(f"    {self.dataset}")
 
         return self.dataset
+
+    def _apply_rotations(self, data, num_rotations):
+        """
+        Apply N-way rotation augmentation.
+
+        For each waterfall, apply rotations based on num_rotations:
+            - num_rotations=1: Original only (no augmentation)
+            - num_rotations=2: Original + vertical flip
+            - num_rotations=4: Original + flip + transpose + transpose+flip
+
+        Args:
+            data: Array of shape (baselines, pols, channels, times)
+            num_rotations: Number of rotations (1, 2, or 4)
+
+        Returns:
+            List of augmented waterfalls (each is 2D)
+        """
+        augmented = []
+
+        for baseline in data:
+            for pol in baseline:
+                # Original (always included)
+                augmented.append(pol)
+
+                if num_rotations >= 2:
+                    # Flip vertical
+                    augmented.append(np.flip(pol, axis=0))
+
+                if num_rotations >= 4:
+                    # Transpose
+                    augmented.append(pol.T)
+                    # Transpose + flip
+                    augmented.append(np.flip(pol.T, axis=0))
+
+        return augmented
 
     def _four_rotations(self, data):
         """

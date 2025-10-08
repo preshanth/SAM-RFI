@@ -12,7 +12,7 @@ from .config.config_loader import ConfigLoader, TrainingConfig, DataConfig
 from .inference import RFIPredictor
 from .data_generation.synthetic_generator import SyntheticDataGenerator
 from .data_generation.ms_generator import MSDataGenerator
-from .data.numpy_dataset import NumpyDataset
+from .data.torch_dataset import TorchDataset
 
 
 def generate_data_command(args):
@@ -45,12 +45,12 @@ def generate_data_command(args):
 
 
 def load_dataset(path):
-    """Load dataset from either .npz (numpy) or HF format"""
+    """Load dataset from either .pt (torch) or HF format"""
     path = Path(path)
 
-    if path.suffix == '.npz':
-        print(f"  Loading NumpyDataset from {path}")
-        return NumpyDataset.load_from_disk(path)
+    if path.suffix == '.pt':
+        print(f"  Loading TorchDataset from {path}")
+        return TorchDataset.load_from_disk(path)
     else:
         # Assume HF dataset directory (backward compatibility)
         from datasets import load_from_disk
@@ -177,14 +177,14 @@ def publish_dataset_command(args):
     print("SAM-RFI Dataset Publishing")
     print("=" * 60)
 
-    # Load numpy dataset
-    print(f"\nLoading numpy dataset from {args.input}")
-    numpy_dataset = NumpyDataset.load_from_disk(args.input)
-    print(f"  {numpy_dataset}")
+    # Load torch dataset
+    print(f"\nLoading torch dataset from {args.input}")
+    torch_dataset = TorchDataset.load_from_disk(args.input)
+    print(f"  {torch_dataset}")
 
     # Convert to HF format
     print(f"\nConverting to HuggingFace Dataset format...")
-    hf_dataset = HFDatasetWrapper.from_numpy(numpy_dataset, batch_size=args.batch_size)
+    hf_dataset = HFDatasetWrapper.from_numpy(torch_dataset, batch_size=args.batch_size)
 
     # Push to hub
     print(f"\nPushing to HuggingFace Hub: {args.repo_id}")
@@ -261,14 +261,14 @@ Examples:
   # Generate dataset from MS
   samrfi generate-data --source ms --config configs/ms_data.yaml --output ./datasets/my_ms_data
 
-  # Train with pre-generated dataset (.npz format)
-  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.npz
+  # Train with pre-generated dataset (.pt format)
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.pt
 
   # Train with validation
-  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.npz --validation-dataset ./datasets/val_1k/exact_masks.npz
+  samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.pt --validation-dataset ./datasets/val_1k/exact_masks.pt
 
   # Publish dataset to HuggingFace Hub
-  samrfi publish --input ./datasets/train_4k/exact_masks.npz --repo-id username/sam-rfi-dataset
+  samrfi publish --input ./datasets/train_4k/exact_masks.pt --repo-id username/sam-rfi-dataset
 
   # Predict (single pass)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
@@ -296,9 +296,9 @@ Examples:
     train_parser = subparsers.add_parser("train", help="Train SAM2 model on RFI data")
     train_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
     train_parser.add_argument(
-        "--dataset", required=True, help="Path to pre-generated dataset (.npz or HF format)"
+        "--dataset", required=True, help="Path to pre-generated dataset (.pt or HF format)"
     )
-    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (.npz or HF format, optional)")
+    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (.pt or HF format, optional)")
     train_parser.add_argument(
         "--device", choices=["cuda", "cpu"], help="Device to use (overrides config)"
     )
@@ -316,7 +316,7 @@ Examples:
 
     # Publish command
     publish_parser = subparsers.add_parser("publish", help="Publish dataset to HuggingFace Hub")
-    publish_parser.add_argument("--input", required=True, help="Path to .npz dataset")
+    publish_parser.add_argument("--input", required=True, help="Path to .pt dataset")
     publish_parser.add_argument("--repo-id", required=True, help="HuggingFace repo ID (username/dataset-name)")
     publish_parser.add_argument("--private", action="store_true", help="Make dataset private")
     publish_parser.add_argument("--token", help="HuggingFace token (or set HF_TOKEN env var)")
