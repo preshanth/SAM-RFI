@@ -352,8 +352,8 @@ class SyntheticDataGenerator:
         # Statistics
         print("\n[5/5] Dataset Statistics:")
         print(f"  Total waterfall samples: {num_samples}")
-        print(f"  Total patches: {total_patches}")
-        print(f"  RFI coverage: {rfi_fraction:.2f}%")
+        print(f"  Total patches: {total_patches_written}")
+        # print(f"  RFI coverage: {rfi_fraction:.2f}%")
         print(
             f"  Image shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}×3 (RGB)"
         )
