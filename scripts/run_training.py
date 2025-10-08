@@ -74,7 +74,12 @@ def main():
     parser = argparse.ArgumentParser(description="Full training pipeline")
     parser.add_argument("--config", required=True, help="Training config YAML")
     parser.add_argument("--skip-generation", action="store_true", help="Skip dataset generation")
+    parser.add_argument("--skip-training", action="store_true", help="Skip training")
+    parser.add_argument("--skip-validation", action="store_true", help="Skip validation dataset generation")
     args = parser.parse_args()
+    if args.skip_generation:
+        args.skip_validation = True  # Skip validation if generation is skipped
+        args.skip_training = True  # Ensure training is not skipped if generation is skipped
 
     # Load config
     with open(args.config) as f:
@@ -90,7 +95,7 @@ def main():
     logger.info("")
 
     # Step 1: Generate training dataset
-    if not args.skip_generation:
+    if not args.skip_training:
         logger.info("\n[1/3] Generating training dataset...")
         train_gen_config_path = config['data']['train_generation_config']
         train_output = config['data']['train_dataset']
@@ -106,7 +111,7 @@ def main():
         logger.info("\n[1/3] Skipping dataset generation...")
         
     # Step 2: (Optional) Generate validation dataset
-    if not args.skip_generation and 'val_generation_config' in config['data']:
+    if not args.skip_validation and 'val_generation_config' in config['data']:
         logger.info("\n[2/3] Generating validation dataset...")
         val_gen_config_path = config['data']['val_generation_config']
         val_output = config['data']['val_dataset']
