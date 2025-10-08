@@ -204,74 +204,84 @@ class SyntheticDataGenerator:
         total_raw_samples = 0
         total_patches_written = 0
 
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, num_samples)
-            batch_samples = end_idx - start_idx
+        # Create Pool ONCE outside loop (reuse for all batches)
+        pool = None
+        if generation_workers > 1:
+            from multiprocessing import Pool
+            from functools import partial
 
-            expected_patches_batch = batch_samples * effective_rotations
-            print(f"\n  Batch {batch_idx + 1}/{num_batches}: {batch_samples} raw samples → {expected_patches_batch} patches expected")
+            # Convert config to dict for pickling
+            def namespace_to_dict(obj):
+                if hasattr(obj, '__dict__'):
+                    return {k: namespace_to_dict(v) for k, v in obj.__dict__.items()}
+                elif isinstance(obj, dict):
+                    return {k: namespace_to_dict(v) for k, v in obj.items()}
+                return obj
 
-            if generation_workers > 1:
-                # Parallel: each worker generates + preprocesses 1 sample
-                from multiprocessing import Pool
-                from functools import partial
+            config_dict = namespace_to_dict(self.config)
 
-                # Convert config to dict for pickling
-                def namespace_to_dict(obj):
-                    if hasattr(obj, '__dict__'):
-                        return {k: namespace_to_dict(v) for k, v in obj.__dict__.items()}
-                    elif isinstance(obj, dict):
-                        return {k: namespace_to_dict(v) for k, v in obj.items()}
-                    return obj
+            # Create worker function with fixed kwargs
+            worker_func = partial(_worker_generate_and_preprocess, **gen_kwargs)
 
-                config_dict = namespace_to_dict(self.config)
+            # Initialize pool ONCE (reuse across all batches)
+            pool = Pool(generation_workers, initializer=_init_worker, initargs=(config_dict,))
 
-                # Create worker function with fixed kwargs
-                worker_func = partial(_worker_generate_and_preprocess, **gen_kwargs)
+        try:
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, num_samples)
+                batch_samples = end_idx - start_idx
 
-                # Initialize pool with config (each worker gets generator instance)
-                with Pool(generation_workers, initializer=_init_worker, initargs=(config_dict,)) as pool:
+                expected_patches_batch = batch_samples * effective_rotations
+                print(f"\n  Batch {batch_idx + 1}/{num_batches}: {batch_samples} raw samples → {expected_patches_batch} patches expected")
+
+                if pool is not None:
+                    # Parallel: submit tasks to existing pool
                     async_results = [pool.apply_async(worker_func) for _ in range(batch_samples)]
 
                     results = []
                     for ar in tqdm(async_results, total=batch_samples, desc=f"    Generating"):
                         results.append(ar.get())
 
-                # Collect all patches from all workers
-                for dataset, rfi_params in results:
-                    exact_writer.add_batch(dataset)
-                    all_rfi_parameters.append(rfi_params)
-                    total_patches_written += len(dataset)
+                    # Collect all patches from all workers
+                    for dataset, rfi_params in results:
+                        exact_writer.add_batch(dataset)
+                        all_rfi_parameters.append(rfi_params)
+                        total_patches_written += len(dataset)
 
-            else:
-                # Sequential: generate + preprocess one at a time
-                for i in tqdm(range(batch_samples), desc=f"    Generating"):
-                    waterfall, exact_mask, rfi_params = self._generate_single_sample(**gen_kwargs)
+                else:
+                    # Sequential: generate + preprocess one at a time
+                    for i in tqdm(range(batch_samples), desc=f"    Generating"):
+                        waterfall, exact_mask, rfi_params = self._generate_single_sample(**gen_kwargs)
 
-                    preprocessor = Preprocessor(waterfall, flags=exact_mask)
-                    dataset = preprocessor.create_dataset(
-                        patch_size=proc_config.get("patch_size", 128),
-                        stretch=proc_config.get("stretch", None),
-                        flag_sigma=proc_config.get("flag_sigma", 5),
-                        use_custom_flags=True,
-                        num_patches=proc_config.get("num_patches", None),
-                        normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                        normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-                        num_workers=0,
-                        enable_augmentation=proc_config.get("enable_augmentation", True),
-                        augmentation_rotations=proc_config.get("augmentation_rotations", 4),
-                    )
+                        preprocessor = Preprocessor(waterfall, flags=exact_mask)
+                        dataset = preprocessor.create_dataset(
+                            patch_size=proc_config.get("patch_size", 128),
+                            stretch=proc_config.get("stretch", None),
+                            flag_sigma=proc_config.get("flag_sigma", 5),
+                            use_custom_flags=True,
+                            num_patches=proc_config.get("num_patches", None),
+                            normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                            normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                            num_workers=0,
+                            enable_augmentation=proc_config.get("enable_augmentation", True),
+                            augmentation_rotations=proc_config.get("augmentation_rotations", 4),
+                        )
 
-                    exact_writer.add_batch(dataset)
-                    all_rfi_parameters.append(rfi_params)
-                    total_patches_written += len(dataset)
+                        exact_writer.add_batch(dataset)
+                        all_rfi_parameters.append(rfi_params)
+                        total_patches_written += len(dataset)
 
-            # Flush all accumulated patches to disk
-            exact_writer._flush()
-            total_raw_samples += batch_samples
+                # Flush all accumulated patches to disk
+                exact_writer._flush()
+                total_raw_samples += batch_samples
 
-            print(f"    Wrote {total_patches_written} patches so far ({total_raw_samples}/{num_samples} raw samples processed)")
+                print(f"    Wrote {total_patches_written} patches so far ({total_raw_samples}/{num_samples} raw samples processed)")
+        finally:
+            # Clean up pool
+            if pool is not None:
+                pool.close()
+                pool.join()
 
         # Finalize batch writing (flush remaining samples + write metadata)
         print("\n[2/5] Finalizing batch files...")
