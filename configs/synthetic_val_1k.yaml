@@ -26,6 +26,7 @@ synthetic:
 
   # Parallel generation
   generation_workers: 16  # Number of parallel workers (use 16 of 20 cores, leave 4 for system)
+  generation_batch_size: 1000  # Samples per batch (1000 samples = ~13 GB RAM total, all generated in 1 batch)
 
 processing:
   # Normalization: Divide by median to make patches comparable
