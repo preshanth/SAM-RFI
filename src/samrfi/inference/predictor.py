@@ -12,7 +12,7 @@ from pathlib import Path
 from transformers import Sam2Processor, Sam2Model
 from torch.utils.data import DataLoader
 
-from samrfi.data import MSLoader, Preprocessor, SAMDataset
+from samrfi.data import MSLoader, Preprocessor, SAMDataset, AdaptivePatcher, check_ms_compatibility
 
 
 class RFIPredictor:
@@ -105,15 +105,27 @@ class RFIPredictor:
         data_shape = loader.data.shape
         print(f"  Data shape: {data_shape}")
 
-        # Optionally apply existing flags
+        # Check MS compatibility and setup adaptive patching if needed
+        baselines, pols, channels, times = data_shape
+        patcher = AdaptivePatcher(data_shape, patch_size=patch_size)
+
+        # Get magnitude data
         data = loader.magnitude
+
+        # Optionally apply existing flags before padding
         if apply_existing_flags:
             print("\n[2/4] Loading and applying existing flags...")
             existing_flags = loader.load_flags()
             data = np.where(existing_flags, np.nan, data)
             print(f"  Masked {np.sum(existing_flags)/existing_flags.size*100:.2f}% of data")
+
+        # Pad data if needed
+        if patcher.pad_channels > 0 or patcher.pad_times > 0:
+            print(f"  Applying adaptive padding...")
+            data = patcher.pad_data(data)
         else:
-            print("\n[2/4] Skipping existing flags")
+            if not apply_existing_flags:
+                print("\n[2/4] No padding needed - data dimensions compatible")
 
         # Preprocess
         print("\n[3/4] Preprocessing data...")
@@ -132,7 +144,14 @@ class RFIPredictor:
 
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
-        predicted_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
+        # Use padded shape for reconstruction if padding was applied
+        recon_shape = patcher.get_patch_info()['padded_shape']
+        predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size)
+
+        # Crop flags back to original dimensions if padding was used
+        if patcher.pad_channels > 0 or patcher.pad_times > 0:
+            print("  Cropping flags to original dimensions...")
+            predicted_flags = patcher.crop_flags(predicted_flags)
 
         flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
         print(f"  Flagged: {flag_percent:.2f}% of data")
