@@ -150,13 +150,21 @@ class ZeroShotComparison:
 
         print(f"\n✓ Test data generated: {dataset_path}")
 
-        # Load dataset to get samples
-        from datasets import load_from_disk
-        self.dataset = load_from_disk(str(dataset_path))
+        # Load batched dataset (generator saves in batched format, not HF format)
+        from samrfi.data import BatchedDataset
+        exact_masks_dir = Path(dataset_path) / "exact_masks"
+
+        if not exact_masks_dir.exists():
+            raise RuntimeError(f"Expected exact_masks directory not found: {exact_masks_dir}")
+
+        self.dataset = BatchedDataset(str(exact_masks_dir))
 
         print(f"  Loaded {len(self.dataset)} samples")
-        print(f"  Image shape: {self.dataset[0]['image'].shape}")
-        print(f"  Label shape: {self.dataset[0]['label'].shape}")
+
+        # Check first sample
+        sample = self.dataset[0]
+        print(f"  Image shape: {sample['image'].shape}")
+        print(f"  Label shape: {sample['label'].shape}")
 
         return dataset_path
 
@@ -681,8 +689,9 @@ def main():
 
     if args.skip_generation and comparison.data_dir.exists():
         print(f"Using existing data: {comparison.data_dir}")
-        from datasets import load_from_disk
-        comparison.dataset = load_from_disk(str(comparison.data_dir))
+        from samrfi.data import BatchedDataset
+        exact_masks_dir = comparison.data_dir / "exact_masks"
+        comparison.dataset = BatchedDataset(str(exact_masks_dir))
 
         # Skip to testing
         comparison.test_sam3_zeroshot()
