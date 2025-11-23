@@ -182,8 +182,8 @@ class SyntheticDataGenerator:
         # Check if MAD generation is enabled
         generate_mad = synth_config.get("generate_mad_masks", False)
 
-        exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=100)
-        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100) if generate_mad else None
+        exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=batch_size)
+        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=batch_size) if generate_mad else None
 
         # Prepare generation kwargs for workers
         gen_kwargs = {

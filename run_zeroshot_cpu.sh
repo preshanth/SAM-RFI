@@ -14,8 +14,7 @@ echo ""
 python scripts/zeroshot_comparison.py \
     --output results/zeroshot_cpu/ \
     --config configs/zeroshot_cpu_10.yaml \
-    --cpu \
-    --num-cores 32
+    --cpu
 
 echo ""
 echo "=========================================="
