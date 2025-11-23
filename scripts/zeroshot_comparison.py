@@ -215,9 +215,19 @@ class ZeroShotComparison:
                 for idx in tqdm(range(len(self.dataset)), desc=f"  {prompt[:30]}"):
                     sample = self.dataset[idx]
 
-                    # Get image and ground truth
-                    image = sample['image']  # Shape: (H, W, 3)
+                    # Get image and ground truth (convert torch tensors to numpy)
+                    image = sample['image']  # Shape: (H, W, 3) or (3, H, W)
                     ground_truth = sample['label']  # Shape: (H, W)
+
+                    # Convert tensors to numpy
+                    if torch.is_tensor(image):
+                        image = image.cpu().numpy()
+                    if torch.is_tensor(ground_truth):
+                        ground_truth = ground_truth.cpu().numpy()
+
+                    # Handle channel-first format (C, H, W) -> (H, W, C)
+                    if image.ndim == 3 and image.shape[0] == 3:
+                        image = np.transpose(image, (1, 2, 0))
 
                     # Convert to PIL for processor
                     from PIL import Image
@@ -310,8 +320,21 @@ class ZeroShotComparison:
 
         for idx in tqdm(range(len(self.dataset)), desc="  tfcrop"):
             sample = self.dataset[idx]
-            image = sample['image'][:, :, 0]  # Get first channel (grayscale)
+            image = sample['image']
             ground_truth = sample['label']
+
+            # Convert tensors to numpy
+            if torch.is_tensor(image):
+                image = image.cpu().numpy()
+            if torch.is_tensor(ground_truth):
+                ground_truth = ground_truth.cpu().numpy()
+
+            # Handle channel-first format and get first channel
+            if image.ndim == 3:
+                if image.shape[0] == 3:  # (C, H, W)
+                    image = image[0]  # Get first channel
+                else:  # (H, W, C)
+                    image = image[:, :, 0]  # Get first channel
 
             # MAD flagging (simulates tfcrop)
             pred_mask = self._mad_flagging(image, threshold=5.0)
@@ -328,8 +351,21 @@ class ZeroShotComparison:
 
         for idx in tqdm(range(len(self.dataset)), desc="  rflag"):
             sample = self.dataset[idx]
-            image = sample['image'][:, :, 0]
+            image = sample['image']
             ground_truth = sample['label']
+
+            # Convert tensors to numpy
+            if torch.is_tensor(image):
+                image = image.cpu().numpy()
+            if torch.is_tensor(ground_truth):
+                ground_truth = ground_truth.cpu().numpy()
+
+            # Handle channel-first format and get first channel
+            if image.ndim == 3:
+                if image.shape[0] == 3:  # (C, H, W)
+                    image = image[0]
+                else:  # (H, W, C)
+                    image = image[:, :, 0]
 
             # SumThreshold flagging (simulates rflag)
             pred_mask = self._sumthreshold_flagging(image, threshold=5.0)
@@ -346,8 +382,21 @@ class ZeroShotComparison:
 
         for idx in tqdm(range(len(self.dataset)), desc="  combined"):
             sample = self.dataset[idx]
-            image = sample['image'][:, :, 0]
+            image = sample['image']
             ground_truth = sample['label']
+
+            # Convert tensors to numpy
+            if torch.is_tensor(image):
+                image = image.cpu().numpy()
+            if torch.is_tensor(ground_truth):
+                ground_truth = ground_truth.cpu().numpy()
+
+            # Handle channel-first format and get first channel
+            if image.ndim == 3:
+                if image.shape[0] == 3:  # (C, H, W)
+                    image = image[0]
+                else:  # (H, W, C)
+                    image = image[:, :, 0]
 
             # Apply both methods, union of flags
             tfcrop_mask = self._mad_flagging(image, threshold=5.0)
