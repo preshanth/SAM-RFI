@@ -250,11 +250,13 @@ class ZeroShotComparison:
                 if len(y_indices) == 0:
                     # No RFI in this sample, use center box as dummy
                     h, w = ground_truth.shape
-                    bbox = [[w//4, h//4, 3*w//4, 3*h//4]]
+                    # SAM3 needs 3 levels: [image level, box level, box coords]
+                    bbox = [[[w//4, h//4, 3*w//4, 3*h//4]]]
                 else:
                     x_min, x_max = x_indices.min(), x_indices.max()
                     y_min, y_max = y_indices.min(), y_indices.max()
-                    bbox = [[int(x_min), int(y_min), int(x_max), int(y_max)]]
+                    # SAM3 needs 3 levels: [image level, box level, box coords]
+                    bbox = [[[int(x_min), int(y_min), int(x_max), int(y_max)]]]
 
                 # Process with visual prompt (bounding box)
                 inputs = processor(
