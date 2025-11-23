@@ -434,11 +434,11 @@ class FlaggingComparison:
         summary_0 = self.get_flag_summary(ms)
         print(f"    Flagged: {summary_0['percent']:.2f}%")
 
-        # Initialize SAM-RFI predictor
-        print("\n  Loading SAM-RFI model...")
+        # Initialize SAM3-RFI predictor
+        print("\n  Loading SAM3-RFI model...")
         predictor = RFIPredictor(
             model_path=str(self.model_path),
-            sam_checkpoint='large',
+            sam_checkpoint='unified',  # SAM3 uses single unified model (840M params)
             device='cuda',
             batch_size=8
         )
