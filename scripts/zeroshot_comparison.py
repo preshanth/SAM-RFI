@@ -64,6 +64,23 @@ except ImportError:
     CASA_AVAILABLE = False
 
 
+class ConfigNamespace:
+    """Namespace wrapper that supports both attribute and dict access"""
+    def __init__(self, d):
+        self._dict = d
+        for k, v in d.items():
+            if isinstance(v, dict):
+                setattr(self, k, ConfigNamespace(v))
+            else:
+                setattr(self, k, v)
+
+    def get(self, key, default=None):
+        return self._dict.get(key, default)
+
+    def __getitem__(self, key):
+        return self._dict[key]
+
+
 class ZeroShotComparison:
     """
     Zero-shot SAM3 test with CASA baseline comparison
@@ -90,22 +107,7 @@ class ZeroShotComparison:
         with open(config_path, 'r') as f:
             config_dict = yaml.safe_load(f)
 
-        # Create namespace wrapper that preserves dict access
-        class ConfigNamespace:
-            def __init__(self, d):
-                self._dict = d
-                for k, v in d.items():
-                    if isinstance(v, dict):
-                        setattr(self, k, ConfigNamespace(v))
-                    else:
-                        setattr(self, k, v)
-
-            def get(self, key, default=None):
-                return self._dict.get(key, default)
-
-            def __getitem__(self, key):
-                return self._dict[key]
-
+        # Wrap in ConfigNamespace for both attribute and dict access
         self.config = ConfigNamespace(config_dict)
 
         # Paths
