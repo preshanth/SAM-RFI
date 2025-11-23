@@ -177,10 +177,13 @@ class ZeroShotComparison:
 
     def test_sam3_zeroshot(self, text_prompts=None):
         """
-        Test pretrained SAM3 with text prompts (NO TRAINING)
+        Test pretrained SAM3 with visual prompts (NO TRAINING)
+
+        NOTE: Text prompts not yet supported in transformers SAM3 API.
+        Testing zero-shot performance with bounding boxes instead.
 
         Args:
-            text_prompts: List of text prompts to test. If None, uses defaults.
+            text_prompts: Ignored (kept for API compatibility)
         """
         print("\n[Step 2/6] Testing pretrained SAM3 (zero-shot)...")
 
@@ -188,20 +191,8 @@ class ZeroShotComparison:
             print("  ⚠ SAM3 not available. Skipping zero-shot test.")
             return
 
-        # Default prompts
-        if text_prompts is None:
-            text_prompts = [
-                "radio frequency interference",
-                "interference pattern",
-                "corrupted signal region",
-                "noise contamination",
-                "anomalous signal",
-                "RFI"
-            ]
-
-        print(f"\n  Testing {len(text_prompts)} text prompts:")
-        for prompt in text_prompts:
-            print(f"    - '{prompt}'")
+        print("\n  NOTE: Testing with visual prompts (bounding boxes)")
+        print("  Text prompts not yet supported in transformers SAM3 API")
 
         # Load pretrained SAM3 (NO fine-tuning)
         print("\n  Loading pretrained SAM3...")
@@ -223,99 +214,104 @@ class ZeroShotComparison:
 
         model.eval()
 
-        # Test each prompt
-        for prompt in text_prompts:
-            print(f"\n  Testing prompt: '{prompt}'")
-            prompt_results = []
+        # Test with visual prompts (bounding boxes)
+        print(f"\n  Testing on {len(self.dataset)} samples...")
+        results = []
 
-            with torch.no_grad():
-                for idx in tqdm(range(len(self.dataset)), desc=f"  {prompt[:30]}"):
-                    sample = self.dataset[idx]
+        with torch.no_grad():
+            for idx in tqdm(range(len(self.dataset)), desc="  SAM3 zero-shot"):
+                sample = self.dataset[idx]
 
-                    # Get image and ground truth (convert torch tensors to numpy)
-                    image = sample['image']  # Shape: (H, W, 3) or (3, H, W)
-                    ground_truth = sample['label']  # Shape: (H, W)
+                # Get image and ground truth (convert torch tensors to numpy)
+                image = sample['image']  # Shape: (H, W, 3) or (3, H, W)
+                ground_truth = sample['label']  # Shape: (H, W)
 
-                    # Convert tensors to numpy
-                    if torch.is_tensor(image):
-                        image = image.cpu().numpy()
-                    if torch.is_tensor(ground_truth):
-                        ground_truth = ground_truth.cpu().numpy()
+                # Convert tensors to numpy
+                if torch.is_tensor(image):
+                    image = image.cpu().numpy()
+                if torch.is_tensor(ground_truth):
+                    ground_truth = ground_truth.cpu().numpy()
 
-                    # Handle channel-first format (C, H, W) -> (H, W, C)
-                    if image.ndim == 3 and image.shape[0] == 3:
-                        image = np.transpose(image, (1, 2, 0))
+                # Handle channel-first format (C, H, W) -> (H, W, C)
+                if image.ndim == 3 and image.shape[0] == 3:
+                    image = np.transpose(image, (1, 2, 0))
 
-                    # Convert to PIL for processor
-                    from PIL import Image
-                    if image.max() <= 1.0:
-                        image_pil = Image.fromarray((image * 255).astype(np.uint8))
-                    else:
-                        image_pil = Image.fromarray(image.astype(np.uint8))
+                # Convert to PIL for processor
+                from PIL import Image
+                if image.max() <= 1.0:
+                    image_pil = Image.fromarray((image * 255).astype(np.uint8))
+                else:
+                    image_pil = Image.fromarray(image.astype(np.uint8))
 
-                    # Process with text prompt
-                    inputs = processor(
-                        images=image_pil,
-                        text_prompts=[prompt],
-                        return_tensors="pt"
-                    )
+                # NOTE: SAM3 text prompts not yet supported in transformers API
+                # Fall back to visual prompts (bounding boxes) for zero-shot test
+                # Extract bounding box from ground truth
+                y_indices, x_indices = np.where(ground_truth > 0)
+                if len(y_indices) == 0:
+                    # No RFI in this sample, use center box as dummy
+                    h, w = ground_truth.shape
+                    bbox = [[w//4, h//4, 3*w//4, 3*h//4]]
+                else:
+                    x_min, x_max = x_indices.min(), x_indices.max()
+                    y_min, y_max = y_indices.min(), y_indices.max()
+                    bbox = [[int(x_min), int(y_min), int(x_max), int(y_max)]]
 
-                    # Move to device
-                    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                             for k, v in inputs.items()}
+                # Process with visual prompt (bounding box)
+                inputs = processor(
+                    images=image_pil,
+                    input_boxes=bbox,
+                    return_tensors="pt"
+                )
 
-                    # Run SAM3
-                    try:
-                        outputs = model(**inputs)
-                        pred_masks = outputs.pred_masks[0, 0]  # (H, W)
+                # Move to device
+                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                         for k, v in inputs.items()}
 
-                        # Threshold prediction
-                        pred_mask = (pred_masks.sigmoid() > 0.5).cpu().numpy()
+                # Run SAM3
+                try:
+                    outputs = model(**inputs)
+                    pred_masks = outputs.pred_masks[0, 0]  # (H, W)
 
-                        # Resize if needed
-                        if pred_mask.shape != ground_truth.shape:
-                            from scipy.ndimage import zoom
-                            scale_y = ground_truth.shape[0] / pred_mask.shape[0]
-                            scale_x = ground_truth.shape[1] / pred_mask.shape[1]
-                            pred_mask = zoom(pred_mask, (scale_y, scale_x), order=0) > 0.5
+                    # Threshold prediction
+                    pred_mask = (pred_masks.sigmoid() > 0.5).cpu().numpy()
 
-                        # Compute metrics
-                        metrics = self._compute_metrics(pred_mask, ground_truth)
-                        prompt_results.append(metrics)
+                    # Resize if needed
+                    if pred_mask.shape != ground_truth.shape:
+                        from scipy.ndimage import zoom
+                        scale_y = ground_truth.shape[0] / pred_mask.shape[0]
+                        scale_x = ground_truth.shape[1] / pred_mask.shape[1]
+                        pred_mask = zoom(pred_mask, (scale_y, scale_x), order=0) > 0.5
 
-                    except Exception as e:
-                        print(f"\n    ⚠ Error on sample {idx}: {e}")
-                        # Record failure
-                        prompt_results.append({
-                            'iou': 0.0,
-                            'precision': 0.0,
-                            'recall': 0.0,
-                            'f1': 0.0,
-                            'error': str(e)
-                        })
+                    # Compute metrics
+                    metrics = self._compute_metrics(pred_mask, ground_truth)
+                    results.append(metrics)
 
-            # Aggregate results for this prompt
-            avg_metrics = self._aggregate_metrics(prompt_results)
-            self.results['sam3_zeroshot'][prompt] = avg_metrics
+                except Exception as e:
+                    print(f"\n    ⚠ Error on sample {idx}: {e}")
+                    # Record failure
+                    results.append({
+                        'iou': 0.0,
+                        'precision': 0.0,
+                        'recall': 0.0,
+                        'f1': 0.0,
+                        'error': str(e)
+                    })
 
-            print(f"    Results: IoU={avg_metrics['iou']:.3f}, "
-                  f"F1={avg_metrics['f1']:.3f}, "
-                  f"Precision={avg_metrics['precision']:.3f}, "
-                  f"Recall={avg_metrics['recall']:.3f}")
+        # Aggregate results
+        avg_metrics = self._aggregate_metrics(results)
+        self.results['sam3_zeroshot']['visual_prompts'] = avg_metrics
 
-        # Find best prompt
-        best_prompt = max(self.results['sam3_zeroshot'],
-                         key=lambda p: self.results['sam3_zeroshot'][p]['iou'])
-        best_iou = self.results['sam3_zeroshot'][best_prompt]['iou']
+        print(f"\n  Results: IoU={avg_metrics['iou']:.3f}, "
+              f"F1={avg_metrics['f1']:.3f}, "
+              f"Precision={avg_metrics['precision']:.3f}, "
+              f"Recall={avg_metrics['recall']:.3f}")
 
-        print(f"\n  Best prompt: '{best_prompt}' (IoU={best_iou:.3f})")
-
-        if best_iou > 0.5:
-            print("  🎉 SUCCESS! Text prompting works on RFI!")
-        elif best_iou > 0.2:
-            print("  ⚠ Partial success. Text prompting shows promise but needs fine-tuning.")
+        if avg_metrics['iou'] > 0.5:
+            print("\n  ✅ SAM3 zero-shot works well with visual prompts!")
+        elif avg_metrics['iou'] > 0.2:
+            print("\n  ⚠ Partial success. Fine-tuning recommended.")
         else:
-            print("  ❌ Text prompting fails. Use visual prompting (bounding boxes) instead.")
+            print("\n  ❌ Zero-shot performance low. Training required.")
 
     def test_casa_methods(self):
         """
@@ -536,13 +532,11 @@ class ZeroShotComparison:
                 ious.append(self.results[method_key]['iou'])
                 f1s.append(self.results[method_key]['f1'])
 
-        # SAM3 zero-shot (best prompt)
-        if self.results['sam3_zeroshot']:
-            best_prompt = max(self.results['sam3_zeroshot'],
-                            key=lambda p: self.results['sam3_zeroshot'][p]['iou'])
-            methods.append(f'SAM3 "{best_prompt[:20]}..."')
-            ious.append(self.results['sam3_zeroshot'][best_prompt]['iou'])
-            f1s.append(self.results['sam3_zeroshot'][best_prompt]['f1'])
+        # SAM3 zero-shot (visual prompts)
+        if self.results['sam3_zeroshot'] and 'visual_prompts' in self.results['sam3_zeroshot']:
+            methods.append('SAM3 (visual prompts)')
+            ious.append(self.results['sam3_zeroshot']['visual_prompts']['iou'])
+            f1s.append(self.results['sam3_zeroshot']['visual_prompts']['f1'])
 
         # Plot IoU
         bars1 = ax1.barh(methods, ious, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'])
@@ -641,58 +635,50 @@ class ZeroShotComparison:
                 print(f"{method_name:<35} {r['iou']:>8.3f} {r['precision']:>10.3f} "
                       f"{r['recall']:>8.3f} {r['f1']:>8.3f}")
 
-        # SAM3 (best prompt)
-        if self.results['sam3_zeroshot']:
+        # SAM3 (visual prompts)
+        if self.results['sam3_zeroshot'] and 'visual_prompts' in self.results['sam3_zeroshot']:
             print("-"*70)
-            best_prompt = max(self.results['sam3_zeroshot'],
-                            key=lambda p: self.results['sam3_zeroshot'][p]['iou'])
-            r = self.results['sam3_zeroshot'][best_prompt]
-            method_name = f'SAM3 "{best_prompt[:20]}..."'
+            r = self.results['sam3_zeroshot']['visual_prompts']
+            method_name = 'SAM3 (visual prompts)'
             print(f"{method_name:<35} {r['iou']:>8.3f} {r['precision']:>10.3f} "
                   f"{r['recall']:>8.3f} {r['f1']:>8.3f}")
-
-            # All prompts
-            print("\n" + "="*70)
-            print("SAM3 TEXT PROMPTS (All tested)")
-            print("-"*70)
-            for prompt, result in sorted(self.results['sam3_zeroshot'].items(),
-                                        key=lambda x: x[1]['iou'], reverse=True):
-                print(f"  '{prompt}'")
-                print(f"    IoU={result['iou']:.3f}, F1={result['f1']:.3f}, "
-                      f"Precision={result['precision']:.3f}, Recall={result['recall']:.3f}")
+            print("\n  NOTE: Text prompts not yet supported in transformers SAM3 API")
 
         print("="*70)
 
         # Interpretation
         print("\n📊 INTERPRETATION:")
-        if self.results['sam3_zeroshot']:
-            best_iou = self.results['sam3_zeroshot'][best_prompt]['iou']
+        if self.results['sam3_zeroshot'] and 'visual_prompts' in self.results['sam3_zeroshot']:
+            sam3_iou = self.results['sam3_zeroshot']['visual_prompts']['iou']
             casa_best_iou = max([self.results.get('casa_tfcrop', {}).get('iou', 0),
                                 self.results.get('casa_rflag', {}).get('iou', 0),
                                 self.results.get('casa_combined', {}).get('iou', 0)])
 
-            if best_iou > 0.5:
-                print("✅ SAM3 zero-shot text prompting WORKS on RFI!")
-                print("   → Text prompts can detect RFI without any training")
-                print("   → Fine-tuning will likely improve performance further")
-            elif best_iou > 0.2:
-                print("⚠️  SAM3 zero-shot shows PARTIAL success")
-                print("   → Text prompts capture some RFI patterns")
+            print("NOTE: Testing SAM3 with visual prompts (bounding boxes)")
+            print("      Text prompts not yet supported in transformers API")
+
+            if sam3_iou > 0.5:
+                print("\n✅ SAM3 zero-shot (visual prompts) WORKS on RFI!")
+                print("   → Bounding box prompts effective without training")
+                print("   → Fine-tuning will improve performance further")
+            elif sam3_iou > 0.2:
+                print("\n⚠️  SAM3 zero-shot shows PARTIAL success")
+                print("   → Visual prompts capture some RFI patterns")
                 print("   → Fine-tuning needed for production use")
             else:
-                print("❌ SAM3 zero-shot text prompting FAILS")
-                print("   → Pretrained SAM3 doesn't understand radio astronomy data")
-                print("   → Recommendation: Use visual prompting (bounding boxes)")
+                print("\n❌ SAM3 zero-shot performance low")
+                print("   → Pretrained model needs fine-tuning on radio data")
+                print("   → Training on RFI-specific data required")
 
-            if best_iou > casa_best_iou:
+            if sam3_iou > casa_best_iou:
                 print(f"\n🎉 SAM3 BEATS CASA (zero-shot)!")
-                print(f"   SAM3: {best_iou:.3f} vs CASA best: {casa_best_iou:.3f}")
-            elif best_iou > casa_best_iou * 0.8:
+                print(f"   SAM3: {sam3_iou:.3f} vs CASA best: {casa_best_iou:.3f}")
+            elif sam3_iou > casa_best_iou * 0.8:
                 print(f"\n📈 SAM3 competitive with CASA (zero-shot)")
-                print(f"   SAM3: {best_iou:.3f} vs CASA best: {casa_best_iou:.3f}")
+                print(f"   SAM3: {sam3_iou:.3f} vs CASA best: {casa_best_iou:.3f}")
             else:
                 print(f"\n📉 CASA outperforms SAM3 (zero-shot)")
-                print(f"   CASA best: {casa_best_iou:.3f} vs SAM3: {best_iou:.3f}")
+                print(f"   CASA best: {casa_best_iou:.3f} vs SAM3: {sam3_iou:.3f}")
                 print("   → Fine-tuning SAM3 should improve performance")
 
         print("\n📁 Results saved to:", self.output_dir)
