@@ -1,0 +1,45 @@
+# Zero-shot test data - 20 diverse synthetic RFI samples
+# Used to test if pretrained SAM3 can detect RFI with text prompts (no training)
+
+synthetic:
+  num_samples: 20
+  num_channels: 1024  # Square for SAM3
+  num_times: 1024
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0                 # 1 mJy noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI min (6 orders above noise)
+  rfi_power_max: 10000.0         # 10000 Jy RFI max
+
+  # Memory management
+  generation_batch_size: 5       # Process 5 samples at a time
+  num_polarizations: 1           # Single polarization for speed
+  generate_mad_masks: false      # Skip MAD flagging (we have exact masks)
+
+  # RFI types per sample - diverse mix for comprehensive testing
+  rfi_type_counts:
+    narrowband_persistent: 15    # GPS, satellites (vertical lines)
+    broadband_persistent: 3      # Power lines (horizontal bands)
+    frequency_sweep: 1           # Radar chirps (diagonal sweeps)
+    narrowband_bursty: 10        # Pulsed transmitters (intermittent dots)
+    broadband_bursty: 3          # Lightning strikes (horizontal flashes)
+
+  # Bandpass effects for realism
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8   # Realistic edge rolloff
+  polarization_correlation: 0.8  # Correlated RFI in polarizations
+
+  # Parallel generation
+  generation_workers: 4
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null                  # No stretch for zero-shot (test raw SAM3)
+  flag_sigma: 5
+  patch_size: 1024              # Full image (no patching for zero-shot)
+  num_workers: 4
+
+  # No augmentation for zero-shot test
+  enable_augmentation: false
+  augmentation_rotations: 1
