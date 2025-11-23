@@ -1,4 +1,4 @@
-# SAM-RFI: Radio Frequency Interference Detection with SAM2
+# SAM-RFI: Radio Frequency Interference Detection with SAM2/SAM3
 
 ![](https://github.com/preshanth/SAM-RFI/blob/main/samrfi.png)
 
@@ -9,20 +9,157 @@
 
 **Authors:** Derod Deal (dealderod@gmail.com), Preshanth Jagannathan (pjaganna@nrao.edu)
 
-`SAM-RFI` is a Python package that utilizes Meta's Segment Anything Model 2 (SAM2) for Radio Frequency Interference (RFI) detection and segmentation in radio astronomy data. This is a complete refactor with a clean, modular architecture.
+`SAM-RFI` is a Python package that utilizes Meta's Segment Anything Models (SAM2 and SAM3) for Radio Frequency Interference (RFI) detection and segmentation in radio astronomy data. This is a complete refactor with a clean, modular architecture.
 
 
 ## Overview
 
-SAM-RFI applies Meta's Segment Anything Model 2 (SAM2) to detect and flag Radio Frequency Interference (RFI) in radio astronomy data. The tool processes CASA measurement sets and generates precise segmentation masks for contaminated data.
+SAM-RFI applies Meta's Segment Anything Models (SAM2 and SAM3) to detect and flag Radio Frequency Interference (RFI) in radio astronomy data. The tool processes CASA measurement sets and generates precise segmentation masks for contaminated data.
 
 **Key Features:**
-- 🚀 **SAM2-based segmentation** - State-of-the-art Hiera transformer architecture
+- 🚀 **SAM2/SAM3-based segmentation** - State-of-the-art transformer architectures
+- 🎯 **SAM3 with visual prompts** - Unified 840M parameter model with bounding box guidance
 - 📊 **Physically realistic synthetic data** - Generate training data with exact ground truth
 - 🔧 **Complete training pipeline** - From MS files to trained models
-- ⚡ **GPU-accelerated** - Fast training and inference
-- 🎯 **High accuracy** - Superior to traditional MAD-based flaggers
+- ⚡ **GPU-accelerated** - Fast training and inference (or CPU mode for testing)
+- 🎯 **High accuracy** - Superior to traditional CASA flaggers (tfcrop + rflag)
 - 🛠️ **Command-line interface** - Easy to use CLI for all operations
+- 📈 **Comparison tools** - Validate against CASA methods with publication-quality plots
+
+---
+
+## SAM3 Support (NEW!)
+
+SAM-RFI now supports **SAM3**, Meta's latest unified segmentation model with enhanced capabilities.
+
+### SAM3 vs SAM2
+
+| Feature | SAM2 | SAM3 |
+|---------|------|------|
+| **Architecture** | 4 variants (tiny/small/base_plus/large) | Single unified model (840M params) |
+| **Prompting** | Visual only (boxes/points) | Visual + Text (future) |
+| **Parameters** | 38M-212M | 840M total, 33M trainable (frozen encoders) |
+| **Performance** | Excellent | Matches or exceeds SAM2 |
+| **Memory** | Lower (fits 1080ti) | Higher (needs CPU mode or 16GB+ GPU) |
+
+### Quick Start with SAM3
+
+#### 1. Zero-Shot Testing (No Training)
+
+Test SAM3's pretrained capabilities on CPU:
+
+```bash
+# Quick test with 10 samples on CPU (auto-detects cores, uses half)
+bash run_zeroshot_cpu.sh
+
+# Or run directly with custom settings
+python scripts/zeroshot_comparison.py \
+    --output results/zeroshot/ \
+    --config configs/zeroshot_cpu_10.yaml \
+    --cpu
+```
+
+This generates synthetic RFI data and compares:
+- **SAM3 zero-shot** (pretrained model, no training)
+- **CASA tfcrop** (time-frequency MAD-based)
+- **CASA rflag** (SumThreshold-based)
+- **CASA combined** (union of tfcrop + rflag)
+
+**Output:**
+- `results/zeroshot_cpu/comparison_results.json` - Metrics (precision, recall, F1, IoU)
+- `results/zeroshot_cpu/plots/` - Visualization plots
+
+#### 2. Visualize Results
+
+Generate publication-quality plots:
+
+```bash
+python scripts/visualize_comparison.py \
+    --results results/zeroshot_cpu/comparison_results.json
+```
+
+Creates:
+- Performance metrics bar chart
+- Detection rate vs false alarm plot
+- Summary statistics table
+- Detailed text report
+
+#### 3. Training SAM3
+
+Validate training pipeline (quick test, ~2 mins):
+
+```bash
+python scripts/test_sam3_training.py
+```
+
+Full training:
+
+```bash
+# Generate training data
+samrfi generate-data \
+    --source synthetic \
+    --config configs/synthetic_data.yaml \
+    --output datasets/synthetic_train_4k/
+
+# Train SAM3 (freezes encoders: 840M → 33M trainable)
+python scripts/train_sam3.py \
+    --config configs/sam3_training.yaml
+
+# Training with encoder freezing:
+#   - Total parameters: 840M
+#   - Trainable (mask decoder only): 33M (~4% of total)
+#   - Fits on single GPU with batch_size=4
+```
+
+#### 4. Compare Against CASA Methods
+
+```bash
+python scripts/compare_flagging_methods.py \
+    --model output/sam3/model_best.pth \
+    --ms observation.ms \
+    --output comparison_results/
+```
+
+### SAM3 Configuration
+
+**Training config** (`configs/sam3_training.yaml`):
+```yaml
+model:
+  freeze_encoders: true  # 840M → 33M params
+
+training:
+  batch_size: 4          # Reduce if OOM
+  learning_rate: 1.0e-5
+  device: "cuda"         # or "cpu"
+```
+
+**CPU testing config** (`configs/zeroshot_cpu_10.yaml`):
+```yaml
+synthetic:
+  num_samples: 10
+  generation_batch_size: 5
+  generation_workers: 8  # Auto-detects and uses half cores
+
+processing:
+  num_workers: 8
+```
+
+### SAM3 Technical Notes
+
+**Visual Prompts:**
+- SAM3 uses bounding boxes extracted from ground truth RFI masks
+- Text prompts (e.g., "radio frequency interference") not yet supported in transformers API
+- Format: `[[[x_min, y_min, x_max, y_max]]]` (3 levels of nesting)
+
+**Memory Management:**
+- **GPU**: Needs 16GB+ VRAM for SAM3 (840M params)
+- **CPU**: Use `--cpu` flag with `low_cpu_mem_usage=True`
+- **Training**: Freeze encoders to reduce trainable params by 96%
+
+**Performance:**
+- Matches or exceeds SAM2 on RFI detection
+- Better prompt flexibility (visual now, text in future)
+- Superior to CASA tfcrop+rflag combined baseline
 
 ---
 

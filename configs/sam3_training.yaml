@@ -1,0 +1,53 @@
+# SAM3 Training Configuration
+# SAM3 is a unified 840M parameter model (vs SAM2's 4 variants)
+# Freezing encoders: 840M → 33M trainable parameters (~96% reduction)
+
+experiment:
+  name: "sam3_rfi_baseline"
+  description: "SAM3 training for RFI detection using visual prompts (bounding boxes)"
+  output_dir: "./output/sam3"
+  save_every_n_epochs: 5  # Save checkpoint every N epochs
+
+data:
+  # Update these paths to your generated training data
+  train_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
+  val_dataset: "./datasets/synthetic_val_1k/exact_masks.npz"
+
+model:
+  # SAM3 uses a single unified checkpoint (no size variants)
+  freeze_encoders: true  # Only train mask decoder (840M → 33M params)
+
+training:
+  num_epochs: 20
+  batch_size: 4  # Reduce if OOM (SAM3 is larger than SAM2-tiny/small)
+  learning_rate: 1.0e-5
+  weight_decay: 0.0
+  device: "cuda"  # Options: cuda, cpu
+
+notes: |
+  SAM3 Training Notes:
+
+  1. Model Architecture:
+     - Unified 840M parameter model (vs SAM2's tiny/small/base_plus/large variants)
+     - Uses visual prompts (bounding boxes) extracted from ground truth
+     - Text prompts not yet supported in transformers API
+
+  2. Training Strategy:
+     - Freeze vision_encoder and prompt_encoder (keep only mask_decoder trainable)
+     - Reduces trainable params from 840M → 33M (~96% reduction)
+     - Enables training on single GPU (e.g., 1080ti with 11GB)
+
+  3. Data Requirements:
+     - Use synthetic waterfall data with exact RFI masks
+     - Bounding boxes automatically extracted from ground truth
+     - Recommended: 4k train samples, 1k val samples
+
+  4. Expected Performance:
+     - Should match or exceed SAM2 performance
+     - Better prompt flexibility (visual + future text prompts)
+     - Compare against CASA tfcrop+rflag baseline
+
+  5. Next Steps:
+     - Generate training data: python scripts/generate_training_data.py
+     - Run training: python scripts/train_sam3.py --config configs/sam3_training.yaml
+     - Evaluate: python scripts/compare_flagging_methods.py --model output/sam3/model_best.pth
