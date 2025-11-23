@@ -86,16 +86,23 @@ class ZeroShotComparison:
     Zero-shot SAM3 test with CASA baseline comparison
     """
 
-    def __init__(self, output_dir, config_path=None):
+    def __init__(self, output_dir, config_path=None, device=None):
         """
         Initialize comparison framework
 
         Args:
             output_dir: Directory for results
             config_path: Path to config file for data generation
+            device: Device to use ('cpu' or 'cuda'). If None, auto-detect.
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set device
+        if device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
 
         # Default config
         if config_path is None:
@@ -198,10 +205,20 @@ class ZeroShotComparison:
 
         # Load pretrained SAM3 (NO fine-tuning)
         print("\n  Loading pretrained SAM3...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = getattr(self, 'device', "cuda" if torch.cuda.is_available() else "cpu")
         print(f"  Device: {device}")
 
-        model = Sam3Model.from_pretrained("facebook/sam3").to(device)
+        # Load model with low memory usage for CPU
+        if device == "cpu":
+            print("  CPU mode: Using low memory loading...")
+            model = Sam3Model.from_pretrained(
+                "facebook/sam3",
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True
+            )
+        else:
+            model = Sam3Model.from_pretrained("facebook/sam3").to(device)
+
         processor = Sam3Processor.from_pretrained("facebook/sam3")
 
         model.eval()
@@ -727,13 +744,31 @@ def main():
         action='store_true',
         help='Skip data generation (use existing data)'
     )
+    parser.add_argument(
+        '--cpu',
+        action='store_true',
+        help='Force CPU mode (useful for large models on limited VRAM)'
+    )
+    parser.add_argument(
+        '--num-cores',
+        type=int,
+        default=32,
+        help='Number of CPU cores to use (default: 32)'
+    )
 
     args = parser.parse_args()
+
+    # Set CPU cores if specified
+    if args.cpu or args.num_cores != 32:
+        import torch
+        torch.set_num_threads(args.num_cores)
+        print(f"CPU threads set to: {args.num_cores}")
 
     # Run comparison
     comparison = ZeroShotComparison(
         output_dir=args.output,
-        config_path=args.config
+        config_path=args.config,
+        device='cpu' if args.cpu else None
     )
 
     if args.skip_generation and comparison.data_dir.exists():

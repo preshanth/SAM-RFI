@@ -1,0 +1,45 @@
+# CPU-friendly zero-shot test - 10 samples, 512x512 images
+# Designed for CPU inference with 32 cores, 64GB RAM
+
+synthetic:
+  num_samples: 10              # Fewer samples for faster testing
+  num_channels: 512            # Smaller images (512x512 instead of 1024x1024)
+  num_times: 512               # Fits in CPU memory easily
+
+  # Physical scales
+  noise_mjy: 1.0
+  rfi_power_min: 1000.0
+  rfi_power_max: 10000.0
+
+  # Memory management
+  generation_batch_size: 5
+  num_polarizations: 1
+  generate_mad_masks: false
+
+  # RFI types - balanced mix
+  rfi_type_counts:
+    narrowband_persistent: 10
+    broadband_persistent: 3
+    frequency_sweep: 1
+    narrowband_bursty: 8
+    broadband_bursty: 2
+
+  # Bandpass effects
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8
+  polarization_correlation: 0.8
+
+  # Parallel generation (use half cores = 32)
+  generation_workers: 32
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  flag_sigma: 5
+  patch_size: 512              # Match image size
+  num_workers: 32              # Half of 64 cores
+
+  # No augmentation
+  enable_augmentation: false
+  augmentation_rotations: 1
