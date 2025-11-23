@@ -75,7 +75,7 @@ from .data_generation import (
 )
 
 # Training module
-from .training import SAM2Trainer
+from .training import SAM3Trainer
 
 # Inference module
 from .inference import RFIPredictor
@@ -99,7 +99,7 @@ __all__ = [
     "SyntheticDataGenerator",
     "MSDataGenerator",
     # Training
-    "SAM2Trainer",
+    "SAM3Trainer",
     # Inference
     "RFIPredictor",
     # Config

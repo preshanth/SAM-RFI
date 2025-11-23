@@ -37,7 +37,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # SAM-RFI imports
 try:
     from samrfi.data_generation import SyntheticDataGenerator
-    from samrfi.config import load_config
+    import yaml
+    from types import SimpleNamespace
     SAMRFI_AVAILABLE = True
 except ImportError as e:
     print(f"WARNING: SAM-RFI not available: {e}")
@@ -84,7 +85,18 @@ class ZeroShotComparison:
             config_path = Path(__file__).parent.parent / "configs" / "zeroshot_test_20.yaml"
 
         self.config_path = config_path
-        self.config = load_config(str(config_path))
+
+        # Load config from YAML
+        with open(config_path, 'r') as f:
+            config_dict = yaml.safe_load(f)
+
+        # Convert to namespace for easy access
+        def dict_to_namespace(d):
+            if isinstance(d, dict):
+                return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+            return d
+
+        self.config = dict_to_namespace(config_dict)
 
         # Paths
         self.data_dir = self.output_dir / "synthetic_data"
