@@ -29,8 +29,8 @@ synthetic:
   bandpass_polynomial_order: 8
   polarization_correlation: 0.8
 
-  # Parallel generation (use half cores = 32)
-  generation_workers: 32
+  # Parallel generation (auto-detects and uses half of available cores)
+  generation_workers: 8        # Adjust based on your CPU (half of total)
 
 processing:
   normalize_before_stretch: false
@@ -38,7 +38,7 @@ processing:
   stretch: null
   flag_sigma: 5
   patch_size: 512              # Match image size
-  num_workers: 32              # Half of 64 cores
+  num_workers: 8               # Adjust based on your CPU (half of total)
 
   # No augmentation
   enable_augmentation: false

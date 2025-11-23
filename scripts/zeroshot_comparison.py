@@ -740,17 +740,23 @@ def main():
     parser.add_argument(
         '--num-cores',
         type=int,
-        default=32,
-        help='Number of CPU cores to use (default: 32)'
+        default=None,
+        help='Number of CPU cores to use (default: half of available cores)'
     )
 
     args = parser.parse_args()
 
-    # Set CPU cores if specified
-    if args.cpu or args.num_cores != 32:
+    # Auto-detect and set CPU cores
+    import os
+    total_cores = os.cpu_count() or 1
+    default_cores = max(1, total_cores // 2)  # Use half by default
+
+    num_cores = args.num_cores if args.num_cores is not None else default_cores
+
+    if args.cpu or args.num_cores is not None:
         import torch
-        torch.set_num_threads(args.num_cores)
-        print(f"CPU threads set to: {args.num_cores}")
+        torch.set_num_threads(num_cores)
+        print(f"CPU threads set to: {num_cores} (total available: {total_cores})")
 
     # Run comparison
     comparison = ZeroShotComparison(
