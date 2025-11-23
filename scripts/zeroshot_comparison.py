@@ -86,17 +86,27 @@ class ZeroShotComparison:
 
         self.config_path = config_path
 
-        # Load config from YAML
+        # Load config from YAML (keep as dict for SyntheticDataGenerator)
         with open(config_path, 'r') as f:
             config_dict = yaml.safe_load(f)
 
-        # Convert to namespace for easy access
-        def dict_to_namespace(d):
-            if isinstance(d, dict):
-                return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
-            return d
+        # Create namespace wrapper that preserves dict access
+        class ConfigNamespace:
+            def __init__(self, d):
+                self._dict = d
+                for k, v in d.items():
+                    if isinstance(v, dict):
+                        setattr(self, k, ConfigNamespace(v))
+                    else:
+                        setattr(self, k, v)
 
-        self.config = dict_to_namespace(config_dict)
+            def get(self, key, default=None):
+                return self._dict.get(key, default)
+
+            def __getitem__(self, key):
+                return self._dict[key]
+
+        self.config = ConfigNamespace(config_dict)
 
         # Paths
         self.data_dir = self.output_dir / "synthetic_data"
