@@ -1,6 +1,6 @@
 """
-SAM2 Trainer - Clean implementation using transformers library
-Mirrors the working SAM1 training approach
+SAM3 Trainer - Clean implementation using transformers library
+Adapted from SAM2 trainer for SAM3 model
 """
 
 import os
@@ -17,7 +17,7 @@ from torch.utils.data import Dataset as TorchDataset, DataLoader
 from torch.optim import Adam
 import monai
 
-from transformers import Sam2Processor, Sam2Model
+from transformers import Sam3Processor, Sam3Model
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -53,15 +53,15 @@ def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=
                 f"Elapsed: {elapsed_str}, Rate: {rate:.2f} batch/s{loss_str}")
 
 
-class SAM2Trainer:
+class SAM3Trainer:
     """
-    SAM2 training using HuggingFace transformers library.
-    Simple, clean implementation that mirrors working SAM1 code.
+    SAM3 training using HuggingFace transformers library.
+    Simple, clean implementation adapted from SAM2 trainer.
     """
 
     def __init__(self, rfidataset_instance, device="cuda", dir_path=None):
         """
-        Initialize SAM2 trainer
+        Initialize SAM3 trainer
 
         Args:
             rfidataset_instance: RFIDataset instance with .dataset attribute
@@ -126,7 +126,7 @@ class SAM2Trainer:
         save_model=True,
     ):
         """
-        Train SAM2 model on RFI dataset
+        Train SAM3 model on RFI dataset
 
         Args:
             num_epochs: Number of training epochs
@@ -140,26 +140,17 @@ class SAM2Trainer:
             save_model: Whether to save model checkpoint (default: True, set False for validation)
         """
 
-        # Map checkpoint names to HuggingFace model IDs
-        checkpoint_map = {
-            "tiny": "facebook/sam2-hiera-tiny",
-            "small": "facebook/sam2-hiera-small",
-            "base_plus": "facebook/sam2-hiera-base-plus",
-            "large": "facebook/sam2-hiera-large",
-        }
+        # SAM3 uses a single unified model (840M params)
+        # Unlike SAM2, there are no tiny/small/large variants
+        model_name = "facebook/sam3"
 
-        if sam_checkpoint not in checkpoint_map:
-            raise ValueError(
-                f"Invalid checkpoint '{sam_checkpoint}'. Use: {list(checkpoint_map.keys())}"
-            )
-
-        model_name = checkpoint_map[sam_checkpoint]
-
-        logger.info(f"\nLoading SAM2 model: {model_name}")
+        logger.info(f"\nLoading SAM3 model: {model_name}")
+        logger.info(f"  Note: SAM3 has single 840M param model (no variants)")
+        logger.info(f"  Requested checkpoint '{sam_checkpoint}' mapped to unified model")
 
         # Load processor and model from HuggingFace
-        processor = Sam2Processor.from_pretrained(model_name)
-        model = Sam2Model.from_pretrained(model_name)
+        processor = Sam3Processor.from_pretrained(model_name)
+        model = Sam3Model.from_pretrained(model_name)
 
         # Create dataset using SAMDataset wrapper
         train_dataset = SAMDataset(
@@ -252,7 +243,7 @@ class SAM2Trainer:
         model.to(self.device)
         model.train()
 
-        logger.info(f"\nTraining SAM2 model...")
+        logger.info(f"\nTraining SAM3 model...")
         logger.info(f"  Epochs: {num_epochs}")
         logger.info(f"  Batch size: {batch_size}")
         logger.info(f"  Learning rate: {learning_rate}")
@@ -427,7 +418,7 @@ class SAM2Trainer:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = (
-            f"model_sam2-{sam_checkpoint}_"
+            f"model_sam3-{sam_checkpoint}_"
             f"stretch-{stretch}_sigma-{flag_sigma}_"
             f"patch-{patch_method}_size-{patch_size}_"
             f"epochs{num_epochs}_{timestamp}.pth"
@@ -495,7 +486,7 @@ class SAM2Trainer:
         ax.set_ylabel("Mean Loss", fontsize=12)
 
         # Title with dataset info
-        title = f"SAM2-{sam_checkpoint} Training"
+        title = f"SAM3-{sam_checkpoint} Training"
         if self.val_losses:
             title += " and Validation"
         # Get number of patches from dataset
@@ -512,7 +503,7 @@ class SAM2Trainer:
         os.makedirs(method_dir, exist_ok=True)  # Ensure directory exists
 
         filename = (
-            f"loss_plot_sam2-{sam_checkpoint}_"
+            f"loss_plot_sam3-{sam_checkpoint}_"
             f"stretch-{stretch}_sigma-{flag_sigma}_"
             f"patch-{patch_method}_size-{patch_size}_"
             f"epochs{num_epochs}_{timestamp}.png"

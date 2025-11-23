@@ -1,5 +1,5 @@
 """
-RFI Predictor - Apply trained SAM2 models to new data
+RFI Predictor - Apply trained SAM3 models to new data
 
 Supports single-pass and iterative flagging with progressive cleaning.
 """
@@ -9,7 +9,7 @@ import torch
 from tqdm import tqdm
 from pathlib import Path
 
-from transformers import Sam2Processor, Sam2Model
+from transformers import Sam3Processor, Sam3Model
 from torch.utils.data import DataLoader
 
 from samrfi.data import MSLoader, Preprocessor, SAMDataset, AdaptivePatcher, check_ms_compatibility
@@ -17,25 +17,25 @@ from samrfi.data import MSLoader, Preprocessor, SAMDataset, AdaptivePatcher, che
 
 class RFIPredictor:
     """
-    Apply trained SAM2 model to predict RFI flags.
+    Apply trained SAM3 model to predict RFI flags.
 
     Supports iterative flagging where each pass finds fainter RFI
     that was hidden by brighter RFI in previous passes.
 
     Usage:
-        >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+        >>> predictor = RFIPredictor(model_path='./models/sam3_rfi.pth')
         >>> flags = predictor.predict_ms('observation.ms')
         >>> # Or iterative:
         >>> flags = predictor.predict_iterative('observation.ms', num_iterations=3)
     """
 
-    def __init__(self, model_path, sam_checkpoint="large", device="cuda", batch_size=4):
+    def __init__(self, model_path, sam_checkpoint="unified", device="cuda", batch_size=4):
         """
         Initialize predictor.
 
         Args:
             model_path: Path to trained model checkpoint (.pth)
-            sam_checkpoint: SAM2 checkpoint size (tiny, small, base_plus, large)
+            sam_checkpoint: SAM3 checkpoint (unused, kept for compatibility)
             device: Compute device ('cuda' or 'cpu')
             batch_size: Batch size for inference
         """
@@ -43,21 +43,15 @@ class RFIPredictor:
         self.device = device
         self.batch_size = batch_size
 
-        # Map checkpoint names to HuggingFace model names
-        checkpoint_map = {
-            "tiny": "facebook/sam2-hiera-tiny",
-            "small": "facebook/sam2-hiera-small",
-            "base_plus": "facebook/sam2-hiera-base-plus",
-            "large": "facebook/sam2-hiera-large",
-        }
+        # SAM3 uses single unified model (840M params)
+        model_name = "facebook/sam3"
 
-        model_name = checkpoint_map.get(sam_checkpoint, checkpoint_map["large"])
-
-        print(f"Loading SAM2 model: {model_name}")
+        print(f"Loading SAM3 model: {model_name}")
+        print(f"  Note: SAM3 has single 840M param model (no variants)")
 
         # Load processor and model
-        self.processor = Sam2Processor.from_pretrained(model_name)
-        self.model = Sam2Model.from_pretrained(model_name)
+        self.processor = Sam3Processor.from_pretrained(model_name)
+        self.model = Sam3Model.from_pretrained(model_name)
 
         # Load trained weights
         print(f"Loading trained weights from: {self.model_path}")

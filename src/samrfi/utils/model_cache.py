@@ -1,7 +1,7 @@
 """
 Model cache management for SAM-RFI
 
-Handles downloading and caching SAM2 models from HuggingFace.
+Handles downloading and caching SAM3 models from HuggingFace.
 Provides progress bars and cache location management.
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from transformers import Sam2Model, Sam2Processor
+    from transformers import Sam3Model, Sam3Processor
     from huggingface_hub import snapshot_download, hf_hub_download
     from tqdm import tqdm
 except ImportError as e:
@@ -22,49 +22,43 @@ except ImportError as e:
 
 class ModelCache:
     """
-    Manage SAM2 model downloads and caching.
+    Manage SAM3 model downloads and caching.
 
-    SAM2 models are automatically downloaded from HuggingFace and cached locally.
+    SAM3 models are automatically downloaded from HuggingFace and cached locally.
     Default cache location: ~/.cache/huggingface/hub/
 
-    Available models:
-    - tiny: facebook/sam2-hiera-tiny (~40MB)
-    - small: facebook/sam2-hiera-small (~180MB)
-    - base_plus: facebook/sam2-hiera-base-plus (~330MB)
-    - large: facebook/sam2-hiera-large (~850MB)
+    Available model:
+    - unified: facebook/sam3 (~3440MB / 3.4GB, 840M parameters)
+
+    Note: Unlike SAM2, SAM3 has a single unified model with no size variants.
 
     Example:
         >>> from samrfi.utils import ModelCache
         >>>
         >>> # Check if model is cached
         >>> cache = ModelCache()
-        >>> is_cached = cache.is_cached('large')
+        >>> is_cached = cache.is_cached('unified')
         >>>
         >>> # Get cache info
-        >>> info = cache.get_cache_info('large')
+        >>> info = cache.get_cache_info('unified')
         >>> print(f"Model size: {info['size_mb']:.1f} MB")
         >>>
         >>> # Pre-download model with progress bar
-        >>> cache.download_model('large', show_progress=True)
+        >>> cache.download_model('unified', show_progress=True)
         >>>
         >>> # Load model (auto-downloads if not cached)
-        >>> model, processor = cache.load_model('large')
+        >>> model, processor = cache.load_model('unified')
     """
 
     # Map checkpoint names to HuggingFace model IDs
+    # SAM3 has single unified model (840M params)
     CHECKPOINT_MAP = {
-        "tiny": "facebook/sam2-hiera-tiny",
-        "small": "facebook/sam2-hiera-small",
-        "base_plus": "facebook/sam2-hiera-base-plus",
-        "large": "facebook/sam2-hiera-large",
+        "unified": "facebook/sam3",
     }
 
     # Approximate model sizes (in MB)
     MODEL_SIZES = {
-        "tiny": 40,
-        "small": 180,
-        "base_plus": 330,
-        "large": 850,
+        "unified": 3440,  # 3.44 GB
     }
 
     def __init__(self, cache_dir: Optional[str] = None):
@@ -220,12 +214,12 @@ class ModelCache:
         checkpoint: str,
         show_progress: bool = True,
         device: str = "cuda"
-    ) -> Tuple[Sam2Model, Sam2Processor]:
+    ) -> Tuple[Sam3Model, Sam3Processor]:
         """
-        Load SAM2 model and processor (auto-downloads if not cached).
+        Load SAM3 model and processor (auto-downloads if not cached).
 
         Args:
-            checkpoint: Checkpoint name (tiny, small, base_plus, large)
+            checkpoint: Checkpoint name (unified)
             show_progress: Show download progress if model not cached
             device: Device to load model on ('cuda' or 'cpu')
 
@@ -245,15 +239,15 @@ class ModelCache:
 
         # Load model and processor (auto-downloads if needed)
         if show_progress and not is_cached:
-            print(f"Loading SAM2 processor...")
-        processor = Sam2Processor.from_pretrained(
+            print(f"Loading SAM3 processor...")
+        processor = Sam3Processor.from_pretrained(
             model_id,
             cache_dir=self.cache_dir
         )
 
         if show_progress and not is_cached:
-            print(f"Loading SAM2 model...")
-        model = Sam2Model.from_pretrained(
+            print(f"Loading SAM3 model...")
+        model = Sam3Model.from_pretrained(
             model_id,
             cache_dir=self.cache_dir
         )
@@ -306,11 +300,12 @@ class ModelCache:
 
     @staticmethod
     def list_available_models() -> None:
-        """Print list of available SAM2 models with sizes."""
-        print("Available SAM2 models:")
+        """Print list of available SAM3 models with sizes."""
+        print("Available SAM3 model:")
         print("-" * 60)
         for checkpoint, model_id in ModelCache.CHECKPOINT_MAP.items():
             size_mb = ModelCache.MODEL_SIZES.get(checkpoint, 0)
             print(f"  {checkpoint:12} | {size_mb:4.0f} MB | {model_id}")
         print("-" * 60)
-        print("Usage: ModelCache().load_model('checkpoint_name')")
+        print("Note: SAM3 has single unified model (840M params, no variants)")
+        print("Usage: ModelCache().load_model('unified')")
