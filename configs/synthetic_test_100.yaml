@@ -1,0 +1,45 @@
+# Synthetic test data generation - 100 samples for testing BatchedDataset
+# Same config as training but smaller dataset
+
+synthetic:
+  num_samples: 100
+  num_channels: 1024  # Square shape for SAM2 native resolution
+  num_times: 1024     # Square shape for SAM2 native resolution
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0                 # 1 mJy noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI min
+  rfi_power_max: 10000.0         # 10000 Jy RFI max
+
+  # Memory management
+  generation_batch_size: 10      # Process 10 samples at a time (lower = less RAM)
+  num_polarizations: 1           # Number of polarizations (1 saves 4x memory)
+  generate_mad_masks: false      # Skip MAD flagging (synthetic has exact masks)
+
+  # RFI types per sample (total ~46 RFI events per waterfall, targeting ~20% pixel coverage)
+  rfi_type_counts:
+    narrowband_persistent: 20    # GPS, satellites (persistent lines)
+    broadband_persistent: 5      # Power lines (persistent broadband)
+    frequency_sweep: 1           # Radar (linear/quadratic chirp sweep)
+    narrowband_bursty: 20        # Random pulsed transmitters (intermittent)
+    broadband_bursty: 5          # Lightning, transients (short broadband bursts)
+
+  # Bandpass effects
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
+  polarization_correlation: 0.8  # Correlated RFI in XX/YY
+
+  # Parallel generation (smaller for tests)
+  generation_workers: 4  # Use 4 workers for testing (faster than 1, not too greedy)
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  flag_sigma: 5
+  patch_size: 1024
+  num_workers: 4
+
+  # Data augmentation (disabled for faster testing)
+  enable_augmentation: false  # Disable for speed
+  augmentation_rotations: 1   # No rotations (value ignored when disabled)

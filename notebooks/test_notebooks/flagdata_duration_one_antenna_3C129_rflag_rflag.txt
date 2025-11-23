@@ -1,1 +1,0 @@
-Flagdata operation on one_antenna_3C129_rflag.ms took 71.25 seconds on rflag.

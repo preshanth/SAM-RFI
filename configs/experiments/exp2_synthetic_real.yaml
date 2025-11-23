@@ -1,0 +1,41 @@
+# Experiment 2: Synthetic + Supplemental Real Data
+# Goal: Improve generalization by mixing synthetic and real data
+
+experiment:
+  name: "exp2_synthetic_real"
+  description: "Mixed training: synthetic (exact masks) + real (threshold flags)"
+  output_dir: "./output/exp2_synthetic_real"
+  save_every_n_epochs: 5
+
+data:
+  # TODO: Create mixed dataset or train on synthetic then fine-tune on real
+  # Option 1: Concatenate datasets before training
+  train_dataset: "./datasets/mixed_train/exact_masks.npz"  # Synthetic + real combined
+  val_dataset: "./datasets/real_val/threshold_masks.npz"   # Real data validation
+
+  # Option 2: Two-stage training (uncomment to use)
+  # stage1_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
+  # stage2_dataset: "./datasets/real_train/threshold_masks.npz"
+
+model:
+  checkpoint: "large"
+  freeze_encoders: true
+  # pretrained_weights: "./output/exp1_synthetic/model_best.pth"  # Optional: start from exp1
+
+training:
+  num_epochs: 20
+  batch_size: 4
+  learning_rate: 1.0e-5  # May reduce to 5e-6 for fine-tuning
+  weight_decay: 0.0
+  device: "cuda"
+
+notes: |
+  This experiment tests domain adaptation:
+  1. Does synthetic pre-training help real data performance?
+  2. How much real data is needed to bridge the domain gap?
+  3. Does mixing hurt synthetic performance?
+
+  Expected outcome:
+  - Better generalization to real data than exp1
+  - Validation on real data should be more meaningful
+  - May see higher train loss than exp1 (harder task)
