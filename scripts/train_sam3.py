@@ -38,7 +38,9 @@ from torch.nn.functional import interpolate
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.samrfi.data import SAMDataset, NumpyDataset
+from src.samrfi.data import SAMDataset, NumpyDataset, BatchedDataset
+from src.samrfi.data_generation import SyntheticDataGenerator
+from src.samrfi.config.config_loader import ConfigLoader
 
 
 class ExperimentTracker:
@@ -141,10 +143,16 @@ class ExperimentTracker:
 
 
 def load_dataset(path):
-    """Load dataset from .npz or HF format"""
+    """Load dataset from .npz, batched, or HF format"""
     path = Path(path)
-    if path.suffix == '.npz':
+
+    # Check if it's a directory with batch files
+    if path.is_dir() and any(path.glob('batch_*.npz')):
+        return BatchedDataset(path)
+    # Check if it's a single .npz file
+    elif path.suffix == '.npz':
         return NumpyDataset.load_from_disk(path)
+    # Otherwise assume HF format
     else:
         from datasets import load_from_disk
         return load_from_disk(path)
@@ -254,6 +262,7 @@ def main():
     parser.add_argument("--config", required=True, help="Path to experiment config YAML")
     parser.add_argument("--resume", help="Path to checkpoint to resume from")
     parser.add_argument("--device", choices=["cuda", "cpu"], help="Override device from config")
+    parser.add_argument("--skip-generation", action="store_true", help="Skip dataset generation (use existing)")
     args = parser.parse_args()
 
     # Load config
@@ -275,7 +284,40 @@ def main():
         config=config
     )
 
+    # Generate datasets if needed
+    if not args.skip_generation:
+        # Generate training dataset
+        if 'train_generation_config' in config['data']:
+            tracker.log(f"\n[Step 1/3] Generating training dataset...")
+            train_gen_config_path = config['data']['train_generation_config']
+            train_output = config['data']['train_dataset']
+
+            tracker.log(f"  Config: {train_gen_config_path}")
+            tracker.log(f"  Output: {train_output}")
+
+            train_gen_config = ConfigLoader.load_data(train_gen_config_path)
+            generator = SyntheticDataGenerator(train_gen_config)
+            generator.generate(output_path=train_output)
+            tracker.log(f"  ✓ Training dataset generated")
+
+        # Generate validation dataset
+        if 'val_generation_config' in config['data']:
+            tracker.log(f"\n[Step 2/3] Generating validation dataset...")
+            val_gen_config_path = config['data']['val_generation_config']
+            val_output = config['data']['val_dataset']
+
+            tracker.log(f"  Config: {val_gen_config_path}")
+            tracker.log(f"  Output: {val_output}")
+
+            val_gen_config = ConfigLoader.load_data(val_gen_config_path)
+            generator = SyntheticDataGenerator(val_gen_config)
+            generator.generate(output_path=val_output)
+            tracker.log(f"  ✓ Validation dataset generated")
+    else:
+        tracker.log("\n[Skipped] Dataset generation (using existing datasets)")
+
     # Load datasets
+    tracker.log(f"\n[Step 3/3] Loading datasets for training...")
     tracker.log(f"Loading training dataset: {config['data']['train_dataset']}")
     train_dataset = load_dataset(config['data']['train_dataset'])
     tracker.log(f"  Loaded {len(train_dataset)} training samples")

@@ -7,8 +7,11 @@ experiment:
   save_every_n_epochs: 2
 
 data:
-  train_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
-  val_dataset: "./datasets/synthetic_val_1k/exact_masks.npz"
+  # Generation configs (will generate batched datasets)
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_4000/exact_masks
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000/exact_masks
 
 model:
   freeze_encoders: true
