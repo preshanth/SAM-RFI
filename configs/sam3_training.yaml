@@ -1,4 +1,13 @@
-# SAM3 Training Configuration
+# DEPRECATED: Use configs/h100_sam3_config.yaml with scripts/run_training.py instead
+#
+# Old: python scripts/train_sam3.py --config configs/sam3_training.yaml
+# New: python scripts/run_training.py --config configs/h100_sam3_config.yaml
+#
+# This config uses the old format for train_sam3.py (deprecated).
+# The new unified format is hardware-centric (H100, A100, etc.) and works with run_training.py
+# --------------------------------------------------------------------------------
+#
+# SAM3 Training Configuration (DEPRECATED)
 # SAM3 is a unified 840M parameter model (vs SAM2's 4 variants)
 # Freezing encoders: 840M → 33M trainable parameters (~96% reduction)
 

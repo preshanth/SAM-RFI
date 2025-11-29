@@ -1,43 +1,97 @@
-# SAM3 Training and Validation Pipeline
+# Unified SAM Training and Validation Pipeline
 
-Complete workflow for training SAM3 on H100 and validating against CASA and AOFlagger.
+Complete workflow for training SAM2/SAM3 on H100 using a unified backend.
 
 ## Overview
 
-1. **Training**: Train SAM3 on H100 with regularization to prevent validation divergence
-2. **Validation**: Compare SAM3 vs CASA (tfcrop, rflag) vs AOFlagger on simulated MS
-3. **Analysis**: Generate publication-ready comparison plots
+1. **Unified Training Backend**: Single `run_training.py` script handles both SAM2 and SAM3
+2. **Hardware-Centric Configs**: Configs organized by GPU hardware (H100, A100, V100, etc.)
+3. **Validation**: Compare SAM2/SAM3 vs CASA (tfcrop, rflag) vs AOFlagger on simulated MS
+4. **Analysis**: Generate publication-ready comparison plots
+
+---
+
+## Unified Training System
+
+### Architecture
+
+The training system now uses a **unified backend** that automatically detects and trains either SAM2 or SAM3:
+
+```
+scripts/run_training.py
+    ↓
+SAMTrainer (unified)
+    ↓
+    ├── SAM2: facebook/sam2-hiera-{tiny,small,base_plus,large}
+    └── SAM3: facebook/sam3 (single 840M model)
+```
+
+**Key Files:**
+- `src/samrfi/training/sam_trainer.py` - Unified trainer class
+- `scripts/run_training.py` - Single entry point for both models
+- `configs/h100_training_config.yaml` - H100 config for SAM2
+- `configs/h100_sam3_config.yaml` - H100 config for SAM3
+
+### Quick Start
+
+```bash
+# Train SAM2 on H100
+python scripts/run_training.py --config configs/h100_training_config.yaml
+
+# Train SAM3 on H100
+python scripts/run_training.py --config configs/h100_sam3_config.yaml
+```
+
+Both use the same backend - only the config changes!
 
 ---
 
 ## Step 1: H100 Training Setup
 
-### Training Configuration
+### Hardware-Centric Configuration
 
-The H100-optimized config is at `configs/h100_sam3_training.yaml`:
+Configs are now organized by **hardware** (not model). The unified format:
 
+**`configs/h100_training_config.yaml` (SAM2):**
 ```yaml
-experiment:
-  name: "sam3_h100"
-  output_dir: "./output/sam3_h100"
-  save_every_n_epochs: 2
-
 data:
-  train_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
-  val_dataset: "./datasets/synthetic_val_1k/exact_masks.npz"
-
-model:
-  freeze_encoders: true  # 840M → 33M trainable params
+  train_dataset: ./datasets/train_4000
+  val_dataset: ./datasets/val_1000
+  mask_type: exact_masks
 
 training:
-  num_epochs: 20
-  batch_size: 16         # H100 80GB VRAM
-  learning_rate: 5.0e-6  # Lower LR to prevent overfitting
-  weight_decay: 0.01     # L2 regularization
-  device: "cuda"
+  model_type: sam2              # ← Specifies SAM2
+  model_checkpoint: large       # tiny/small/base_plus/large
+  device: cuda
+  num_epochs: 10
+  batch_size: 16
+  learning_rate: 1.0e-5
+  output_dir: ./output/sam2_h100
+  # ... (optimizer, loss, dataloader settings)
 ```
 
-### Key Changes from SAM2
+**`configs/h100_sam3_config.yaml` (SAM3):**
+```yaml
+data:
+  train_dataset: ./datasets/train_4000
+  val_dataset: ./datasets/val_1000
+  mask_type: exact_masks
+
+training:
+  model_type: sam3              # ← Specifies SAM3
+  model_checkpoint: large       # Ignored for SAM3 (single model)
+  device: cuda
+  num_epochs: 20
+  batch_size: 16
+  learning_rate: 5.0e-6         # Lower LR for larger model
+  weight_decay: 0.01            # L2 regularization
+  output_dir: ./output/sam3_h100
+  # ... (optimizer, loss, dataloader settings)
+```
+
+**Key difference**: Only `model_type` changes. All other settings (hardware, dataloader, optimizer) are identical!
+
+### SAM3 Training Differences
 
 **Preventing Validation Divergence:**
 - **Lower learning rate**: 5e-6 (vs 1e-5) - slower, more stable learning
@@ -66,16 +120,22 @@ val_dataloader = DataLoader(
 # Activate environment
 conda activate SAM-RFI
 
-# Check datasets exist
-ls datasets/synthetic_train_4k/exact_masks.npz
-ls datasets/synthetic_val_1k/exact_masks.npz
+# Option 1: Train SAM2 on H100 (faster, 4 size variants)
+python scripts/run_training.py --config configs/h100_training_config.yaml
 
-# Start training (will take ~3-4 hours on H100)
-python scripts/train_sam3.py --config configs/h100_sam3_training.yaml
+# Option 2: Train SAM3 on H100 (single 840M model, ~3-4 hours)
+python scripts/run_training.py --config configs/h100_sam3_config.yaml
 
 # Monitor training (in another terminal)
-watch -n 30 tail -20 output/sam3_h100/training_log.txt
+tail -f output/sam3_h100/training_*.log   # SAM3
+# or
+tail -f output/sam2_h100/training_*.log   # SAM2
+
+# Skip dataset generation if data already exists
+python scripts/run_training.py --config configs/h100_sam3_config.yaml --skip-generation
 ```
+
+**Note:** Both SAM2 and SAM3 use the **same `run_training.py` script**. The model type is auto-detected from the config!
 
 ### Expected Training Behavior
 
@@ -99,22 +159,17 @@ Epoch 20/20: train_loss=0.005000, val_loss=0.350000  ❌ Overfitting!
 
 ### Training Outputs
 
-After training completes, you'll have:
+After training completes (either SAM2 or SAM3), you'll have:
 
 ```
-output/sam3_h100/
-├── config.yaml                    # Training configuration
-├── training_log.txt               # Detailed logs
-├── losses.npz                     # Train/val losses (for plotting)
-├── model_best.pth                 # Best model (lowest val loss)
-├── model_final.pth                # Final model (epoch 20)
-├── checkpoint_epoch2.pth          # Checkpoints every 2 epochs
-├── checkpoint_epoch4.pth
-├── ...
-└── git_commit.txt                 # Git hash for reproducibility
+output/sam{2,3}_h100/
+├── samrfi_data/models/            # Trained models directory
+│   ├── model_sam{2,3}-large_...pth   # Final model with metadata
+│   └── loss_plot_sam{2,3}-large_...png  # Loss curve visualization
+└── training_YYYYMMDD_HHMMSS.log   # Detailed logs with timestamps
 ```
 
-**Best model for validation**: `output/sam3_h100/model_best.pth`
+**For inference/validation**: Use the `.pth` model file from `samrfi_data/models/`
 
 ---
 
@@ -421,24 +476,43 @@ Training will continue from epoch 11.
 ## Quick Reference
 
 ```bash
-# 1. Start training
-python scripts/train_sam3.py --config configs/h100_sam3_training.yaml
+# 1. Train SAM2 or SAM3 (unified backend)
+python scripts/run_training.py --config configs/h100_training_config.yaml     # SAM2
+python scripts/run_training.py --config configs/h100_sam3_config.yaml         # SAM3
 
 # 2. Monitor training
-tail -f output/sam3_h100/training_log.txt
+tail -f output/sam*/training_*.log
 
-# 3. After training, validate
+# 3. After training, validate (TODO: update validation script for unified models)
 python scripts/validate_flagging_methods.py \
     --mode simulated \
     --ms validation_data/sim_ms.ms \
     --ground-truth validation_data/ground_truth.npy \
-    --sam3-model output/sam3_h100/model_best.pth \
+    --model output/sam3_h100/samrfi_data/models/model_sam3-large_*.pth \
     --output results/validation/
 
 # 4. View results
 xdg-open results/validation/plot_metrics_comparison.png
 cat results/validation/validation_results.json
 ```
+
+## Migration from Old Scripts
+
+**Old way (deprecated):**
+```bash
+python scripts/train_sam3.py --config configs/sam3_training.yaml
+```
+
+**New way (unified):**
+```bash
+python scripts/run_training.py --config configs/h100_sam3_config.yaml
+```
+
+**Benefits:**
+- ✅ Single backend for SAM2 and SAM3
+- ✅ Hardware-centric configs (H100, A100, etc.)
+- ✅ Consistent logging and output structure
+- ✅ Same DataLoader optimizations for both models
 
 ---
 

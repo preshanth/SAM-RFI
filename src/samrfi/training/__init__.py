@@ -1,5 +1,5 @@
 """Training modules for SAM-RFI"""
 
-from .sam3_trainer import SAM3Trainer
+from .sam_trainer import SAMTrainer, SAM2Trainer, SAM3Trainer
 
-__all__ = ["SAM3Trainer"]
+__all__ = ["SAMTrainer", "SAM2Trainer", "SAM3Trainer"]

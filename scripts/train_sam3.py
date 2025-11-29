@@ -1,6 +1,23 @@
 #!/usr/bin/env python3
 """
-SAM3 Training Script with Full Experiment Tracking
+DEPRECATED: This script is deprecated. Use scripts/run_training.py instead.
+
+Old usage:
+    python scripts/train_sam3.py --config configs/sam3_training.yaml
+
+New usage:
+    python scripts/run_training.py --config configs/h100_sam3_config.yaml
+
+The new unified backend (run_training.py) handles both SAM2 and SAM3 with:
+- Hardware-centric configs (H100, A100, V100, etc.)
+- Consistent logging and output structure
+- Same DataLoader optimizations
+- Auto-detection of model type from config
+
+This script remains for backward compatibility but will be removed in a future release.
+--------------------------------------------------------------------------------
+
+SAM3 Training Script with Full Experiment Tracking (DEPRECATED)
 
 Trains SAM3 (Segment Anything Model 3) for RFI detection using visual prompts.
 SAM3 is a unified 840M parameter model (vs SAM2's 4 variants).
@@ -13,10 +30,32 @@ Features:
 - Structured logging
 - Encoder freezing (840M → 33M trainable params)
 
-Usage:
+Usage (DEPRECATED):
     python scripts/train_sam3.py --config configs/sam3_training.yaml
     python scripts/train_sam3.py --config configs/sam3_training.yaml --resume output/sam3/checkpoint_epoch5.pth
 """
+
+import warnings
+warnings.warn(
+    "\n\n"
+    "=" * 80 + "\n"
+    "DEPRECATION WARNING: scripts/train_sam3.py is deprecated!\n"
+    "\n"
+    "Please use the unified training script instead:\n"
+    "  Old: python scripts/train_sam3.py --config configs/sam3_training.yaml\n"
+    "  New: python scripts/run_training.py --config configs/h100_sam3_config.yaml\n"
+    "\n"
+    "Benefits of the new script:\n"
+    "  - Unified backend for both SAM2 and SAM3\n"
+    "  - Hardware-centric configs (H100, A100, V100, etc.)\n"
+    "  - Consistent logging and output structure\n"
+    "  - Same optimized DataLoader for both models\n"
+    "\n"
+    "This script will continue to work but will be removed in a future release.\n"
+    "=" * 80 + "\n",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import argparse
 import sys

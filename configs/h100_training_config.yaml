@@ -19,12 +19,18 @@ data:
   mask_type: exact_masks
 
 training:
+  # Model selection
+  model_type: sam2              # 'sam2' or 'sam3'
+  model_checkpoint: large       # For SAM2: tiny/small/base_plus/large; For SAM3: ignored
+
+  # Hardware settings
   device: cuda
+
+  # Training hyperparameters
   num_epochs: 10
-  batch_size: 16          # H100 can handle up to 32-48 with proper data pipeline
+  batch_size: 16                # H100 can handle up to 32-48 with proper data pipeline
   learning_rate: 1.0e-5
-  model_checkpoint: large
-  output_dir: ./training_output
+  output_dir: ./output/sam2_h100
 
   # Optimizer settings
   optimizer: adamw

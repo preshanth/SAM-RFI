@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.samrfi.training.sam2_trainer import SAM2Trainer
+from src.samrfi.training import SAMTrainer
 from src.samrfi.data import BatchedDataset
 from src.samrfi.data_generation import SyntheticDataGenerator
 from src.samrfi.config.config_loader import ConfigLoader
@@ -145,11 +145,16 @@ def main():
     # Wrap datasets
     train_wrapper = DatasetWrapper(train_dataset)
 
-    # Create trainer
-    trainer = SAM2Trainer(
+    # Detect model type from config (default to sam2 for backward compatibility)
+    model_type = config['training'].get('model_type', 'sam2')
+    logger.info(f"\nModel type: {model_type.upper()}")
+
+    # Create trainer with unified backend
+    trainer = SAMTrainer(
         rfidataset_instance=train_wrapper,
         device=config['training']['device'],
-        dir_path=config['training']['output_dir']
+        dir_path=config['training']['output_dir'],
+        model_type=model_type
     )
 
     # Train

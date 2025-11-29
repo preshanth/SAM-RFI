@@ -1,4 +1,13 @@
-# H100 SAM3 Training Config
+# DEPRECATED: Use configs/h100_sam3_config.yaml with scripts/run_training.py instead
+#
+# Old: python scripts/train_sam3.py --config configs/h100_sam3_training.yaml
+# New: python scripts/run_training.py --config configs/h100_sam3_config.yaml
+#
+# This config uses the old experiment-based format for train_sam3.py (deprecated).
+# The new format is unified and hardware-centric (works for both SAM2 and SAM3).
+# --------------------------------------------------------------------------------
+#
+# H100 SAM3 Training Config (DEPRECATED)
 
 experiment:
   name: "sam3_h100"
