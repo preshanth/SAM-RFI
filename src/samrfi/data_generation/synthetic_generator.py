@@ -207,8 +207,9 @@ class SyntheticDataGenerator:
         # Create Pool ONCE outside loop (reuse for all batches)
         pool = None
         if generation_workers > 1:
-            from multiprocessing import Pool
+            import torch.multiprocessing as mp
             from functools import partial
+            mp.set_start_method('spawn', force=True)  # Required for CUDA tensors
 
             # Convert config to dict for pickling
             def namespace_to_dict(obj):
@@ -224,7 +225,7 @@ class SyntheticDataGenerator:
             worker_func = partial(_worker_generate_and_preprocess, **gen_kwargs)
 
             # Initialize pool ONCE (reuse across all batches)
-            pool = Pool(generation_workers, initializer=_init_worker, initargs=(config_dict,))
+            pool = mp.Pool(generation_workers, initializer=_init_worker, initargs=(config_dict,))
 
         try:
             for batch_idx in range(num_batches):
