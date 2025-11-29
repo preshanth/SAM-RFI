@@ -179,6 +179,9 @@ class SAMTrainer:
                 logger.info(f"  Requested checkpoint '{sam_checkpoint}' mapped to unified SAM3 model")
 
             processor = Sam3Processor.from_pretrained(model_name)
+            # Override to 1024x1024 (our data size, same as SAM2)
+            processor.image_processor.size = {"height": 1024, "width": 1024}
+            logger.info(f"  Overriding image size to 1024x1024 (matching SAM2 and our data)")
             model = Sam3Model.from_pretrained(model_name)
 
         # Create dataset using SAMDataset wrapper
