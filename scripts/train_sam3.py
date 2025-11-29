@@ -309,7 +309,7 @@ def main():
 
     # Create dataloaders
     train_dataloader = DataLoader(
-        SAMDataset(train_dataset, processor),
+        SAMDataset(train_dataset, processor, bbox_perturbation=20),
         batch_size=config['training']['batch_size'],
         shuffle=True
     )
@@ -317,7 +317,7 @@ def main():
     val_dataloader = None
     if val_dataset:
         val_dataloader = DataLoader(
-            SAMDataset(val_dataset, processor),
+            SAMDataset(val_dataset, processor, bbox_perturbation=0),
             batch_size=config['training']['batch_size'],
             shuffle=False
         )

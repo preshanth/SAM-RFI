@@ -1,0 +1,21 @@
+# H100 SAM3 Training Config
+
+experiment:
+  name: "sam3_h100"
+  description: "SAM3 training on H100"
+  output_dir: "./output/sam3_h100"
+  save_every_n_epochs: 2
+
+data:
+  train_dataset: "./datasets/synthetic_train_4k/exact_masks.npz"
+  val_dataset: "./datasets/synthetic_val_1k/exact_masks.npz"
+
+model:
+  freeze_encoders: true
+
+training:
+  num_epochs: 20
+  batch_size: 16
+  learning_rate: 5.0e-6
+  weight_decay: 0.01
+  device: "cuda"
