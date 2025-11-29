@@ -300,12 +300,22 @@ class SAMTrainer:
             logger.info(f"\nEpoch {epoch+1}/{num_epochs} [Train]: Starting {total_batches} batches")
 
             for batch_idx, batch in enumerate(train_dataloader, 1):
-                # Forward pass
-                outputs = model(
-                    pixel_values=batch["pixel_values"].to(self.device),
-                    input_boxes=batch["input_boxes"].to(self.device),
-                    multimask_output=multimask_output,
-                )
+                # Forward pass - SAM3 requires text prompts or empty text_embeds
+                if self.model_type == 'sam3':
+                    # SAM3: visual-only prompting with empty text
+                    outputs = model(
+                        pixel_values=batch["pixel_values"].to(self.device),
+                        input_boxes=batch["input_boxes"].to(self.device),
+                        text_embeds=torch.zeros(batch["pixel_values"].size(0), 1, 768, device=self.device),  # Empty text embeddings
+                        multimask_output=multimask_output,
+                    )
+                else:
+                    # SAM2: visual-only prompting
+                    outputs = model(
+                        pixel_values=batch["pixel_values"].to(self.device),
+                        input_boxes=batch["input_boxes"].to(self.device),
+                        multimask_output=multimask_output,
+                    )
 
                 # Get predictions and ground truth
                 predicted_masks = outputs.pred_masks.squeeze(1)
@@ -364,11 +374,20 @@ class SAMTrainer:
 
                 with torch.no_grad():
                     for batch_idx, batch in enumerate(val_dataloader, 1):
-                        outputs = model(
-                            pixel_values=batch["pixel_values"].to(self.device),
-                            input_boxes=batch["input_boxes"].to(self.device),
-                            multimask_output=multimask_output,
-                        )
+                        # Forward pass - SAM3 requires text prompts or empty text_embeds
+                        if self.model_type == 'sam3':
+                            outputs = model(
+                                pixel_values=batch["pixel_values"].to(self.device),
+                                input_boxes=batch["input_boxes"].to(self.device),
+                                text_embeds=torch.zeros(batch["pixel_values"].size(0), 1, 768, device=self.device),
+                                multimask_output=multimask_output,
+                            )
+                        else:
+                            outputs = model(
+                                pixel_values=batch["pixel_values"].to(self.device),
+                                input_boxes=batch["input_boxes"].to(self.device),
+                                multimask_output=multimask_output,
+                            )
 
                         predicted_masks = outputs.pred_masks.squeeze(1)
                         ground_truth_masks = batch["ground_truth_mask"].float().to(self.device)
