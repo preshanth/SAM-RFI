@@ -34,7 +34,7 @@ training:
 
   # Optimizer settings
   optimizer: adamw
-  weight_decay: 0.01
+  weight_decay: 0.05          # Increased from 0.01 for stronger regularization
   adam_betas: [0.9, 0.999]
   adam_eps: 1.0e-8
 
@@ -50,7 +50,7 @@ training:
   freeze_prompt_encoder: true
 
   # Data augmentation
-  bbox_perturbation: 20
+  bbox_perturbation: 50       # Increased from 20 for more spatial variance
 
   # DataLoader settings - Streaming multiprocessing
   num_workers: 12           # Parallel batch loading (leaves 8 cores for system/generation)

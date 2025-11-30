@@ -184,6 +184,13 @@ class SAMTrainer:
             logger.info(f"  Overriding image size to 1024x1024 (matching SAM2 and our data)")
             model = Sam3Model.from_pretrained(model_name)
 
+            # Resize position embeddings to support 1024x1024 (interpolate from default 1008x1008)
+            try:
+                model.vision_encoder.resize_position_embeddings(new_num_position_embeddings=4096)  # 64x64 patches at 16x16
+                logger.info(f"  Resized position embeddings for 1024x1024 input")
+            except Exception as e:
+                logger.warning(f"  Could not resize position embeddings: {e}")
+
         # Create dataset using SAMDataset wrapper
         train_dataset = SAMDataset(
             dataset=self.RFIDataset.dataset,
@@ -292,6 +299,9 @@ class SAMTrainer:
         # Training loop
         train_losses = []
         val_losses = []
+        best_val_loss = float('inf')
+        best_epoch = 0
+        epochs_without_improvement = 0
 
         for epoch in range(num_epochs):
             # Training phase
@@ -343,6 +353,10 @@ class SAMTrainer:
                 # Backward pass
                 opt.zero_grad()
                 loss.backward()
+
+                # Gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(trainable_param_list, max_norm=1.0)
+
                 opt.step()
 
                 # Extract loss value
@@ -430,6 +444,34 @@ class SAMTrainer:
             if epoch_val_loss is not None:
                 log_msg += f" | Val loss: {epoch_val_loss:.6f}"
             logger.info(log_msg)
+
+            # Save checkpoint every epoch
+            if save_model:
+                checkpoint_path = os.path.join(self.directory, "models", f"checkpoint_epoch{epoch+1}.pth")
+                os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+                torch.save(model.state_dict(), checkpoint_path)
+                logger.info(f"Saved checkpoint: {checkpoint_path}")
+
+            # Track best model and early stopping
+            if epoch_val_loss is not None:
+                if epoch_val_loss < best_val_loss:
+                    best_val_loss = epoch_val_loss
+                    best_epoch = epoch + 1
+                    epochs_without_improvement = 0
+
+                    # Save best model
+                    if save_model:
+                        best_model_path = os.path.join(self.directory, "models", "model_best.pth")
+                        torch.save(model.state_dict(), best_model_path)
+                        logger.info(f"New best model! Val loss: {best_val_loss:.6f} (epoch {best_epoch})")
+                else:
+                    epochs_without_improvement += 1
+                    logger.info(f"Val loss increased. Epochs without improvement: {epochs_without_improvement}/2")
+
+                    # Early stopping
+                    if epochs_without_improvement >= 2:
+                        logger.info(f"Early stopping triggered. Best val loss: {best_val_loss:.6f} at epoch {best_epoch}")
+                        break
 
             # Force garbage collection at end of epoch
             gc.collect()
