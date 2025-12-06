@@ -35,17 +35,41 @@ dependencies = [
     "datasets>=2.10.0",
     "patchify>=0.2.3",
     "scikit-image>=0.20.0",
+    "monai",
+    "kornia",
 ]
 
 [project.optional-dependencies]
-# CUDA-enabled PyTorch (for GPU training)
-cuda = [
-    "torch>=2.0.0",
+# ============================================================================
+# Installation Options:
+# ============================================================================
+# Basic (CPU-only):           pip install samrfi
+# Mac GPU (Apple Silicon):    pip install samrfi[mps]  or  samrfi[gpu]
+# NVIDIA GPU:                 pip install samrfi[cuda]
+# With CASA tools:            pip install samrfi[gpu,casa]
+# Development:                pip install samrfi[dev]
+# Everything:                 pip install samrfi[all]
+# ============================================================================
+
+# GPU-enabled PyTorch (supports both CUDA and MPS for Mac)
+# PyTorch 2.0+ includes native support for Apple Silicon (MPS backend)
+gpu = [
+    "torch>=2.0.0",  # MPS support requires PyTorch 2.0+
     "torchvision>=0.15.0",  # Required for SAM2 image segmentation models
     "transformers>=4.40.0",
     "monai>=1.3.0",
-    "nvidia-ml-py3>=7.352.0",  # pynvml for GPU monitoring
-    "psutil>=5.9.0",  # CPU memory monitoring for validation
+    "psutil>=5.9.0",  # Memory monitoring
+]
+
+# CUDA-specific dependencies (NVIDIA GPUs only)
+cuda = [
+    "samrfi[gpu]",
+    "nvidia-ml-py3>=7.352.0",  # pynvml for NVIDIA GPU monitoring
+]
+
+# Mac GPU (Apple Silicon MPS) - same as gpu but explicit for Mac users
+mps = [
+    "samrfi[gpu]",
 ]
 
 # CASA tools for MS handling (always needed)
@@ -54,8 +78,9 @@ casa = [
     "casatasks>=6.5.0",
 ]
 
-# Development dependencies (includes CUDA + CASA)
+# Development dependencies (includes GPU + CASA + testing tools)
 dev = [
+    "samrfi[gpu,casa]",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "black>=23.0.0",
@@ -63,14 +88,6 @@ dev = [
     "mypy>=1.0.0",
     "ipython>=8.0.0",
     "jupyter>=1.0.0",
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-    "transformers>=4.40.0",
-    "monai>=1.3.0",
-    "nvidia-ml-py3>=7.352.0",
-    "psutil>=5.9.0",
-    "casatools>=6.5.0",
-    "casatasks>=6.5.0",
 ]
 
 # All dependencies (same as dev)
@@ -88,7 +105,16 @@ Repository = "https://github.com/preshanth/SAM-RFI"
 "Bug Tracker" = "https://github.com/preshanth/SAM-RFI/issues"
 
 [tool.setuptools]
-packages = ["samrfi", "samrfi.data", "samrfi.training", "samrfi.config", "samrfi.data_generation", "samrfi.inference"]
+packages = [
+    "samrfi",
+    "samrfi.utils",
+    "samrfi.data",
+    "samrfi.training",
+    "samrfi.config",
+    "samrfi.data_generation",
+    "samrfi.inference",
+    "samrfi.datasets",
+]
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
