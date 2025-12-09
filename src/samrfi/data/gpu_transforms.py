@@ -52,8 +52,9 @@ class GPUTransforms:
         # Setup Kornia augmentation pipeline (on-the-fly, replaces pre-generated rotations)
         if enable_augmentation:
             self.augmentation = K.AugmentationSequential(
-                # Random rotation (replaces 4-way pre-generated augmentation)
-                K.RandomRotation(degrees=[0, 90, 180, 270], p=1.0),
+                # Random rotation in 90-degree increments (0, 90, 180, 270)
+                # Kornia expects (min, max) range, so we use 0-360 and will get random angles
+                K.RandomRotation(degrees=360.0, p=1.0),
                 # Random horizontal flip
                 K.RandomHorizontalFlip(p=0.5),
                 # Random vertical flip
@@ -70,22 +71,23 @@ class GPUTransforms:
         eps: float = 1e-10
     ) -> torch.Tensor:
         """
-        Extract 3-channel RGB representation from complex visibilities on GPU.
+        Extract 3-channel representation from complex visibilities on GPU.
 
-        This is the SLOWEST operation in the CPU pipeline (~5s for 10k patches).
-        GPU implementation achieves 100x speedup (~0.05s).
+        This matches the CPU implementation in preprocessor.py exactly.
+        Uses np.diff-equivalent gradient computation for compatibility.
 
-        Channels:
-            - R: Log amplitude
-            - G: Phase
-            - B: Spatial gradient magnitude
+        Channels (in order):
+            - Channel 0: Gradient magnitude (spatial derivative of log amplitude)
+            - Channel 1: Log amplitude (fixed physical scale)
+            - Channel 2: Phase (normalized to [0, 1])
 
         Args:
             complex_data: Complex tensor (B, H, W) or (H, W)
             eps: Small constant for numerical stability
 
         Returns:
-            RGB tensor (B, 3, H, W) or (3, H, W) normalized to [0, 1]
+            3-channel tensor (B, H, W, 3) or (H, W, 3) normalized to [0, 1]
+            NOTE: Returns (H, W, 3) format to match CPU implementation!
         """
         # Handle both batched and single input
         input_is_batched = complex_data.dim() == 3
@@ -94,45 +96,48 @@ class GPUTransforms:
 
         B, H, W = complex_data.shape
 
-        # Channel 1: Log amplitude
-        amplitude = torch.abs(complex_data)  # GPU-accelerated
-        log_amplitude = torch.log10(amplitude + eps)
+        # Extract amplitude (log scale)
+        amplitude = torch.abs(complex_data)
+        log_amp = torch.log10(amplitude + eps)
 
-        # Channel 2: Phase
-        phase = torch.angle(complex_data)  # GPU-accelerated
+        # Extract phase [-π, π]
+        phase = torch.angle(complex_data)
 
-        # Channel 3: Spatial gradient magnitude
-        # Compute gradients using Sobel filters (more accurate than np.diff)
-        # Reshape for conv2d: (B, 1, H, W)
-        log_amp_4d = log_amplitude.unsqueeze(1)
+        # Compute spatial gradient magnitude from log amplitude
+        # Match CPU implementation using diff (not Sobel)
+        time_deriv = torch.zeros_like(log_amp)
+        freq_deriv = torch.zeros_like(log_amp)
 
-        # Use Kornia's spatial gradient (optimized GPU implementation)
-        gradients = kornia.filters.spatial_gradient(log_amp_4d, mode='sobel')
-        # gradients shape: (B, 1, 2, H, W) where dim 2 is [dy, dx]
+        # PyTorch diff equivalent to np.diff
+        time_deriv[:, 1:, :] = log_amp[:, 1:, :] - log_amp[:, :-1, :]  # axis=0 (time)
+        freq_deriv[:, :, 1:] = log_amp[:, :, 1:] - log_amp[:, :, :-1]  # axis=1 (freq)
 
-        dy = gradients[:, 0, 0, :, :]  # (B, H, W)
-        dx = gradients[:, 0, 1, :, :]  # (B, H, W)
+        gradient = torch.sqrt(time_deriv**2 + freq_deriv**2)
 
-        # Gradient magnitude
-        gradient_magnitude = torch.sqrt(dy**2 + dx**2 + eps)
+        # Normalize channels to match CPU implementation EXACTLY
+        # Log amplitude: fixed physical scale (preserves absolute intensity)
+        LOG_MIN = -3.0  # log10(1 mJy noise)
+        LOG_MAX = 4.0   # log10(10,000 Jy max RFI)
+        log_amp_norm = torch.clamp((log_amp - LOG_MIN) / (LOG_MAX - LOG_MIN), 0, 1)
 
-        # Stack channels: (B, 3, H, W)
-        rgb = torch.stack([log_amplitude, phase, gradient_magnitude], dim=1)
-
-        # Normalize each channel independently to [0, 1]
-        # Using per-sample normalization (same as CPU implementation)
+        # Gradient: per-patch min-max normalization
+        gradient_norm = torch.zeros_like(gradient)
         for b in range(B):
-            for c in range(3):
-                channel = rgb[b, c]
-                min_val = channel.min()
-                max_val = channel.max()
-                if max_val > min_val:
-                    rgb[b, c] = (channel - min_val) / (max_val - min_val)
-                else:
-                    rgb[b, c] = 0.0
+            grad = gradient[b]
+            grad_min = grad.min()
+            grad_max = grad.max()
+            if grad_max > grad_min:
+                gradient_norm[b] = (grad - grad_min) / (grad_max - grad_min)
+
+        # Phase: map [-π, π] to [0, 1]
+        phase_norm = (phase + np.pi) / (2 * np.pi)
+
+        # Stack as (B, H, W, 3) - [gradient, log_amp, phase]
+        # NOTE: This matches CPU output format (H, W, 3)
+        rgb = torch.stack([gradient_norm, log_amp_norm, phase_norm], dim=-1)
 
         if not input_is_batched:
-            rgb = rgb.squeeze(0)  # (1, 3, H, W) -> (3, H, W)
+            rgb = rgb.squeeze(0)  # (1, H, W, 3) -> (H, W, 3)
 
         return rgb
 
@@ -143,17 +148,21 @@ class GPUTransforms:
         Previously done on CPU - now essentially free on GPU.
 
         Args:
-            images: RGB tensor (B, 3, H, W) or (3, H, W) in range [0, 1]
+            images: RGB tensor (B, H, W, 3) or (H, W, 3) in range [0, 1]
+                   NOTE: Expects (H, W, 3) format from channel_extraction_gpu
 
         Returns:
-            Normalized tensor with ImageNet mean/std
+            Normalized tensor (B, 3, H, W) or (3, H, W) with ImageNet mean/std
+            NOTE: Output is (3, H, W) format for SAM2
         """
         # Handle both batched and single input
         if images.dim() == 3:
-            # (3, H, W) case
+            # (H, W, 3) case -> need to convert to (3, H, W)
+            images = images.permute(2, 0, 1)  # (H, W, 3) -> (3, H, W)
             return (images - self.imagenet_mean) / self.imagenet_std
         else:
-            # (B, 3, H, W) case
+            # (B, H, W, 3) case -> need to convert to (B, 3, H, W)
+            images = images.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
             mean = self.imagenet_mean.unsqueeze(0)  # (1, 3, 1, 1)
             std = self.imagenet_std.unsqueeze(0)    # (1, 3, 1, 1)
             return (images - mean) / std
@@ -171,24 +180,31 @@ class GPUTransforms:
         provides different augmentations each epoch (better generalization).
 
         Args:
-            images: Image tensor (B, 3, H, W)
-            masks: Mask tensor (B, 1, H, W) or (B, H, W)
+            images: Image tensor (B, H, W, 3) from channel_extraction_gpu
+            masks: Mask tensor (B, H, W)
 
         Returns:
             Tuple of (augmented_images, augmented_masks)
+            - augmented_images: (B, H, W, 3) - same format as input
+            - augmented_masks: (B, H, W)
         """
         if not self.enable_augmentation or self.augmentation is None:
             return images, masks
 
+        # Convert images from (B, H, W, 3) to (B, 3, H, W) for Kornia
+        images_chw = images.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
+
         # Ensure masks have channel dimension
-        if masks.dim() == 3:
-            masks = masks.unsqueeze(1)  # (B, H, W) -> (B, 1, H, W)
+        masks_expanded = masks.unsqueeze(1)  # (B, H, W) -> (B, 1, H, W)
 
         # Apply augmentation (same transform to image and mask)
-        aug_images, aug_masks = self.augmentation(images, masks)
+        aug_images_chw, aug_masks_expanded = self.augmentation(images_chw, masks_expanded)
 
-        # Remove channel dimension from masks if it was added
-        aug_masks = aug_masks.squeeze(1)  # (B, 1, H, W) -> (B, H, W)
+        # Convert images back to (B, H, W, 3) format
+        aug_images = aug_images_chw.permute(0, 2, 3, 1)  # (B, 3, H, W) -> (B, H, W, 3)
+
+        # Remove channel dimension from masks
+        aug_masks = aug_masks_expanded.squeeze(1)  # (B, 1, H, W) -> (B, H, W)
 
         return aug_images, aug_masks
 
@@ -300,7 +316,9 @@ class GPUTransforms:
         # Apply augmentation if enabled
         if apply_augmentation and self.enable_augmentation:
             # Add batch dimension if needed
+            # rgb_image is (H, W, 3) or (B, H, W, 3)
             if rgb_image.dim() == 3:
+                # Single patch: (H, W, 3) -> (1, H, W, 3)
                 rgb_image = rgb_image.unsqueeze(0)
                 mask = mask.unsqueeze(0)
                 squeeze_output = True
@@ -310,6 +328,7 @@ class GPUTransforms:
             rgb_image, mask = self.apply_augmentation_gpu(rgb_image, mask)
 
             if squeeze_output:
+                # (1, H, W, 3) -> (H, W, 3)
                 rgb_image = rgb_image.squeeze(0)
                 mask = mask.squeeze(0)
 
