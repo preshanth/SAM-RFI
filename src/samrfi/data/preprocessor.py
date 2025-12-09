@@ -621,3 +621,191 @@ class Preprocessor:
 
         # Apply: (image - mean) / std
         return (images - mean) / std
+
+
+class GPUPreprocessor:
+    """
+    GPU-optimized preprocessor that stores RAW complex patches.
+
+    Unlike the standard Preprocessor which pre-generates all transforms on CPU,
+    this preprocessor does MINIMAL CPU work and returns raw complex patches.
+    All transforms are then applied on GPU during training (via GPUTransformDataset).
+
+    Key differences from Preprocessor:
+    - NO channel extraction (done on GPU)
+    - NO ImageNet normalization (done on GPU)
+    - NO pre-generated augmentations (done on-the-fly with Kornia)
+    - Stores complex data (30% smaller than 3-channel RGB)
+    - 4x less storage (no augmentation copies)
+
+    Usage:
+        >>> # Create GPU preprocessor
+        >>> preprocessor = GPUPreprocessor(complex_data, masks)
+        >>> raw_patches, raw_masks = preprocessor.create_raw_patches(
+        ...     patch_size=256,
+        ...     remove_blank=True
+        ... )
+        >>>
+        >>> # Use with GPUTransformDataset
+        >>> from samrfi.data.gpu_dataset import GPUTransformDataset
+        >>> dataset = GPUTransformDataset(
+        ...     complex_patches=raw_patches,
+        ...     masks=raw_masks,
+        ...     device='cuda'
+        ... )
+    """
+
+    def __init__(self, data, flags=None):
+        """
+        Initialize GPU preprocessor.
+
+        Args:
+            data: Complex waterfall data, shape (baselines, pols, channels, times)
+                  or (pols, channels, times). MUST be complex dtype.
+            flags: Optional flag array (same shape as data)
+        """
+        # Handle both (baselines, pols, ch, time) and (pols, ch, time) shapes
+        if data.ndim == 4:
+            self.data = data
+        elif data.ndim == 3:
+            self.data = data[np.newaxis, ...]
+        else:
+            raise ValueError(f"Data must be 3D or 4D, got shape {data.shape}")
+
+        # Verify complex dtype
+        if not np.iscomplexobj(data):
+            raise ValueError(
+                "GPUPreprocessor requires complex data. "
+                "Use standard Preprocessor for real-valued data."
+            )
+
+        self.flags = flags
+        self.raw_patches = None
+        self.raw_masks = None
+
+    def create_raw_patches(
+        self,
+        patch_size=256,
+        remove_blank=True,
+        num_patches=None,
+        num_workers=4,
+    ):
+        """
+        Create raw complex patches (no transforms applied).
+
+        Minimal CPU preprocessing - just patchification and blank removal.
+        All other transforms will be done on GPU during training.
+
+        Args:
+            patch_size: Size of square patches (default 256)
+            remove_blank: Remove patches with no RFI (default True)
+            num_patches: Limit number of patches (default: all)
+            num_workers: Parallel workers for patchification (default 4)
+
+        Returns:
+            Tuple of (complex_patches, masks)
+            - complex_patches: List of complex numpy arrays (H, W)
+            - masks: List of binary mask arrays (H, W)
+        """
+        print(f"\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
+        print(f"  Input shape: {self.data.shape}")
+        print(f"  Patch size: {patch_size}x{patch_size}")
+        print(f"  Data type: {self.data.dtype}")
+
+        # Flatten data (no augmentation - done on GPU later)
+        print("  [1/3] Flattening waterfalls (no augmentation)...")
+        flattened_data = [pol for baseline in self.data for pol in baseline]
+        print(f"    Using {len(flattened_data)} waterfalls")
+
+        if self.flags is not None:
+            flattened_flags = [pol for baseline in self.flags for pol in baseline]
+        else:
+            # Generate simple flags (any non-zero value)
+            flattened_flags = [np.abs(w) > 0 for w in flattened_data]
+
+        # Patchify (or use full waterfalls)
+        waterfall_shape = flattened_data[0].shape
+        if patch_size >= min(waterfall_shape):
+            print(f"  [2/3] Using full waterfalls (patch_size >= image size)...")
+            self.raw_patches = flattened_data
+            self.raw_masks = flattened_flags
+            print(f"    Using {len(self.raw_patches)} full waterfalls")
+        else:
+            print(f"  [2/3] Patchifying into {patch_size}x{patch_size} patches...")
+            self.raw_patches = self._create_patches(
+                flattened_data, patch_size, num_workers=num_workers
+            )
+            self.raw_masks = self._create_patches(
+                flattened_flags, patch_size, num_workers=num_workers
+            )
+            print(f"    Created {len(self.raw_patches)} patches")
+
+        # Remove blank patches (optional)
+        if remove_blank:
+            print("  [3/3] Removing blank patches...")
+            initial_count = len(self.raw_patches)
+            has_rfi = [mask.any() for mask in self.raw_masks]
+            self.raw_patches = [p for p, keep in zip(self.raw_patches, has_rfi) if keep]
+            self.raw_masks = [m for m, keep in zip(self.raw_masks, has_rfi) if keep]
+            removed = initial_count - len(self.raw_patches)
+            print(f"    Removed {removed} blank patches, kept {len(self.raw_patches)}")
+        else:
+            print("  [3/3] Keeping all patches (blank removal disabled)")
+
+        # Limit patches if requested
+        if num_patches and num_patches < len(self.raw_patches):
+            print(f"  Limiting to {num_patches} patches...")
+            indices = np.random.choice(len(self.raw_patches), num_patches, replace=False)
+            self.raw_patches = [self.raw_patches[i] for i in indices]
+            self.raw_masks = [self.raw_masks[i] for i in indices]
+
+        # Shuffle
+        print("  Shuffling patches...")
+        indices = np.random.permutation(len(self.raw_patches))
+        self.raw_patches = [self.raw_patches[i] for i in indices]
+        self.raw_masks = [self.raw_masks[i] for i in indices]
+
+        print(f"\n[GPUPreprocessor] Done! Created {len(self.raw_patches)} raw patches")
+        print(f"  Patch dtype: {self.raw_patches[0].dtype}")
+        print(f"  Patch shape: {self.raw_patches[0].shape}")
+        print(f"  Storage: {self._estimate_storage_mb():.1f} MB (complex)")
+        print(f"  vs CPU pipeline: ~{self._estimate_storage_mb() * 4:.1f} MB (4x augmentation + RGB)")
+        print(f"  Storage savings: ~{(1 - 1/4) * 100:.0f}%")
+
+        return self.raw_patches, self.raw_masks
+
+    def _create_patches(self, waterfalls, patch_size, num_workers=4):
+        """
+        Patchify waterfalls in parallel.
+
+        Args:
+            waterfalls: List of 2D arrays
+            patch_size: Size of square patches
+            num_workers: Number of parallel workers
+
+        Returns:
+            List of patches
+        """
+        if num_workers and num_workers > 0:
+            n_workers = min(num_workers, cpu_count())
+            with Pool(n_workers) as pool:
+                patch_func = partial(_patchify_single_waterfall, patch_size=patch_size)
+                patch_lists = pool.map(patch_func, waterfalls)
+            all_patches = [p for sublist in patch_lists for p in sublist]
+        else:
+            all_patches = []
+            for waterfall in waterfalls:
+                patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+                for i in range(patches.shape[0]):
+                    for j in range(patches.shape[1]):
+                        all_patches.append(patches[i, j])
+
+        return all_patches
+
+    def _estimate_storage_mb(self):
+        """Estimate storage size in MB."""
+        if not self.raw_patches:
+            return 0
+        bytes_per_patch = self.raw_patches[0].nbytes
+        total_bytes = bytes_per_patch * len(self.raw_patches)
+        return total_bytes / (1024 * 1024)

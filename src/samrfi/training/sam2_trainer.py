@@ -59,17 +59,20 @@ class SAM2Trainer:
     Simple, clean implementation that mirrors working SAM1 code.
     """
 
-    def __init__(self, rfidataset_instance, device="cuda", dir_path=None):
+    def __init__(self, rfidataset_instance, device="cuda", dir_path=None, use_gpu_transforms=False):
         """
         Initialize SAM2 trainer
 
         Args:
             rfidataset_instance: RFIDataset instance with .dataset attribute
+                                OR GPUPreprocessor instance with .raw_patches attribute
             device: 'cuda' or 'cpu'
             dir_path: Directory to save models (default: ./samrfi_data)
+            use_gpu_transforms: Use GPU-accelerated transforms (10-100x faster) (default: False)
         """
         self.device = device
         self.RFIDataset = rfidataset_instance
+        self.use_gpu_transforms = use_gpu_transforms
 
         # Setup output directory
         if dir_path:
@@ -161,12 +164,43 @@ class SAM2Trainer:
         processor = Sam2Processor.from_pretrained(model_name)
         model = Sam2Model.from_pretrained(model_name)
 
-        # Create dataset using SAMDataset wrapper
-        train_dataset = SAMDataset(
-            dataset=self.RFIDataset.dataset,
-            processor=processor,
-            bbox_perturbation=bbox_perturbation
-        )
+        # Create dataset - GPU transforms or standard CPU pipeline
+        if self.use_gpu_transforms:
+            # GPU-accelerated transform pipeline (10-100x faster)
+            from samrfi.data import GPUTransformDataset
+
+            logger.info("  Using GPU-accelerated transform pipeline")
+
+            # Check if we have raw patches from GPUPreprocessor
+            if hasattr(self.RFIDataset, 'raw_patches') and hasattr(self.RFIDataset, 'raw_masks'):
+                logger.info(f"  Using raw patches from GPUPreprocessor")
+                logger.info(f"  Patches: {len(self.RFIDataset.raw_patches)}")
+
+                train_dataset = GPUTransformDataset(
+                    complex_patches=self.RFIDataset.raw_patches,
+                    masks=self.RFIDataset.raw_masks,
+                    device=self.device,
+                    enable_augmentation=True,
+                    stretch_type=None,  # Can be configured if needed
+                    normalize_before_stretch=False,
+                    normalize_after_stretch=False,
+                    bbox_perturbation=bbox_perturbation,
+                    pin_memory=pin_memory,
+                )
+            else:
+                raise ValueError(
+                    "use_gpu_transforms=True requires GPUPreprocessor instance "
+                    "with raw_patches and raw_masks attributes. "
+                    "Use: preprocessor = GPUPreprocessor(data, flags); "
+                    "preprocessor.create_raw_patches()"
+                )
+        else:
+            # Standard CPU pipeline (backward compatible)
+            train_dataset = SAMDataset(
+                dataset=self.RFIDataset.dataset,
+                processor=processor,
+                bbox_perturbation=bbox_perturbation
+            )
 
         # Build DataLoader config
         dataloader_kwargs = {
