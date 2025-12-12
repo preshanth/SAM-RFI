@@ -45,17 +45,43 @@ def generate_data_command(args):
 
 
 def load_dataset(path):
-    """Load dataset from either .pt (torch) or HF format"""
+    """
+    Load dataset from batched .pt directory, single .pt file, or HF format.
+
+    Supported formats:
+    - Batched directory (NEW): Contains batch_*.pt + metadata.json
+    - Single .pt file (legacy): TorchDataset saved as single file
+    - HuggingFace directory (legacy): Contains dataset_info.json
+    """
+    from samrfi.data import BatchedDataset
     path = Path(path)
 
-    if path.suffix == '.pt':
+    # Check if it's a directory with batched format
+    if path.is_dir():
+        metadata_file = path / "metadata.json"
+        if metadata_file.exists():
+            # New batched format (streaming, efficient)
+            print(f"  Loading BatchedDataset from {path}")
+            return BatchedDataset(path)
+        else:
+            # Legacy HuggingFace format (backward compatibility)
+            from datasets import load_from_disk
+            print(f"  Loading HuggingFace Dataset from {path}")
+            return load_from_disk(path)
+
+    # Single .pt file (legacy TorchDataset)
+    elif path.suffix == '.pt':
         print(f"  Loading TorchDataset from {path}")
         return TorchDataset.load_from_disk(path)
+
     else:
-        # Assume HF dataset directory (backward compatibility)
-        from datasets import load_from_disk
-        print(f"  Loading HuggingFace Dataset from {path}")
-        return load_from_disk(path)
+        raise ValueError(
+            f"Invalid dataset path: {path}\n"
+            f"Expected formats:\n"
+            f"  - Directory with batch_*.pt files (current format)\n"
+            f"  - Single .pt file (legacy)\n"
+            f"  - HuggingFace dataset directory (legacy)"
+        )
 
 
 def train_command(args):
