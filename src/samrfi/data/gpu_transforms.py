@@ -6,18 +6,27 @@ that were previously done on CPU. Delivers 10-100x speedup for data preprocessin
 
 Key Features:
 - Channel extraction from complex visibilities (100x faster than CPU)
-- On-the-fly augmentation with Kornia (eliminates 4x storage overhead)
+- Physics-preserving 4-way augmentation (IDENTICAL to CPU implementation)
 - GPU-resident normalization (essentially free)
 - Batched operations for maximum parallelism
 
+IMPORTANT: Augmentation Strategy
+The 4-way augmentation used here is IDENTICAL to the CPU implementation and was
+specifically designed to preserve the physics of radio frequency interference data:
+    1. Original (identity)
+    2. Vertical flip (frequency axis flip)
+    3. Transpose (swap time/frequency axes)
+    4. Transpose + vertical flip
+
+These are NOT arbitrary rotations or random transforms. They preserve the physical
+meaning of the time and frequency axes in radio astronomy data.
+
 Author: SAM-RFI Team
-Date: 2025-12-08
+Date: 2025-12-08 (Original), 2025-12-12 (Physics-preserving augmentation fix)
 """
 
 import torch
 import torch.nn.functional as F
-import kornia
-import kornia.augmentation as K
 from typing import Tuple, Optional
 import numpy as np
 
@@ -40,7 +49,7 @@ class GPUTransforms:
 
         Args:
             device: Device to run transforms on ('cuda', 'mps', or 'cpu')
-            enable_augmentation: Whether to apply random augmentations
+            enable_augmentation: Whether to apply physics-preserving augmentations
         """
         self.device = device
         self.enable_augmentation = enable_augmentation
@@ -49,21 +58,10 @@ class GPUTransforms:
         self.imagenet_mean = self.IMAGENET_MEAN.to(device).view(3, 1, 1)
         self.imagenet_std = self.IMAGENET_STD.to(device).view(3, 1, 1)
 
-        # Setup Kornia augmentation pipeline (on-the-fly, replaces pre-generated rotations)
-        if enable_augmentation:
-            self.augmentation = K.AugmentationSequential(
-                # Random rotation in 90-degree increments (0, 90, 180, 270)
-                # Kornia expects (min, max) range, so we use 0-360 and will get random angles
-                K.RandomRotation(degrees=360.0, p=1.0),
-                # Random horizontal flip
-                K.RandomHorizontalFlip(p=0.5),
-                # Random vertical flip
-                K.RandomVerticalFlip(p=0.5),
-                data_keys=["input", "mask"],
-                same_on_batch=False,
-            )
-        else:
-            self.augmentation = None
+        # NOTE: Augmentation is NOT done via Kornia's random transforms
+        # Instead, we use deterministic 4-way augmentation that matches CPU implementation
+        # This preserves the physics of time-frequency radio data
+        self.augmentation = None
 
     def channel_extraction_gpu(
         self,
@@ -170,43 +168,70 @@ class GPUTransforms:
     def apply_augmentation_gpu(
         self,
         images: torch.Tensor,
-        masks: torch.Tensor
+        masks: torch.Tensor,
+        augmentation_index: int = 0
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Apply random augmentation to images and masks on GPU.
+        Apply deterministic 4-way augmentation to match CPU implementation.
 
-        Uses Kornia for on-the-fly augmentation, replacing the pre-generated
-        4-way rotation augmentation. This eliminates 4x storage overhead and
-        provides different augmentations each epoch (better generalization).
+        IMPORTANT: This uses the SAME physics-preserving transforms as the CPU version.
+        The 4 transforms preserve the time-frequency structure of radio data:
+            0: Original (identity)
+            1: Vertical flip (frequency axis flip)
+            2: Transpose (swap time/frequency axes)
+            3: Transpose + vertical flip
+
+        These are NOT arbitrary rotations - they preserve the physical meaning
+        of the time and frequency axes in radio astronomy data.
 
         Args:
             images: Image tensor (B, H, W, 3) from channel_extraction_gpu
             masks: Mask tensor (B, H, W)
+            augmentation_index: Which augmentation to apply (0-3)
+                0 = Original
+                1 = Vertical flip (axis=0)
+                2 = Transpose
+                3 = Transpose + vertical flip
 
         Returns:
             Tuple of (augmented_images, augmented_masks)
-            - augmented_images: (B, H, W, 3) - same format as input
-            - augmented_masks: (B, H, W)
+            - augmented_images: (B, H, W, 3) or (B, W, H, 3) if transposed
+            - augmented_masks: (B, H, W) or (B, W, H) if transposed
         """
-        if not self.enable_augmentation or self.augmentation is None:
+        if not self.enable_augmentation:
             return images, masks
 
-        # Convert images from (B, H, W, 3) to (B, 3, H, W) for Kornia
-        images_chw = images.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
+        if augmentation_index == 0:
+            # Transform 1: Original (identity)
+            return images, masks
 
-        # Ensure masks have channel dimension
-        masks_expanded = masks.unsqueeze(1)  # (B, H, W) -> (B, 1, H, W)
+        elif augmentation_index == 1:
+            # Transform 2: Vertical flip (axis=0, frequency axis)
+            # Flip along axis 1 in (B, H, W, 3) format (axis 0 is batch)
+            aug_images = torch.flip(images, dims=[1])
+            aug_masks = torch.flip(masks, dims=[1])
+            return aug_images, aug_masks
 
-        # Apply augmentation (same transform to image and mask)
-        aug_images_chw, aug_masks_expanded = self.augmentation(images_chw, masks_expanded)
+        elif augmentation_index == 2:
+            # Transform 3: Transpose (swap H and W, i.e., time and frequency)
+            # (B, H, W, 3) -> (B, W, H, 3)
+            aug_images = images.transpose(1, 2)
+            # (B, H, W) -> (B, W, H)
+            aug_masks = masks.transpose(1, 2)
+            return aug_images, aug_masks
 
-        # Convert images back to (B, H, W, 3) format
-        aug_images = aug_images_chw.permute(0, 2, 3, 1)  # (B, 3, H, W) -> (B, H, W, 3)
+        elif augmentation_index == 3:
+            # Transform 4: Transpose + vertical flip
+            # First transpose, then flip along new axis 1
+            aug_images = images.transpose(1, 2)  # (B, H, W, 3) -> (B, W, H, 3)
+            aug_images = torch.flip(aug_images, dims=[1])  # Flip along axis 1 (new freq axis)
 
-        # Remove channel dimension from masks
-        aug_masks = aug_masks_expanded.squeeze(1)  # (B, 1, H, W) -> (B, H, W)
+            aug_masks = masks.transpose(1, 2)  # (B, H, W) -> (B, W, H)
+            aug_masks = torch.flip(aug_masks, dims=[1])
+            return aug_images, aug_masks
 
-        return aug_images, aug_masks
+        else:
+            raise ValueError(f"Invalid augmentation_index {augmentation_index}. Must be 0-3.")
 
     def normalize_by_median_gpu(self, data: torch.Tensor) -> torch.Tensor:
         """
@@ -262,7 +287,7 @@ class GPUTransforms:
         self,
         complex_patch: torch.Tensor,
         mask: torch.Tensor,
-        apply_augmentation: bool = True,
+        augmentation_index: int = 0,
         stretch_type: Optional[str] = None,
         normalize_before_stretch: bool = False,
         normalize_after_stretch: bool = False,
@@ -275,7 +300,11 @@ class GPUTransforms:
         Args:
             complex_patch: Complex visibility data (H, W) or (B, H, W)
             mask: Ground truth mask (H, W) or (B, H, W)
-            apply_augmentation: Whether to apply random augmentation
+            augmentation_index: Which augmentation to apply (0-3)
+                0 = Original
+                1 = Vertical flip
+                2 = Transpose
+                3 = Transpose + vertical flip
             stretch_type: Optional stretching ('SQRT', 'LOG10', or None)
             normalize_before_stretch: Whether to normalize before stretching
             normalize_after_stretch: Whether to normalize after stretching
@@ -313,8 +342,8 @@ class GPUTransforms:
         # Extract 3-channel RGB representation
         rgb_image = self.channel_extraction_gpu(complex_patch)
 
-        # Apply augmentation if enabled
-        if apply_augmentation and self.enable_augmentation:
+        # Apply deterministic augmentation
+        if self.enable_augmentation:
             # Add batch dimension if needed
             # rgb_image is (H, W, 3) or (B, H, W, 3)
             if rgb_image.dim() == 3:
@@ -325,10 +354,10 @@ class GPUTransforms:
             else:
                 squeeze_output = False
 
-            rgb_image, mask = self.apply_augmentation_gpu(rgb_image, mask)
+            rgb_image, mask = self.apply_augmentation_gpu(rgb_image, mask, augmentation_index)
 
             if squeeze_output:
-                # (1, H, W, 3) -> (H, W, 3)
+                # (1, H, W, 3) -> (H, W, 3) or (1, W, H, 3) -> (W, H, 3) if transposed
                 rgb_image = rgb_image.squeeze(0)
                 mask = mask.squeeze(0)
 

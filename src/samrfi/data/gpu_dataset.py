@@ -8,10 +8,20 @@ Key improvements over CPU pipeline:
 - 100x faster channel extraction (GPU vectorization)
 - 4x less storage (no pre-generated augmentations)
 - 4x less memory (transforms on-the-fly)
-- Better generalization (different augmentations each epoch)
+- Physics-preserving augmentation (IDENTICAL to CPU implementation)
+
+IMPORTANT: Augmentation Strategy
+This dataset uses the SAME 4-way deterministic augmentation as the CPU version:
+    1. Original (identity)
+    2. Vertical flip (frequency axis flip)
+    3. Transpose (swap time/frequency axes)
+    4. Transpose + vertical flip
+
+These preserve the physics of radio frequency interference data and are NOT
+arbitrary rotations or random transforms.
 
 Author: SAM-RFI Team
-Date: 2025-12-08
+Date: 2025-12-08 (Original), 2025-12-12 (Physics-preserving augmentation fix)
 """
 
 import torch
@@ -61,7 +71,7 @@ class GPUTransformDataset(TorchDataset):
             complex_patches: List of complex numpy arrays (H, W) - RAW data
             masks: List of binary mask arrays (H, W)
             device: Device for GPU transforms ('cuda', 'mps', or 'cpu')
-            enable_augmentation: Enable random augmentation (Kornia)
+            enable_augmentation: Enable 4-way deterministic augmentation
             stretch_type: Optional stretch ('SQRT', 'LOG10', or None)
             normalize_before_stretch: Normalize before stretch
             normalize_after_stretch: Normalize after stretch
@@ -73,6 +83,7 @@ class GPUTransformDataset(TorchDataset):
         self.device = device
         self.bbox_perturbation = bbox_perturbation
         self.pin_memory = pin_memory
+        self.enable_augmentation = enable_augmentation
 
         # Transform configuration
         self.stretch_type = stretch_type
@@ -108,7 +119,15 @@ class GPUTransformDataset(TorchDataset):
                 pass
 
     def __len__(self):
-        return len(self.complex_patches)
+        """
+        Return total number of samples (4x base patches if augmentation enabled).
+
+        With augmentation, each patch has 4 variations, matching CPU behavior.
+        """
+        if self.enable_augmentation:
+            return len(self.complex_patches) * 4
+        else:
+            return len(self.complex_patches)
 
     def __getitem__(self, idx: int) -> dict:
         """
@@ -117,15 +136,27 @@ class GPUTransformDataset(TorchDataset):
         This method is called by DataLoader for each sample. All transforms
         happen here on GPU, avoiding CPU bottleneck.
 
+        When augmentation is enabled, the dataset exposes 4x samples:
+        - idx % 4 determines which augmentation to apply (0-3)
+        - idx // 4 determines which base patch to use
+
         Returns:
             dict with:
-                - pixel_values: Transformed image (3, H, W) on GPU
-                - ground_truth_mask: Mask (H, W) on GPU
+                - pixel_values: Transformed image (3, H, W) or (3, W, H) on GPU
+                - ground_truth_mask: Mask (H, W) or (W, H) on GPU
                 - input_boxes: Bounding box (1, 4) on GPU
         """
+        # Determine base patch index and augmentation index
+        if self.enable_augmentation:
+            base_idx = idx // 4  # Which raw patch
+            aug_idx = idx % 4    # Which augmentation (0-3)
+        else:
+            base_idx = idx
+            aug_idx = 0  # No augmentation
+
         # Get raw complex patch and mask
-        complex_patch = self.complex_patches[idx]
-        mask = self.masks[idx]
+        complex_patch = self.complex_patches[base_idx]
+        mask = self.masks[base_idx]
 
         # Convert to tensors if needed (view, no copy)
         if isinstance(complex_patch, np.ndarray):
@@ -137,11 +168,11 @@ class GPUTransformDataset(TorchDataset):
         complex_patch = complex_patch.to(self.device, non_blocking=True)
         mask = mask.to(self.device, non_blocking=True)
 
-        # Apply full GPU transform pipeline
+        # Apply full GPU transform pipeline with deterministic augmentation
         pixel_values, transformed_mask = self.gpu_transforms.full_transform_pipeline(
             complex_patch=complex_patch,
             mask=mask,
-            apply_augmentation=True,
+            augmentation_index=aug_idx,  # Apply specific augmentation (0-3)
             stretch_type=self.stretch_type,
             normalize_before_stretch=self.normalize_before_stretch,
             normalize_after_stretch=self.normalize_after_stretch,
@@ -151,9 +182,9 @@ class GPUTransformDataset(TorchDataset):
         input_boxes = self._get_bounding_box_gpu(transformed_mask)
 
         return {
-            "pixel_values": pixel_values,          # (3, H, W) on GPU
+            "pixel_values": pixel_values,          # (3, H, W) or (3, W, H) on GPU
             "input_boxes": input_boxes,            # (1, 4) on GPU
-            "ground_truth_mask": transformed_mask  # (H, W) on GPU
+            "ground_truth_mask": transformed_mask  # (H, W) or (W, H) on GPU
         }
 
     def _get_bounding_box_gpu(self, mask: torch.Tensor) -> torch.Tensor:
@@ -242,6 +273,7 @@ class GPUBatchTransformDataset(TorchDataset):
         self.masks = masks
         self.device = device
         self.bbox_perturbation = bbox_perturbation
+        self.enable_augmentation = enable_augmentation
 
         # Transform configuration
         self.stretch_type = stretch_type
@@ -255,60 +287,92 @@ class GPUBatchTransformDataset(TorchDataset):
         )
 
     def __len__(self):
-        return len(self.complex_patches)
+        """Return total number of samples (4x base patches if augmentation enabled)."""
+        if self.enable_augmentation:
+            return len(self.complex_patches) * 4
+        else:
+            return len(self.complex_patches)
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, int]:
         """
-        Return RAW data (no transforms yet).
+        Return RAW data with augmentation index.
 
         Transforms are applied in collate_fn for entire batch at once.
-        """
-        return self.complex_patches[idx], self.masks[idx]
 
-    def collate_fn(self, batch: List[Tuple[np.ndarray, np.ndarray]]) -> dict:
+        Returns:
+            Tuple of (complex_patch, mask, augmentation_index)
+        """
+        # Determine base patch index and augmentation index
+        if self.enable_augmentation:
+            base_idx = idx // 4  # Which raw patch
+            aug_idx = idx % 4    # Which augmentation (0-3)
+        else:
+            base_idx = idx
+            aug_idx = 0  # No augmentation
+
+        return self.complex_patches[base_idx], self.masks[base_idx], aug_idx
+
+    def collate_fn(self, batch: List[Tuple[np.ndarray, np.ndarray, int]]) -> dict:
         """
         Custom collate function that transforms entire batch on GPU.
 
-        This is the KEY to maximum performance - all patches processed
-        together using GPU vectorization.
+        This processes all patches in a batch together. Since different samples
+        may have different augmentations, we process them individually (still on GPU).
 
         Args:
-            batch: List of (complex_patch, mask) tuples
+            batch: List of (complex_patch, mask, augmentation_index) tuples
 
         Returns:
             Batch dict ready for training
         """
-        # Separate patches and masks
-        complex_patches, masks = zip(*batch)
+        # Separate patches, masks, and augmentation indices
+        complex_patches, masks, aug_indices = zip(*batch)
 
-        # Stack into batches (CPU -> GPU transfer)
-        complex_batch = torch.stack([
-            torch.from_numpy(p) if isinstance(p, np.ndarray) else p
-            for p in complex_patches
-        ]).to(self.device)
+        # Process each sample with its specific augmentation
+        pixel_values_list = []
+        transformed_masks_list = []
 
-        mask_batch = torch.stack([
-            torch.from_numpy(m) if isinstance(m, np.ndarray) else m
-            for m in masks
-        ]).float().to(self.device)
+        for i in range(len(batch)):
+            # Convert to tensor
+            complex_patch = torch.from_numpy(complex_patches[i]).to(self.device)
+            mask = torch.from_numpy(masks[i]).float().to(self.device)
 
-        # Apply transforms to ENTIRE batch at once (GPU vectorized!)
-        pixel_values, transformed_masks = self.gpu_transforms.full_transform_pipeline(
-            complex_patch=complex_batch,  # (B, H, W)
-            mask=mask_batch,              # (B, H, W)
-            apply_augmentation=True,
-            stretch_type=self.stretch_type,
-            normalize_before_stretch=self.normalize_before_stretch,
-            normalize_after_stretch=self.normalize_after_stretch,
-        )
+            # Apply transforms with specific augmentation
+            pixel_vals, trans_mask = self.gpu_transforms.full_transform_pipeline(
+                complex_patch=complex_patch,  # (H, W)
+                mask=mask,                    # (H, W)
+                augmentation_index=aug_indices[i],  # Apply specific augmentation
+                stretch_type=self.stretch_type,
+                normalize_before_stretch=self.normalize_before_stretch,
+                normalize_after_stretch=self.normalize_after_stretch,
+            )
+
+            pixel_values_list.append(pixel_vals)
+            transformed_masks_list.append(trans_mask)
+
+        # Stack into batches
+        # Note: Shapes may differ if some samples are transposed!
+        # For simplicity, we assume all samples in a batch have same augmentation
+        # Or we pad/handle different shapes appropriately
+        try:
+            pixel_values = torch.stack(pixel_values_list)  # (B, 3, H, W) or (B, 3, W, H)
+            transformed_masks = torch.stack(transformed_masks_list)  # (B, H, W) or (B, W, H)
+        except RuntimeError:
+            # Handle case where shapes don't match (transpose augmentation mixed)
+            # This shouldn't happen if batch sampler groups same augmentation together
+            raise RuntimeError(
+                "Cannot batch samples with different shapes. "
+                "Ensure batch sampler groups same augmentation indices together, "
+                "or use enable_augmentation=False."
+            )
 
         # Compute bounding boxes for batch (vectorized on GPU)
         input_boxes = self._get_bounding_boxes_batch_gpu(transformed_masks)
 
         return {
-            "pixel_values": pixel_values,      # (B, 3, H, W)
+            "pixel_values": pixel_values,      # (B, 3, H, W) or (B, 3, W, H)
             "input_boxes": input_boxes,        # (B, 1, 4)
-            "ground_truth_mask": transformed_masks  # (B, H, W)
+            "ground_truth_mask": transformed_masks  # (B, H, W) or (B, W, H)
         }
 
     def _get_bounding_boxes_batch_gpu(self, masks: torch.Tensor) -> torch.Tensor:
