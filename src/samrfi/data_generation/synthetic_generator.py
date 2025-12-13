@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
+import torch
 
 from samrfi.data import Preprocessor
 
@@ -14,6 +15,26 @@ from samrfi.data import Preprocessor
 # Global generator instance for multiprocessing workers
 _global_generator = None
 _global_proc_config = None
+
+
+class RawPatchDataset:
+    """
+    Simple container for raw complex patches (no preprocessing).
+
+    Compatible with BatchWriter interface (uses .images and .labels attributes).
+    """
+    def __init__(self, complex_patches, masks):
+        """
+        Args:
+            complex_patches: torch.Tensor of complex patches (N, H, W) - complex64
+            masks: torch.Tensor of binary masks (N, H, W) - uint8
+        """
+        # Use .images and .labels for BatchWriter compatibility
+        self.images = complex_patches  # Raw complex data (not RGB images)
+        self.labels = masks
+
+    def __len__(self):
+        return len(self.images)
 
 
 def _init_worker(config_dict):
@@ -35,7 +56,7 @@ def _init_worker(config_dict):
 
 def _worker_generate_and_preprocess(**gen_kwargs):
     """
-    Worker function: Generate and preprocess one sample.
+    Worker function: Generate and optionally preprocess one sample.
 
     Uses global generator instance initialized by _init_worker.
     """
@@ -44,20 +65,39 @@ def _worker_generate_and_preprocess(**gen_kwargs):
     # Generate one sample
     waterfall, exact_mask, rfi_params = _global_generator._generate_single_sample(**gen_kwargs)
 
-    # Preprocess with augmentation (no nested parallelism)
-    preprocessor = Preprocessor(waterfall, flags=exact_mask)
-    dataset = preprocessor.create_dataset(
-        patch_size=_global_proc_config.get("patch_size", 128),
-        stretch=_global_proc_config.get("stretch", None),
-        flag_sigma=_global_proc_config.get("flag_sigma", 5),
-        use_custom_flags=True,
-        num_patches=_global_proc_config.get("num_patches", None),
-        normalize_before_stretch=_global_proc_config.get("normalize_before_stretch", True),
-        normalize_after_stretch=_global_proc_config.get("normalize_after_stretch", False),
-        num_workers=0,  # No nested parallelism
-        enable_augmentation=_global_proc_config.get("enable_augmentation", True),
-        augmentation_rotations=_global_proc_config.get("augmentation_rotations", 4),
-    )
+    # Check if we should save raw or preprocessed
+    save_raw = _global_proc_config.get("save_raw", False)
+
+    if save_raw:
+        # Save raw complex patches (no preprocessing, no augmentation)
+        # Waterfall shape: (1, num_pols, channels, times)
+        # For patch_size = full size, just squeeze and convert to tensor
+
+        # Average polarizations (simple approach for now)
+        # Shape: (channels, times)
+        averaged = waterfall.squeeze(0).mean(axis=0)  # Average across polarizations
+        mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)  # Union of polarizations
+
+        # Convert to tensors (add batch dim)
+        complex_patches = torch.from_numpy(averaged).unsqueeze(0)  # (1, H, W)
+        masks = torch.from_numpy(mask_averaged).unsqueeze(0)  # (1, H, W)
+
+        dataset = RawPatchDataset(complex_patches, masks)
+    else:
+        # Preprocess with augmentation (original behavior)
+        preprocessor = Preprocessor(waterfall, flags=exact_mask)
+        dataset = preprocessor.create_dataset(
+            patch_size=_global_proc_config.get("patch_size", 128),
+            stretch=_global_proc_config.get("stretch", None),
+            flag_sigma=_global_proc_config.get("flag_sigma", 5),
+            use_custom_flags=True,
+            num_patches=_global_proc_config.get("num_patches", None),
+            normalize_before_stretch=_global_proc_config.get("normalize_before_stretch", True),
+            normalize_after_stretch=_global_proc_config.get("normalize_after_stretch", False),
+            num_workers=0,  # No nested parallelism
+            enable_augmentation=_global_proc_config.get("enable_augmentation", True),
+            augmentation_rotations=_global_proc_config.get("augmentation_rotations", 4),
+        )
 
     return dataset, rfi_params
 
@@ -251,22 +291,35 @@ class SyntheticDataGenerator:
 
                 else:
                     # Sequential: generate + preprocess one at a time
+                    save_raw = proc_config.get("save_raw", False)
+
                     for i in tqdm(range(batch_samples), desc=f"    Generating"):
                         waterfall, exact_mask, rfi_params = self._generate_single_sample(**gen_kwargs)
 
-                        preprocessor = Preprocessor(waterfall, flags=exact_mask)
-                        dataset = preprocessor.create_dataset(
-                            patch_size=proc_config.get("patch_size", 128),
-                            stretch=proc_config.get("stretch", None),
-                            flag_sigma=proc_config.get("flag_sigma", 5),
-                            use_custom_flags=True,
-                            num_patches=proc_config.get("num_patches", None),
-                            normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                            normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
-                            num_workers=0,
-                            enable_augmentation=proc_config.get("enable_augmentation", True),
-                            augmentation_rotations=proc_config.get("augmentation_rotations", 4),
-                        )
+                        if save_raw:
+                            # Save raw complex patches
+                            averaged = waterfall.squeeze(0).mean(axis=0)
+                            mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)
+
+                            complex_patches = torch.from_numpy(averaged).unsqueeze(0)
+                            masks = torch.from_numpy(mask_averaged).unsqueeze(0)
+
+                            dataset = RawPatchDataset(complex_patches, masks)
+                        else:
+                            # Preprocess (original behavior)
+                            preprocessor = Preprocessor(waterfall, flags=exact_mask)
+                            dataset = preprocessor.create_dataset(
+                                patch_size=proc_config.get("patch_size", 128),
+                                stretch=proc_config.get("stretch", None),
+                                flag_sigma=proc_config.get("flag_sigma", 5),
+                                use_custom_flags=True,
+                                num_patches=proc_config.get("num_patches", None),
+                                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
+                                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                                num_workers=0,
+                                enable_augmentation=proc_config.get("enable_augmentation", True),
+                                augmentation_rotations=proc_config.get("augmentation_rotations", 4),
+                            )
 
                         exact_writer.add_batch(dataset)
                         all_rfi_parameters.append(rfi_params)
@@ -288,6 +341,16 @@ class SyntheticDataGenerator:
         exact_writer.finalize()
         if generate_mad:
             mad_writer.finalize()
+
+        # Update metadata to indicate format (raw vs preprocessed)
+        save_raw = proc_config.get("save_raw", False)
+        metadata_path = output_dir / "exact_masks" / "metadata.json"
+        if metadata_path.exists():
+            with open(metadata_path, 'r') as f:
+                batch_metadata = json.load(f)
+            batch_metadata['format'] = 'raw' if save_raw else 'preprocessed'
+            with open(metadata_path, 'w') as f:
+                json.dump(batch_metadata, f, indent=2)
 
         # Summary
         print(f"\n[3/5] Generation summary:")

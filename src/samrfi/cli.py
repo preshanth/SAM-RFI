@@ -60,9 +60,22 @@ def load_dataset(path):
     if path.is_dir():
         metadata_file = path / "metadata.json"
         if metadata_file.exists():
-            # New batched format (streaming, efficient)
-            print(f"  Loading BatchedDataset from {path}")
-            return BatchedDataset(path)
+            # Check format in metadata
+            import json
+            with open(metadata_file) as f:
+                metadata = json.load(f)
+
+            data_format = metadata.get('format', 'preprocessed')
+
+            if data_format == 'raw':
+                # Raw batches: load into RAM + GPU transforms on-the-fly
+                from samrfi.data import RAMCachedDataset
+                print(f"  Loading RAMCachedDataset (raw format) from {path}")
+                return RAMCachedDataset(path, device='cuda')
+            else:
+                # Preprocessed batches: streaming from disk (old behavior)
+                print(f"  Loading BatchedDataset (preprocessed format) from {path}")
+                return BatchedDataset(path)
         else:
             # Legacy HuggingFace format (backward compatibility)
             from datasets import load_from_disk

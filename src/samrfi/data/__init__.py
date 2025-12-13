@@ -10,6 +10,7 @@ from .hf_dataset_wrapper import HFDatasetWrapper
 from .adaptive_patcher import AdaptivePatcher, check_ms_compatibility
 from .gpu_transforms import GPUTransforms, create_gpu_transforms
 from .gpu_dataset import GPUTransformDataset, GPUBatchTransformDataset
+from .ram_dataset import RAMCachedDataset
 
 __all__ = [
     "MSLoader",
@@ -26,4 +27,5 @@ __all__ = [
     "create_gpu_transforms",
     "GPUTransformDataset",
     "GPUBatchTransformDataset",
+    "RAMCachedDataset",
 ]
