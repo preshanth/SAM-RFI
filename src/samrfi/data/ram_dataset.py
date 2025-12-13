@@ -130,13 +130,12 @@ class RAMCachedDataset(TorchDataset):
         2. Determine augmentation index (0-3)
         3. Transfer complex patch to GPU
         4. Apply GPU transforms (complex→RGB + augmentation)
-        5. Return SAM2-format dict
+        5. Return format compatible with SAMDataset
 
         Returns:
             dict with:
-                - pixel_values: Transformed image (3, H, W) on GPU
-                - ground_truth_mask: Mask (H, W) on GPU
-                - input_boxes: Bounding box (1, 4) on GPU
+                - image: Transformed image (H, W, 3) - SAMDataset expects this format
+                - label: Mask (H, W)
         """
         # Determine base patch index and augmentation index
         if self.enable_augmentation:
@@ -164,13 +163,13 @@ class RAMCachedDataset(TorchDataset):
             normalize_after_stretch=False,
         )
 
-        # Compute bounding box from transformed mask (on GPU)
-        input_boxes = self._get_bounding_box_gpu(transformed_mask)
+        # Convert to format expected by SAMDataset
+        # pixel_values is (3, H, W), need (H, W, 3)
+        image = pixel_values.permute(1, 2, 0)  # (3, H, W) -> (H, W, 3)
 
         return {
-            "pixel_values": pixel_values,          # (3, H, W) on GPU
-            "input_boxes": input_boxes,            # (1, 4) on GPU
-            "ground_truth_mask": transformed_mask  # (H, W) on GPU
+            "image": image,              # (H, W, 3) on GPU
+            "label": transformed_mask    # (H, W) on GPU
         }
 
     def _get_bounding_box_gpu(self, mask):
