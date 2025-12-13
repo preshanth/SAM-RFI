@@ -22,7 +22,7 @@ from transformers import Sam2Processor, Sam2Model
 import numpy as np
 import matplotlib.pyplot as plt
 
-from samrfi.data import SAMDataset
+from samrfi.data import SAMDataset, RAMCachedDataset
 
 # Get logger (configured by parent script or defaults to console if standalone)
 logger = logging.getLogger(__name__)
@@ -203,12 +203,13 @@ class SAM2Trainer:
             )
 
         # Build DataLoader config
+        use_pin_memory = pin_memory and not isinstance(self.RFIDataset.dataset, RAMCachedDataset)
         dataloader_kwargs = {
             'batch_size': batch_size,
             'shuffle': True,
             'num_workers': num_workers,
-            'pin_memory': pin_memory,
-        }
+            'pin_memory': use_pin_memory,
+
         # Only add worker-specific settings if using workers
         if num_workers > 0:
             dataloader_kwargs['prefetch_factor'] = prefetch_factor
