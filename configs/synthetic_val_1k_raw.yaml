@@ -23,7 +23,10 @@ synthetic:
   # Bandpass effects
   enable_bandpass_rolloff: true
   bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
-  polarization_correlation: 0.8  # Correlated RFI in XX/YY
+
+  # Polarization settings
+  num_polarizations: 1           # Single polarization - prevents shape memorization
+  polarization_correlation: 0.0  # Not used with 1 polarization, but set to 0 for clarity
 
   # Parallel generation
   generation_workers: 16  # Number of parallel workers (use 16 of 20 cores, leave 4 for system)
