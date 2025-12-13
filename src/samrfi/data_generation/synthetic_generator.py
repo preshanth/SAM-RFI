@@ -179,8 +179,13 @@ class SyntheticDataGenerator:
 
         print(f"\nRFI Types Enabled:")
         for rfi_type, params in rfi_config.items():
-            if params["count"] > 0:
-                print(f"  {rfi_type}: {params['count']} per sample")
+            count = params["count"]
+            # Handle both int and [min, max] list counts
+            if isinstance(count, (list, tuple)):
+                if count[1] > 0:  # Check max value
+                    print(f"  {rfi_type}: {count[0]}-{count[1]} per sample (randomized)")
+            elif count > 0:
+                print(f"  {rfi_type}: {count} per sample")
 
         # Bandpass options
         enable_bandpass = synth_config.get("enable_bandpass_rolloff", False)
@@ -372,7 +377,10 @@ class SyntheticDataGenerator:
             "num_raw_samples": total_raw_samples,
             "num_channels": num_channels,
             "num_times": num_times,
-            "rfi_config": {k: v for k, v in rfi_config.items() if v["count"] > 0},
+            "rfi_config": {
+                k: v for k, v in rfi_config.items()
+                if (v["count"][1] if isinstance(v["count"], (list, tuple)) else v["count"]) > 0
+            },
             "bandpass": {
                 "enabled": enable_bandpass,
                 "polynomial_order": (
