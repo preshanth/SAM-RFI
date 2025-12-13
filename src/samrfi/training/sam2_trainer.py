@@ -424,7 +424,7 @@ class SAM2Trainer:
 
                 if epoch_val_loss < self.best_val_loss:
                     self.best_val_loss = epoch_val_loss
-                    best_model_path = self.dir_path / "sam2_rfi_best.pth"
+                    best_model_path = os.path.join(self.directory, "sam2_rfi_best.pth")
                     torch.save(model.state_dict(), best_model_path)
                     logger.info(f"  💾 New best model saved (val_loss: {epoch_val_loss:.6f}) -> {best_model_path}")
 
