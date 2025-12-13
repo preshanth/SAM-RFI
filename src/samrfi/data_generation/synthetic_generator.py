@@ -297,7 +297,7 @@ class SyntheticDataGenerator:
 
                         if save_raw:
                             # Save raw complex patches
-                            averaged = waterfall.squeeze(0).mean(axis=0)
+                            averaged = waterfall.squeeze(0).mean(axis=0).astype(np.float32)  # Force float32
                             mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)
 
                             complex_patches = torch.from_numpy(averaged).unsqueeze(0)
@@ -487,6 +487,11 @@ class SyntheticDataGenerator:
         # Add each RFI type
         for rfi_type, params in rfi_config.items():
             count = params["count"]
+
+            # Support random counts: if count is [min, max], sample randomly
+            if isinstance(count, (list, tuple)) and len(count) == 2:
+                count = np.random.randint(count[0], count[1] + 1)
+
             if count == 0:
                 continue
 

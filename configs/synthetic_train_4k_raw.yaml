@@ -11,13 +11,14 @@ synthetic:
   rfi_power_min: 1000.0          # 1000 Jy RFI min
   rfi_power_max: 10000.0         # 10000 Jy RFI max
 
-  # RFI types per sample (total ~46 RFI events per waterfall, targeting ~20% pixel coverage)
+  # RFI types per sample (randomized counts, targeting ~50% pixel coverage)
+  # Format: [min, max] for random sampling per sample
   rfi_type_counts:
-    narrowband_persistent: 20    # GPS, satellites (persistent lines)
-    broadband_persistent: 5      # Power lines (persistent broadband)
-    frequency_sweep: 1           # Radar (linear/quadratic chirp sweep)
-    narrowband_bursty: 20        # Random pulsed transmitters (intermittent)
-    broadband_bursty: 5          # Lightning, transients (short broadband bursts)
+    narrowband_persistent: [30, 60]    # GPS, satellites (persistent lines)
+    broadband_persistent: [5, 20]      # Power lines (persistent broadband)
+    frequency_sweep: [0, 5]            # Radar (linear/quadratic chirp sweep)
+    narrowband_bursty: [30, 60]        # Random pulsed transmitters (intermittent)
+    broadband_bursty: [5, 20]          # Lightning, transients (short broadband bursts)
 
   # Bandpass effects
   enable_bandpass_rolloff: true

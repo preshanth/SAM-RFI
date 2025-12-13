@@ -417,6 +417,17 @@ class SAM2Trainer:
                 log_msg += f" | Val loss: {epoch_val_loss:.6f}"
             logger.info(log_msg)
 
+            # Save best model based on validation loss
+            if epoch_val_loss is not None:
+                if not hasattr(self, 'best_val_loss'):
+                    self.best_val_loss = float('inf')
+
+                if epoch_val_loss < self.best_val_loss:
+                    self.best_val_loss = epoch_val_loss
+                    best_model_path = self.dir_path / "sam2_rfi_best.pth"
+                    torch.save(model.state_dict(), best_model_path)
+                    logger.info(f"  💾 New best model saved (val_loss: {epoch_val_loss:.6f}) -> {best_model_path}")
+
             # Force garbage collection at end of epoch
             gc.collect()
             torch.cuda.empty_cache()
