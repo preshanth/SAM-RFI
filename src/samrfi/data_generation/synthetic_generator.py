@@ -73,10 +73,17 @@ def _worker_generate_and_preprocess(**gen_kwargs):
         # Waterfall shape: (1, num_pols, channels, times)
         # For patch_size = full size, just squeeze and convert to tensor
 
-        # Average polarizations (simple approach for now)
-        # Shape: (channels, times)
-        averaged = waterfall.squeeze(0).mean(axis=0).astype(np.float32)  # Force float32
-        complex_patches = torch.from_numpy(averaged).unsqueeze(0)  # Now float32
+        # Average polarizations (taking magnitude for complex data)
+        # Shape: (num_pols, channels, times) -> (channels, times)
+        waterfall_squeezed = waterfall.squeeze(0)  # Remove baseline dimension
+
+        # Take magnitude of complex values, then average across polarizations
+        magnitude = np.abs(waterfall_squeezed)  # (num_pols, channels, times)
+        averaged = magnitude.mean(axis=0).astype(np.float32)  # (channels, times)
+
+        # Average masks across polarizations (use max to preserve RFI flags)
+        mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)  # (channels, times)
+
         # Convert to tensors (add batch dim)
         complex_patches = torch.from_numpy(averaged).unsqueeze(0)  # (1, H, W)
         masks = torch.from_numpy(mask_averaged).unsqueeze(0)  # (1, H, W)
@@ -302,7 +309,10 @@ class SyntheticDataGenerator:
 
                         if save_raw:
                             # Save raw complex patches
-                            averaged = waterfall.squeeze(0).mean(axis=0).astype(np.float32)  # Force float32
+                            # Take magnitude of complex values, then average across polarizations
+                            waterfall_squeezed = waterfall.squeeze(0)  # Remove baseline dimension
+                            magnitude = np.abs(waterfall_squeezed)  # (num_pols, channels, times)
+                            averaged = magnitude.mean(axis=0).astype(np.float32)  # (channels, times)
                             mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)
 
                             complex_patches = torch.from_numpy(averaged).unsqueeze(0)
