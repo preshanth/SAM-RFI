@@ -209,7 +209,7 @@ class SAM2Trainer:
             'shuffle': True,
             'num_workers': num_workers,
             'pin_memory': use_pin_memory,
-
+        }
         # Only add worker-specific settings if using workers
         if num_workers > 0:
             dataloader_kwargs['prefetch_factor'] = prefetch_factor
