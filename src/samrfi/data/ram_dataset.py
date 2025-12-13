@@ -165,11 +165,11 @@ class RAMCachedDataset(TorchDataset):
 
         # Convert to format expected by SAMDataset
         # pixel_values is (3, H, W), need (H, W, 3)
-        image = pixel_values.permute(1, 2, 0)  # (3, H, W) -> (H, W, 3)
+        image = pixel_values.permute(1, 2, 0).float()  # (3, H, W) -> (H, W, 3)
 
         return {
             "image": image,              # (H, W, 3) on GPU
-            "label": transformed_mask    # (H, W) on GPU
+            "label": transformed_mask.float()    # (H, W) on GPU
         }
 
     def _get_bounding_box_gpu(self, mask):

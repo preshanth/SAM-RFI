@@ -75,9 +75,8 @@ def _worker_generate_and_preprocess(**gen_kwargs):
 
         # Average polarizations (simple approach for now)
         # Shape: (channels, times)
-        averaged = waterfall.squeeze(0).mean(axis=0)  # Average across polarizations
-        mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)  # Union of polarizations
-
+        averaged = waterfall.squeeze(0).mean(axis=0).astype(np.float32)  # Force float32
+        complex_patches = torch.from_numpy(averaged).unsqueeze(0)  # Now float32
         # Convert to tensors (add batch dim)
         complex_patches = torch.from_numpy(averaged).unsqueeze(0)  # (1, H, W)
         masks = torch.from_numpy(mask_averaged).unsqueeze(0)  # (1, H, W)
