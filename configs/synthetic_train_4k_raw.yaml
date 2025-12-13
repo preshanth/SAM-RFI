@@ -1,0 +1,51 @@
+# Synthetic training data generation - 4000 samples (RAW format)
+# Raw complex patches + GPU transforms on-the-fly
+
+synthetic:
+  num_samples: 4000
+  num_channels: 1024  # Square shape for SAM2 native resolution
+  num_times: 1024     # Square shape for SAM2 native resolution
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0                 # 1 mJy noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI min
+  rfi_power_max: 10000.0         # 10000 Jy RFI max
+
+  # RFI types per sample (total ~46 RFI events per waterfall, targeting ~20% pixel coverage)
+  rfi_type_counts:
+    narrowband_persistent: 20    # GPS, satellites (persistent lines)
+    broadband_persistent: 5      # Power lines (persistent broadband)
+    frequency_sweep: 1           # Radar (linear/quadratic chirp sweep)
+    narrowband_bursty: 20        # Random pulsed transmitters (intermittent)
+    broadband_bursty: 5          # Lightning, transients (short broadband bursts)
+
+  # Bandpass effects
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
+  polarization_correlation: 0.8  # Correlated RFI in XX/YY
+
+  # Parallel generation
+  generation_workers: 16  # Number of parallel workers
+  generation_batch_size: 100  # Raw samples per batch
+
+processing:
+  # CRITICAL: save_raw = true → no preprocessing, no augmentation
+  # Data saved as raw complex patches, transforms done on GPU during training
+  save_raw: true
+
+  # These settings are ignored when save_raw=true (kept for reference)
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  patch_size: 1024  # Full waterfall size (no patching)
+
+  # Note: augmentation is disabled during generation when save_raw=true
+  # Instead, augmentation happens on GPU during training (RAMCachedDataset)
+  enable_augmentation: false  # Must be false for raw mode
+  augmentation_rotations: 1   # Must be 1 for raw mode
+
+  # MAD flagging not used (we have exact ground truth)
+  flag_sigma: 5
+
+  # Parallelization (not used in raw mode)
+  num_workers: 0
