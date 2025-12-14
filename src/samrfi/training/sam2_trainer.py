@@ -234,10 +234,37 @@ class SAM2Trainer:
             if freeze_prompt_encoder and name.startswith("prompt_encoder"):
                 param.requires_grad_(False)
 
-        # Load pretrained weights if provided
+        # Load pretrained weights or resume from checkpoint
+        start_epoch = 0
+        resume_train_losses = []
+        resume_val_losses = []
+        checkpoint_data = None
+
         if model_path:
-            logger.info(f"Loading pretrained weights from: {model_path}")
-            model.load_state_dict(torch.load(model_path))
+            logger.info(f"Loading from: {model_path}")
+            checkpoint_data = torch.load(model_path)
+
+            # Check if full checkpoint or just state_dict
+            if isinstance(checkpoint_data, dict) and "model_state_dict" in checkpoint_data:
+                # Full checkpoint format
+                model.load_state_dict(checkpoint_data["model_state_dict"])
+                start_epoch = checkpoint_data.get("epoch", -1) + 1
+                resume_train_losses = checkpoint_data.get("training_losses", [])
+                resume_val_losses = checkpoint_data.get("validation_losses", [])
+
+                if start_epoch > 0 and start_epoch < num_epochs:
+                    logger.info(f"  Resuming from epoch {start_epoch} (continuing to {num_epochs})")
+                    logger.info(f"  Previous train loss: {resume_train_losses[-1]:.6f}")
+                    if resume_val_losses:
+                        logger.info(f"  Previous val loss: {resume_val_losses[-1]:.6f}")
+                else:
+                    logger.info("  Loading pretrained weights (starting from epoch 0)")
+                    start_epoch = 0
+            else:
+                # Old format - just state_dict
+                model.load_state_dict(checkpoint_data)
+                logger.info("  Loaded model weights (old format)")
+                start_epoch = 0
 
         # Setup optimizer
         trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -269,6 +296,11 @@ class SAM2Trainer:
         else:
             raise ValueError(f"Unknown optimizer: {optimizer}. Use 'adam', 'adamw', or 'sgd'")
 
+        # Restore optimizer state if resuming
+        if checkpoint_data and "optimizer_state_dict" in checkpoint_data and start_epoch > 0:
+            opt.load_state_dict(checkpoint_data["optimizer_state_dict"])
+            logger.info("  Restored optimizer state")
+
         # Setup loss function
         if loss_function.lower() == "dicece":
             seg_loss = monai.losses.DiceCELoss(
@@ -293,17 +325,27 @@ class SAM2Trainer:
         model.to(self.device)
         model.train()
 
+        # Extract patch_size for checkpoint saving
+        params = getattr(self.RFIDataset, "dataset_params", None)
+        if params:
+            patch_size = params.get("patch_size", "unknown")
+        else:
+            dataset = self.RFIDataset.dataset
+            metadata = getattr(dataset, "metadata", {})
+            patch_size = metadata.get("patch_size", "unknown")
+
         logger.info("\nTraining SAM2 model...")
-        logger.info(f"  Epochs: {num_epochs}")
+        logger.info(f"  Epochs: {num_epochs} (starting from {start_epoch})")
         logger.info(f"  Batch size: {batch_size}")
         logger.info(f"  Learning rate: {learning_rate}")
         logger.info(f"  Device: {self.device}")
+        logger.info(f"  Patch size: {patch_size}")
 
-        # Training loop
-        train_losses = []
-        val_losses = []
+        # Training loop - start from resume epoch if continuing
+        train_losses = resume_train_losses.copy()
+        val_losses = resume_val_losses.copy()
 
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             # Training phase
             model.train()
             epoch_train_losses = []
@@ -460,7 +502,21 @@ class SAM2Trainer:
                 if epoch_val_loss < self.best_val_loss:
                     self.best_val_loss = epoch_val_loss
                     best_model_path = os.path.join(self.directory, "sam2_rfi_best.pth")
-                    torch.save(model.state_dict(), best_model_path)
+                    best_checkpoint = {
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": opt.state_dict(),
+                        "epoch": epoch,
+                        "training_losses": train_losses[: epoch + 1 - start_epoch],
+                        "validation_losses": val_losses[: epoch + 1 - start_epoch],
+                        "patch_size": patch_size,
+                        "config": {
+                            "sam_checkpoint": sam_checkpoint,
+                            "learning_rate": learning_rate,
+                            "batch_size": batch_size,
+                            "loss_function": loss_function,
+                        },
+                    }
+                    torch.save(best_checkpoint, best_model_path)
                     logger.info(
                         f"  💾 New best model saved (val_loss: {epoch_val_loss:.6f}) -> {best_model_path}"
                     )
@@ -474,7 +530,18 @@ class SAM2Trainer:
 
         # Save model (skip during validation to save memory)
         if save_model:
-            self._save_model(model, sam_checkpoint, num_epochs, trained_model_path)
+            self._save_model(
+                model,
+                opt,
+                num_epochs - 1,
+                sam_checkpoint,
+                learning_rate,
+                batch_size,
+                loss_function,
+                patch_size,
+                num_epochs,
+                trained_model_path,
+            )
 
         # Plot loss curve
         if plot:
@@ -488,9 +555,21 @@ class SAM2Trainer:
         else:
             return train_losses
 
-    def _save_model(self, model, sam_checkpoint, num_epochs, trained_model_path=None):
-        """Save trained model with descriptive filename"""
-        # Extract params from dataset if available (for backward compatibility)
+    def _save_model(
+        self,
+        model,
+        optimizer,
+        epoch,
+        sam_checkpoint,
+        learning_rate,
+        batch_size,
+        loss_function,
+        patch_size,
+        num_epochs,
+        trained_model_path=None,
+    ):
+        """Save trained model checkpoint with full training state"""
+        # Extract params from dataset if available (for backward compatibility in filename)
         params = getattr(self.RFIDataset, "dataset_params", None)
 
         if params:
@@ -498,7 +577,6 @@ class SAM2Trainer:
             stretch = params.get("stretch", "unknown")
             flag_sigma = params.get("flag_sigma", "unknown")
             patch_method = params.get("patch_method", "unknown")
-            patch_size = params.get("patch_size", "unknown")
         else:
             # New format (TorchDataset) - extract from metadata if available
             dataset = self.RFIDataset.dataset
@@ -506,7 +584,6 @@ class SAM2Trainer:
             stretch = metadata.get("stretch", "unknown")
             flag_sigma = metadata.get("flag_sigma", "unknown")
             patch_method = "torch"
-            patch_size = metadata.get("patch_size", "unknown")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = (
@@ -520,18 +597,34 @@ class SAM2Trainer:
         if not os.path.exists(method_dir):
             os.makedirs(method_dir)
 
+        # Create full checkpoint
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+            "training_losses": self.ave_meanloss,
+            "validation_losses": self.val_losses,
+            "patch_size": patch_size,
+            "config": {
+                "sam_checkpoint": sam_checkpoint,
+                "learning_rate": learning_rate,
+                "batch_size": batch_size,
+                "loss_function": loss_function,
+            },
+        }
+
         if trained_model_path:
             try:
-                torch.save(model.state_dict(), trained_model_path)
-                logger.info(f"Model saved to: {trained_model_path}")
+                torch.save(checkpoint, trained_model_path)
+                logger.info(f"Model checkpoint saved to: {trained_model_path}")
             except Exception as e:
                 logger.info(f"Could not save to {trained_model_path}: {e}")
                 logger.info(f"Saving to default location: {os.path.join(method_dir, filename)}")
-                torch.save(model.state_dict(), os.path.join(method_dir, filename))
+                torch.save(checkpoint, os.path.join(method_dir, filename))
         else:
             save_path = os.path.join(method_dir, filename)
-            torch.save(model.state_dict(), save_path)
-            logger.info(f"Model saved to: {save_path}")
+            torch.save(checkpoint, save_path)
+            logger.info(f"Model checkpoint saved to: {save_path}")
 
     def _plot_loss_curve(self, sam_checkpoint, num_epochs):
         """Plot and save training and validation loss curves"""

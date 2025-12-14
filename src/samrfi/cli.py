@@ -125,6 +125,8 @@ def train_command(args):
     print(f"  Dataset: {args.dataset}")
     if args.validation_dataset:
         print(f"  Validation dataset: {args.validation_dataset}")
+    if args.resume:
+        print(f"  Resume from: {args.resume}")
     print(f"  Model: sam2-{config.model_checkpoint}")
     print(f"  Epochs: {config.num_epochs}")
     print(f"  Batch size: {config.batch_size}")
@@ -161,6 +163,7 @@ def train_command(args):
         learning_rate=config.learning_rate,
         plot=config.save_plots,
         validation_dataset=val_dataset,
+        model_path=args.resume,  # Resume from checkpoint if provided
     )
 
     print("\n" + "=" * 60)
@@ -337,6 +340,9 @@ Examples:
     )
     train_parser.add_argument(
         "--validation-dataset", help="Path to validation dataset (.pt or HF format, optional)"
+    )
+    train_parser.add_argument(
+        "--resume", help="Path to checkpoint to resume training from (.pth file)"
     )
     train_parser.add_argument(
         "--device", choices=["cuda", "cpu"], help="Device to use (overrides config)"

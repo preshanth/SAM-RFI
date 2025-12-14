@@ -492,6 +492,47 @@ training:
   - Data quality (visualize patches)
   - Batch size (try 2 or 8)
 
+### Resume Training
+
+Training can be resumed from any checkpoint to continue from where you left off:
+
+```bash
+# Initial training (10 epochs)
+samrfi train --config config.yaml --dataset train.pt --epochs 10
+
+# Resume and continue to epoch 20
+samrfi train --config config.yaml --dataset train.pt --epochs 20 --resume ./samrfi_data/sam2_rfi_best.pth
+```
+
+**What gets restored:**
+- Model weights
+- Optimizer state (momentum, learning rates)
+- Training/validation loss history
+- Epoch counter (continues from N+1)
+
+**Checkpoints saved:**
+- `sam2_rfi_best.pth` - Best validation loss (updated during training)
+- `model_sam2-large_*.pth` - Final checkpoint with full training state
+
+**Python API:**
+```python
+trainer = SAM2Trainer(dataset, device='cuda')
+
+# Resume from checkpoint
+losses = trainer.train(
+    num_epochs=20,
+    batch_size=4,
+    sam_checkpoint='large',
+    model_path='./samrfi_data/sam2_rfi_best.pth'  # Resume from here
+)
+```
+
+**Benefits:**
+- Train in stages (evaluate after N epochs, continue if needed)
+- Recover from crashes/interruptions
+- Experiment with different learning rates from same checkpoint
+- Loss curves show complete history across resume sessions
+
 ---
 
 ## Development
