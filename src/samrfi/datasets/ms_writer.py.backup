@@ -98,13 +98,13 @@ class MSWriter:
 
         # Use casacore's built-in MS creation instead of manual table description
         from casacore.tables import default_ms
-        
+
         # Create a default MS structure
         default_ms(str(ms_path))
-        
+
         # Open the created MS for writing
         main_table = pt.table(str(ms_path), readonly=False)
-        
+
         # Add the required number of rows to the MS
         main_table.addrows(total_rows)
 

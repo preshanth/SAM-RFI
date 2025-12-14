@@ -8,14 +8,10 @@ Author: SAM-RFI Team
 Date: 2025-12-12
 """
 
-import numpy as np
-import torch
 import sys
 
-# Add src to path
-sys.path.insert(0, 'src')
-
-from samrfi.data.preprocessor import Preprocessor
+import numpy as np
+import torch
 from samrfi.data.gpu_transforms import GPUTransforms
 
 
@@ -69,7 +65,7 @@ def test_augmentation_match():
     print("Test 2: GPU Augmentation (via GPUTransforms)")
     print("-" * 80)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     gpu_transforms = GPUTransforms(device=device, enable_augmentation=True)
@@ -147,7 +143,7 @@ def test_augmentation_match():
     H0, W0 = gpu_augmentations[0].shape[:2]
     H2, W2 = gpu_augmentations[2].shape[:2]
 
-    transpose_correct = (H0 == W2 and W0 == H2)
+    transpose_correct = H0 == W2 and W0 == H2
     symbol = "✓" if transpose_correct else "✗"
     print(f"\n{symbol} Transpose augmentation swaps dimensions: {H0}x{W0} -> {W2}x{H2}")
 
@@ -210,8 +206,9 @@ if __name__ == "__main__":
         success = test_augmentation_match()
         sys.exit(0 if success else 1)
     except Exception as e:
-        print(f"\n❌ TEST FAILED WITH ERROR:")
+        print("\n❌ TEST FAILED WITH ERROR:")
         print(f"   {type(e).__name__}: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

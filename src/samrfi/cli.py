@@ -6,13 +6,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from samrfi.data import MSLoader, Preprocessor
-from .training.sam2_trainer import SAM2Trainer
-from .config.config_loader import ConfigLoader, TrainingConfig, DataConfig
-from .inference import RFIPredictor
-from .data_generation.synthetic_generator import SyntheticDataGenerator
+from .config.config_loader import ConfigLoader
 from .data_generation.ms_generator import MSDataGenerator
-from .data.torch_dataset import TorchDataset
+from .data_generation.synthetic_generator import SyntheticDataGenerator
+from .inference import RFIPredictor
+from .training.sam2_trainer import SAM2Trainer
 
 
 def generate_data_command(args):
@@ -40,61 +38,65 @@ def generate_data_command(args):
     print("Data Generation Complete!")
     print("=" * 60)
     print(f"Output directory: {args.output}")
-    print(f"  exact_masks/ - Perfect ground truth")
-    print(f"  mad_masks/ - MAD-based masks")
+    print("  exact_masks/ - Perfect ground truth")
+    print("  mad_masks/ - MAD-based masks")
 
 
 def load_dataset(path):
     """
-    Load dataset from batched .pt directory, single .pt file, or HF format.
+    Load dataset from batched .pt directory (BatchedDataset or RAMCachedDataset).
 
     Supported formats:
-    - Batched directory (NEW): Contains batch_*.pt + metadata.json
-    - Single .pt file (legacy): TorchDataset saved as single file
-    - HuggingFace directory (legacy): Contains dataset_info.json
+    - BatchedDataset (preprocessed): Contains batch_*.pt + metadata.json
+    - RAMCachedDataset (raw): Contains batch_*.pt + metadata.json with format='raw'
     """
     from samrfi.data import BatchedDataset
+
     path = Path(path)
 
-    # Check if it's a directory with batched format
-    if path.is_dir():
-        metadata_file = path / "metadata.json"
-        if metadata_file.exists():
-            # Check format in metadata
-            import json
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-
-            data_format = metadata.get('format', 'preprocessed')
-
-            if data_format == 'raw':
-                # Raw batches: load into RAM + GPU transforms on-the-fly
-                from samrfi.data import RAMCachedDataset
-                print(f"  Loading RAMCachedDataset (raw format) from {path}")
-                return RAMCachedDataset(path, device='cuda')
-            else:
-                # Preprocessed batches: streaming from disk (old behavior)
-                print(f"  Loading BatchedDataset (preprocessed format) from {path}")
-                return BatchedDataset(path)
-        else:
-            # Legacy HuggingFace format (backward compatibility)
-            from datasets import load_from_disk
-            print(f"  Loading HuggingFace Dataset from {path}")
-            return load_from_disk(path)
-
-    # Single .pt file (legacy TorchDataset)
-    elif path.suffix == '.pt':
-        print(f"  Loading TorchDataset from {path}")
-        return TorchDataset.load_from_disk(path)
-
-    else:
+    # Must be a directory
+    if not path.is_dir():
         raise ValueError(
-            f"Invalid dataset path: {path}\n"
-            f"Expected formats:\n"
-            f"  - Directory with batch_*.pt files (current format)\n"
-            f"  - Single .pt file (legacy)\n"
-            f"  - HuggingFace dataset directory (legacy)"
+            f"Dataset must be a directory, got: {path}\n\n"
+            f"Legacy single .pt files are no longer supported.\n"
+            f"Regenerate your dataset with:\n"
+            f"  samrfi generate-data --source [synthetic|ms] --config <config> --output <path>"
         )
+
+    # Must have metadata.json
+    metadata_file = path / "metadata.json"
+    if not metadata_file.exists():
+        raise ValueError(
+            f"Invalid dataset directory: {path}\n"
+            f"Missing metadata.json file.\n\n"
+            f"Expected BatchedDataset format:\n"
+            f"  {path}/\n"
+            f"  ├── batch_000.pt\n"
+            f"  ├── batch_001.pt\n"
+            f"  ├── ...\n"
+            f"  └── metadata.json\n\n"
+            f"If this is an old HuggingFace dataset, regenerate with:\n"
+            f"  samrfi generate-data --source [synthetic|ms] --config <config> --output <path>"
+        )
+
+    # Load metadata and determine format
+    import json
+
+    with open(metadata_file) as f:
+        metadata = json.load(f)
+
+    data_format = metadata.get("format", "preprocessed")
+
+    if data_format == "raw":
+        # Raw batches: load into RAM + GPU transforms on-the-fly
+        from samrfi.data import RAMCachedDataset
+
+        print(f"  Loading RAMCachedDataset (raw format) from {path}")
+        return RAMCachedDataset(path, device="cuda")
+    else:
+        # Preprocessed batches: streaming from disk
+        print(f"  Loading BatchedDataset (preprocessed format) from {path}")
+        return BatchedDataset(path)
 
 
 def train_command(args):
@@ -149,7 +151,7 @@ def train_command(args):
     dataset_wrapper = DatasetWrapper(dataset)
 
     # Train model
-    print(f"\nInitializing SAM2 trainer...")
+    print("\nInitializing SAM2 trainer...")
     trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path=config.dir_path)
 
     losses = trainer.train(
@@ -209,29 +211,25 @@ def validate_config_command(args):
 
 
 def publish_dataset_command(args):
-    """Publish numpy dataset to HuggingFace Hub"""
+    """Publish dataset (BatchedDataset or TorchDataset) to HuggingFace Hub"""
     from .data.hf_dataset_wrapper import HFDatasetWrapper
 
     print("=" * 60)
     print("SAM-RFI Dataset Publishing")
     print("=" * 60)
 
-    # Load torch dataset
-    print(f"\nLoading torch dataset from {args.input}")
-    torch_dataset = TorchDataset.load_from_disk(args.input)
-    print(f"  {torch_dataset}")
+    # Load dataset (auto-detect format)
+    print(f"\nLoading dataset from {args.input}")
+    dataset = load_dataset(args.input)
+    print(f"  Loaded: {type(dataset).__name__}")
 
     # Convert to HF format
-    print(f"\nConverting to HuggingFace Dataset format...")
-    hf_dataset = HFDatasetWrapper.from_numpy(torch_dataset, batch_size=args.batch_size)
+    print("\nConverting to HuggingFace Dataset format...")
+    hf_dataset = HFDatasetWrapper.from_dataset(dataset, batch_size=args.batch_size)
 
     # Push to hub
     print(f"\nPushing to HuggingFace Hub: {args.repo_id}")
-    hf_dataset.push_to_hub(
-        args.repo_id,
-        private=args.private,
-        token=args.token
-    )
+    hf_dataset.push_to_hub(args.repo_id, private=args.private, token=args.token)
 
     print("\n" + "=" * 60)
     print("✓ Dataset Published!")
@@ -269,7 +267,7 @@ def predict_command(args):
             save_flags=not args.no_save,
         )
     else:
-        print(f"\nMode: Single-pass flagging")
+        print("\nMode: Single-pass flagging")
         flags = predictor.predict_ms(
             ms_path=args.input,
             num_antennas=args.num_antennas,
@@ -337,7 +335,9 @@ Examples:
     train_parser.add_argument(
         "--dataset", required=True, help="Path to pre-generated dataset (.pt or HF format)"
     )
-    train_parser.add_argument("--validation-dataset", help="Path to validation dataset (.pt or HF format, optional)")
+    train_parser.add_argument(
+        "--validation-dataset", help="Path to validation dataset (.pt or HF format, optional)"
+    )
     train_parser.add_argument(
         "--device", choices=["cuda", "cpu"], help="Device to use (overrides config)"
     )
@@ -356,10 +356,14 @@ Examples:
     # Publish command
     publish_parser = subparsers.add_parser("publish", help="Publish dataset to HuggingFace Hub")
     publish_parser.add_argument("--input", required=True, help="Path to .pt dataset")
-    publish_parser.add_argument("--repo-id", required=True, help="HuggingFace repo ID (username/dataset-name)")
+    publish_parser.add_argument(
+        "--repo-id", required=True, help="HuggingFace repo ID (username/dataset-name)"
+    )
     publish_parser.add_argument("--private", action="store_true", help="Make dataset private")
     publish_parser.add_argument("--token", help="HuggingFace token (or set HF_TOKEN env var)")
-    publish_parser.add_argument("--batch-size", type=int, default=50, help="Batch size for conversion (default: 50)")
+    publish_parser.add_argument(
+        "--batch-size", type=int, default=50, help="Batch size for conversion (default: 50)"
+    )
 
     # Predict command
     predict_parser = subparsers.add_parser("predict", help="Apply trained model to flag RFI")

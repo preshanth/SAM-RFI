@@ -25,10 +25,8 @@ Author: SAM-RFI Team
 Date: 2025-12-08 (Original), 2025-12-12 (Physics-preserving augmentation fix)
 """
 
-import torch
-import torch.nn.functional as F
-from typing import Tuple, Optional
 import numpy as np
+import torch
 
 
 class GPUTransforms:
@@ -43,7 +41,7 @@ class GPUTransforms:
     IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
     IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
 
-    def __init__(self, device: str = 'cuda', enable_augmentation: bool = True):
+    def __init__(self, device: str = "cuda", enable_augmentation: bool = True):
         """
         Initialize GPU transforms.
 
@@ -64,9 +62,7 @@ class GPUTransforms:
         self.augmentation = None
 
     def channel_extraction_gpu(
-        self,
-        complex_data: torch.Tensor,
-        eps: float = 1e-10
+        self, complex_data: torch.Tensor, eps: float = 1e-10
     ) -> torch.Tensor:
         """
         Extract 3-channel representation from complex visibilities on GPU.
@@ -115,7 +111,7 @@ class GPUTransforms:
         # Normalize channels to match CPU implementation EXACTLY
         # Log amplitude: fixed physical scale (preserves absolute intensity)
         LOG_MIN = -3.0  # log10(1 mJy noise)
-        LOG_MAX = 4.0   # log10(10,000 Jy max RFI)
+        LOG_MAX = 4.0  # log10(10,000 Jy max RFI)
         log_amp_norm = torch.clamp((log_amp - LOG_MIN) / (LOG_MAX - LOG_MIN), 0, 1)
 
         # Gradient: per-patch min-max normalization
@@ -162,15 +158,12 @@ class GPUTransforms:
             # (B, H, W, 3) case -> need to convert to (B, 3, H, W)
             images = images.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
             mean = self.imagenet_mean.unsqueeze(0)  # (1, 3, 1, 1)
-            std = self.imagenet_std.unsqueeze(0)    # (1, 3, 1, 1)
+            std = self.imagenet_std.unsqueeze(0)  # (1, 3, 1, 1)
             return (images - mean) / std
 
     def apply_augmentation_gpu(
-        self,
-        images: torch.Tensor,
-        masks: torch.Tensor,
-        augmentation_index: int = 0
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, images: torch.Tensor, masks: torch.Tensor, augmentation_index: int = 0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Apply deterministic 4-way augmentation to match CPU implementation.
 
@@ -252,9 +245,7 @@ class GPUTransforms:
             return data
 
     def apply_stretch_gpu(
-        self,
-        data: torch.Tensor,
-        stretch_type: Optional[str] = None
+        self, data: torch.Tensor, stretch_type: str | None = None
     ) -> torch.Tensor:
         """
         Apply stretching transform on GPU.
@@ -269,14 +260,14 @@ class GPUTransforms:
         if stretch_type is None:
             return data
 
-        elif stretch_type.upper() == 'SQRT':
+        elif stretch_type.upper() == "SQRT":
             # Ensure non-negative for sqrt
             data_min = data.min()
             if data_min < 0:
                 data = data - data_min
             return torch.sqrt(data)
 
-        elif stretch_type.upper() == 'LOG10':
+        elif stretch_type.upper() == "LOG10":
             # Add small offset for log stability
             return torch.log10(torch.abs(data) + 1e-10)
 
@@ -288,10 +279,10 @@ class GPUTransforms:
         complex_patch: torch.Tensor,
         mask: torch.Tensor,
         augmentation_index: int = 0,
-        stretch_type: Optional[str] = None,
+        stretch_type: str | None = None,
         normalize_before_stretch: bool = False,
         normalize_after_stretch: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Complete GPU transform pipeline for a single patch or batch.
 
@@ -315,9 +306,9 @@ class GPUTransforms:
             - mask: (H, W) or (B, H, W) augmented to match image
         """
         # Ensure tensors are on correct device
-        if not complex_patch.is_cuda and self.device != 'cpu':
+        if not complex_patch.is_cuda and self.device != "cpu":
             complex_patch = complex_patch.to(self.device)
-        if not mask.is_cuda and self.device != 'cpu':
+        if not mask.is_cuda and self.device != "cpu":
             mask = mask.to(self.device)
 
         # Optional: normalize before stretch
@@ -367,7 +358,7 @@ class GPUTransforms:
         return normalized_image, mask
 
 
-def create_gpu_transforms(device: str = 'cuda', enable_augmentation: bool = True) -> GPUTransforms:
+def create_gpu_transforms(device: str = "cuda", enable_augmentation: bool = True) -> GPUTransforms:
     """
     Factory function to create GPU transforms.
 

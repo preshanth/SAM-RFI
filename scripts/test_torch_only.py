@@ -11,13 +11,14 @@ Tests:
 Run with: python test_torch_only.py
 """
 
+import gc
+import os
+
+import psutil
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 from transformers import Sam2Model
-import psutil
-import os
-import gc
 
 # Test parameters
 NUM_SAMPLES = 50
@@ -88,26 +89,30 @@ class TorchOnlyDataset(Dataset):
         # Shared memory indexing can create non-contiguous views
         return {
             "pixel_values": self.images[idx].contiguous(),  # (3, H, W)
-            "input_boxes": torch.tensor([bbox], dtype=torch.float32),  # (1, 4) per sample -> (B, 1, 4) when batched
-            "ground_truth_mask": mask.contiguous()  # (H, W)
+            "input_boxes": torch.tensor(
+                [bbox], dtype=torch.float32
+            ),  # (1, 4) per sample -> (B, 1, 4) when batched
+            "ground_truth_mask": mask.contiguous(),  # (H, W)
         }
 
 
 def test_torch_dataset():
     """Test that torch-only dataset works with SAM2"""
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TORCH-ONLY DATASET TEST")
-    print("="*80)
+    print("=" * 80)
 
     initial_ram = get_memory_usage_gb()
     print(f"\nInitial RAM: {initial_ram:.2f} GB")
 
     # Create dataset
-    print(f"\n[1/5] Creating TorchOnlyDataset...")
+    print("\n[1/5] Creating TorchOnlyDataset...")
     dataset = TorchOnlyDataset(num_samples=NUM_SAMPLES, image_size=IMAGE_SIZE)
     after_dataset_ram = get_memory_usage_gb()
-    print(f"  RAM after dataset: {after_dataset_ram:.2f} GB (+{after_dataset_ram - initial_ram:.2f} GB)")
+    print(
+        f"  RAM after dataset: {after_dataset_ram:.2f} GB (+{after_dataset_ram - initial_ram:.2f} GB)"
+    )
 
     # Create DataLoader with workers
     print(f"\n[2/5] Creating DataLoader (num_workers={NUM_WORKERS})...")
@@ -118,13 +123,15 @@ def test_torch_dataset():
         num_workers=NUM_WORKERS,
         pin_memory=True,
         prefetch_factor=2,
-        persistent_workers=True
+        persistent_workers=True,
     )
     after_loader_ram = get_memory_usage_gb()
-    print(f"  RAM after DataLoader: {after_loader_ram:.2f} GB (+{after_loader_ram - after_dataset_ram:.2f} GB)")
+    print(
+        f"  RAM after DataLoader: {after_loader_ram:.2f} GB (+{after_loader_ram - after_dataset_ram:.2f} GB)"
+    )
 
     # Load model
-    print(f"\n[3/5] Loading SAM2-tiny model...")
+    print("\n[3/5] Loading SAM2-tiny model...")
     model = Sam2Model.from_pretrained("facebook/sam2-hiera-tiny")
     model.to(DEVICE)
     model.train()
@@ -137,14 +144,17 @@ def test_torch_dataset():
     optimizer = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=1e-5)
 
     from monai.losses import DiceCELoss
-    loss_fn = DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+
+    loss_fn = DiceCELoss(sigmoid=True, squared_pred=True, reduction="mean")
 
     after_model_ram = get_memory_usage_gb()
-    print(f"  RAM after model load: {after_model_ram:.2f} GB (+{after_model_ram - after_loader_ram:.2f} GB)")
+    print(
+        f"  RAM after model load: {after_model_ram:.2f} GB (+{after_model_ram - after_loader_ram:.2f} GB)"
+    )
 
     # Test iteration - measure RAM during dataloading
-    print(f"\n[4/5] Testing iteration (watch for RAM explosion)...")
-    print(f"  If RAM stays stable, torch shared memory is working!")
+    print("\n[4/5] Testing iteration (watch for RAM explosion)...")
+    print("  If RAM stays stable, torch shared memory is working!")
     print(f"  If RAM jumps by ~{NUM_WORKERS} * batch_size * sample_size, we have copies!")
 
     max_ram = after_model_ram
@@ -158,7 +168,7 @@ def test_torch_dataset():
             outputs = model(
                 pixel_values=batch["pixel_values"].to(DEVICE),
                 input_boxes=batch["input_boxes"].to(DEVICE),
-                multimask_output=False
+                multimask_output=False,
             )
 
             # Get predictions
@@ -170,10 +180,7 @@ def test_torch_dataset():
                 gt_masks = gt_masks.unsqueeze(1)
 
             gt_masks_resized = F.interpolate(
-                gt_masks,
-                size=pred_masks.shape[-2:],
-                mode="bilinear",
-                align_corners=False
+                gt_masks, size=pred_masks.shape[-2:], mode="bilinear", align_corners=False
             )
 
             # Compute loss
@@ -194,8 +201,10 @@ def test_torch_dataset():
             del outputs, pred_masks, gt_masks, gt_masks_resized, loss
 
             if batch_idx % 5 == 0:
-                print(f"    Batch {batch_idx}/{len(dataloader)}: "
-                      f"Loss={epoch_losses[-1]:.4f}, RAM={current_ram:.2f} GB")
+                print(
+                    f"    Batch {batch_idx}/{len(dataloader)}: "
+                    f"Loss={epoch_losses[-1]:.4f}, RAM={current_ram:.2f} GB"
+                )
 
         avg_loss = sum(epoch_losses) / len(epoch_losses)
         print(f"  Epoch {epoch + 1} avg loss: {avg_loss:.4f}")
@@ -208,9 +217,11 @@ def test_torch_dataset():
     final_ram = get_memory_usage_gb()
     ram_increase = final_ram - after_model_ram
 
-    print(f"\n[5/5] Memory Summary:")
+    print("\n[5/5] Memory Summary:")
     print(f"  Initial RAM: {initial_ram:.2f} GB")
-    print(f"  After dataset: {after_dataset_ram:.2f} GB (+{after_dataset_ram - initial_ram:.2f} GB)")
+    print(
+        f"  After dataset: {after_dataset_ram:.2f} GB (+{after_dataset_ram - initial_ram:.2f} GB)"
+    )
     print(f"  After model: {after_model_ram:.2f} GB")
     print(f"  Peak RAM during training: {max_ram:.2f} GB")
     print(f"  Final RAM: {final_ram:.2f} GB")
@@ -230,24 +241,30 @@ def test_torch_dataset():
     expected_overhead_gb = prefetch_overhead_gb + 0.5  # +0.5 for model activations/gradients
 
     # If workers made full copies, we'd see NUM_WORKERS × dataset_size increase
-    worker_copy_threshold = dataset_size_gb * (NUM_WORKERS - 1)  # -1 because main process already has data
+    worker_copy_threshold = dataset_size_gb * (
+        NUM_WORKERS - 1
+    )  # -1 because main process already has data
 
     print(f"Dataset size: {dataset_size_gb:.2f} GB")
     print(f"RAM increase during training: {ram_increase:.2f} GB")
     print(f"Expected overhead (no copies): ~{expected_overhead_gb:.2f} GB")
     print(f"  - Prefetch buffers ({samples_in_flight} samples): ~{prefetch_overhead_gb:.2f} GB")
-    print(f"  - Model activations/gradients: ~0.5 GB")
+    print("  - Model activations/gradients: ~0.5 GB")
     print(f"Expected if workers made copies: ~{worker_copy_threshold:.2f} GB")
 
     if ram_increase < worker_copy_threshold * 0.5:
-        print(f"\n✅ SUCCESS: RAM increase ({ram_increase:.2f} GB) << worker copy threshold ({worker_copy_threshold:.2f} GB)")
-        print(f"   Shared memory is working! No worker copies detected.")
-        print(f"   The {ram_increase:.2f} GB increase is from prefetch buffers + model overhead (expected).")
-        print(f"   This confirms torch-only approach prevents RAM explosion.")
+        print(
+            f"\n✅ SUCCESS: RAM increase ({ram_increase:.2f} GB) << worker copy threshold ({worker_copy_threshold:.2f} GB)"
+        )
+        print("   Shared memory is working! No worker copies detected.")
+        print(
+            f"   The {ram_increase:.2f} GB increase is from prefetch buffers + model overhead (expected)."
+        )
+        print("   This confirms torch-only approach prevents RAM explosion.")
         success = True
     else:
         print(f"\n⚠️  WARNING: RAM increase ({ram_increase:.2f} GB) suggests possible copies")
-        print(f"   This is higher than expected but still below full worker copies.")
+        print("   This is higher than expected but still below full worker copies.")
         success = False
 
     print(f"\n{'='*80}")

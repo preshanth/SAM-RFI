@@ -30,7 +30,7 @@ SAM-RFI: Radio Frequency Interference Detection with SAM2
 This documentation covers installation, quick start guides, and complete API reference for SAM-RFI v2.0.
 
 The project is actively developed on `GitHub <https://github.com/preshanth/SAM-RFI>`_. For bugs or feature requests, please `open an issue <https://github.com/preshanth/SAM-RFI/issues>`_.
-   
+
 .. image:: https://img.shields.io/badge/GitHub-preshanth%2FSAM_RFI-blue
    :alt: Static Badge
    :target: https://github.com/preshanth/SAM-RFI

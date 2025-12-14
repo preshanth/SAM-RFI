@@ -14,15 +14,15 @@ data:
 
 training:
   device: cuda
-  num_epochs: 10
-  batch_size: 48          # Massive batch for 141GB VRAM
-  learning_rate: 2.0e-5
+  num_epochs: 25
+  batch_size: 72          # Massive batch for 141GB VRAM
+  learning_rate: 1.0e-6
   model_checkpoint: large
   output_dir: ./training_output
 
   # Optimizer settings
   optimizer: adamw
-  weight_decay: 0.01
+  weight_decay: 0.1
   adam_betas: [0.9, 0.999]
   adam_eps: 1.0e-8
 
@@ -42,7 +42,7 @@ training:
 
   # DataLoader settings - Optimized for H200 monster GPU
   num_workers: 24
-  data_cache_ram_gb: 380   # 380GB for training data cache (75% of 512GB RAM)
+  data_cache_ram_gb: 280   # 280GB for training data cache
   val_data_cache_ram_gb: 50  # 50GB for validation
   prefetch_factor: 4
   persistent_workers: true

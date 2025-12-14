@@ -1,8 +1,10 @@
 """
 Torch-backed dataset with shared memory support for multiprocessing
 """
-import torch
+
 from pathlib import Path
+
+import torch
 
 
 class TorchDataset:
@@ -40,24 +42,19 @@ class TorchDataset:
         .contiguous() ensures memory layout is compatible with SAM2
         (no copy if already contiguous).
         """
-        return {
-            "image": self.images[idx].contiguous(),
-            "label": self.labels[idx].contiguous()
-        }
+        return {"image": self.images[idx].contiguous(), "label": self.labels[idx].contiguous()}
 
     def save_to_disk(self, path):
         """Save to .pt file"""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        torch.save({
-            'images': self.images,
-            'labels': self.labels,
-            'metadata': self.metadata
-        }, path)
+        torch.save({"images": self.images, "labels": self.labels, "metadata": self.metadata}, path)
 
-        size_gb = (self.images.element_size() * self.images.numel() +
-                   self.labels.element_size() * self.labels.numel()) / 1e9
+        size_gb = (
+            self.images.element_size() * self.images.numel()
+            + self.labels.element_size() * self.labels.numel()
+        ) / 1e9
         print(f"Saved TorchDataset to {path}")
         print(f"  {len(self)} samples, {size_gb:.2f} GB")
 
@@ -65,14 +62,18 @@ class TorchDataset:
     def load_from_disk(cls, path):
         """Load from .pt file"""
         data = torch.load(path)
-        return cls(data['images'], data['labels'], data.get('metadata'))
+        return cls(data["images"], data["labels"], data.get("metadata"))
 
     def __repr__(self):
-        size_gb = (self.images.element_size() * self.images.numel() +
-                   self.labels.element_size() * self.labels.numel()) / 1e9
-        return (f"TorchDataset(samples={len(self)}, "
-                f"image_shape={tuple(self.images.shape[1:])}, "
-                f"size={size_gb:.2f}GB)")
+        size_gb = (
+            self.images.element_size() * self.images.numel()
+            + self.labels.element_size() * self.labels.numel()
+        ) / 1e9
+        return (
+            f"TorchDataset(samples={len(self)}, "
+            f"image_shape={tuple(self.images.shape[1:])}, "
+            f"size={size_gb:.2f}GB)"
+        )
 
 
 class BatchWriter:
@@ -96,7 +97,6 @@ class BatchWriter:
             output_dir: Directory to write batch files
             samples_per_batch: Number of samples per batch file
         """
-        import json
         from pathlib import Path
 
         self.output_dir = Path(output_dir)
@@ -145,13 +145,12 @@ class BatchWriter:
             labels_chunk = labels[start_idx:end_idx]
 
             batch_file = self.output_dir / f"batch_{self.batch_file_idx:03d}.pt"
-            torch.save({
-                'images': images_chunk,
-                'labels': labels_chunk
-            }, batch_file)
+            torch.save({"images": images_chunk, "labels": labels_chunk}, batch_file)
 
-            size_gb = (images_chunk.element_size() * images_chunk.numel() +
-                       labels_chunk.element_size() * labels_chunk.numel()) / 1e9
+            size_gb = (
+                images_chunk.element_size() * images_chunk.numel()
+                + labels_chunk.element_size() * labels_chunk.numel()
+            ) / 1e9
             print(f"    Wrote {batch_file.name}: {len(images_chunk)} patches ({size_gb:.2f} GB)")
 
             self.total_samples += len(images_chunk)
@@ -167,19 +166,19 @@ class BatchWriter:
 
         # Write metadata
         metadata = {
-            'num_samples': self.total_samples,
-            'samples_per_batch': self.samples_per_batch,
-            'num_batches': self.batch_file_idx,
-            'image_shape': [1024, 1024, 3],
-            'mask_shape': [1024, 1024],
-            'dtype': 'float32'
+            "num_samples": self.total_samples,
+            "samples_per_batch": self.samples_per_batch,
+            "num_batches": self.batch_file_idx,
+            "image_shape": [1024, 1024, 3],
+            "mask_shape": [1024, 1024],
+            "dtype": "float32",
         }
 
-        metadata_path = self.output_dir / 'metadata.json'
-        with open(metadata_path, 'w') as f:
+        metadata_path = self.output_dir / "metadata.json"
+        with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"\nBatch writing complete:")
+        print("\nBatch writing complete:")
         print(f"  Total samples: {self.total_samples}")
         print(f"  Batch files: {self.batch_file_idx}")
         print(f"  Metadata: {metadata_path}")

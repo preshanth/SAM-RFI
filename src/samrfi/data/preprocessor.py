@@ -4,13 +4,14 @@ Preprocessor - Convert waterfall data to training-ready patches
 Clean rewrite of RFIDataset preprocessing pipeline.
 """
 
+from functools import partial
+from multiprocessing import Pool, cpu_count
+
 import numpy as np
 import torch
-from scipy import stats
 from patchify import patchify
-from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
-from functools import partial
+from scipy import stats
+
 from .torch_dataset import TorchDataset
 
 
@@ -152,7 +153,7 @@ class Preprocessor:
         Returns:
             HuggingFace Dataset with 'image' and 'label' fields
         """
-        print(f"\n[Preprocessor] Creating dataset...")
+        print("\n[Preprocessor] Creating dataset...")
         print(f"  Input shape: {self.data.shape}")
         print(f"  Patch size: {patch_size}x{patch_size}")
         print(f"  Normalize before stretch: {normalize_before_stretch}")
@@ -184,7 +185,9 @@ class Preprocessor:
         waterfall_shape = augmented_data[0].shape
         if patch_size >= min(waterfall_shape):
             # Skip patching - use full waterfalls
-            print(f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})...")
+            print(
+                f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})..."
+            )
             self.patches = np.array(augmented_data)
             if augmented_flags is not None:
                 augmented_flags = np.array(augmented_flags)
@@ -194,7 +197,9 @@ class Preprocessor:
             print(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
             self.patches = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
             if augmented_flags is not None:
-                augmented_flags = self._create_patches(augmented_flags, patch_size, num_workers=num_workers)
+                augmented_flags = self._create_patches(
+                    augmented_flags, patch_size, num_workers=num_workers
+                )
             print(f"    Created {len(self.patches)} patches")
 
         # Check if data is complex
@@ -234,7 +239,9 @@ class Preprocessor:
             self.patch_flags = augmented_flags
         else:
             print(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
-            self.patch_flags = self._generate_mad_flags(self.patches, flag_sigma, num_workers=num_workers)
+            self.patch_flags = self._generate_mad_flags(
+                self.patches, flag_sigma, num_workers=num_workers
+            )
 
         print(f"    Flag patches: {self.patch_flags.shape}")
 
@@ -257,7 +264,7 @@ class Preprocessor:
 
         # Create TorchDataset
         print("\n  Creating TorchDataset...")
-        print(f"    Extracting 3-channel representations (gradient, log_amp, phase)...")
+        print("    Extracting 3-channel representations (gradient, log_amp, phase)...")
 
         # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
         images_3ch = []
@@ -277,13 +284,13 @@ class Preprocessor:
         images_array = np.array(images_3ch, dtype=np.float32)
 
         # Apply SAM2 ImageNet normalization (preprocess once, not during training)
-        print(f"    Applying SAM2 ImageNet normalization...")
+        print("    Applying SAM2 ImageNet normalization...")
         images_array = self._apply_sam2_normalization(images_array)
 
         labels_array = np.array(self.patch_flags, dtype=np.uint8)
 
         # Convert to torch tensors
-        print(f"    Converting to torch tensors...")
+        print("    Converting to torch tensors...")
         images_tensor = torch.from_numpy(images_array).to(torch.float32)
         labels_tensor = torch.from_numpy(labels_array).to(torch.uint8)
 
@@ -298,7 +305,7 @@ class Preprocessor:
 
         self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
         print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
-        print(f"    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
+        print("    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
         print(f"    {self.dataset}")
 
         return self.dataset
@@ -427,15 +434,15 @@ class Preprocessor:
         time_deriv = np.zeros_like(log_amp)
         freq_deriv = np.zeros_like(log_amp)
 
-        time_deriv[1:, :] = np.diff(log_amp, axis=0)   # Time derivative
-        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)   # Frequency derivative
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)  # Time derivative
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)  # Frequency derivative
 
         gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
 
         # Normalize channels
         # Log amplitude: fixed physical scale (preserves absolute intensity across patches)
         LOG_MIN = -3.0  # log10(1 mJy noise)
-        LOG_MAX = 4.0   # log10(10,000 Jy max RFI)
+        LOG_MAX = 4.0  # log10(10,000 Jy max RFI)
         log_amp_norm = np.clip((log_amp - LOG_MIN) / (LOG_MAX - LOG_MIN), 0, 1)
 
         # Gradient: per-patch normalization (relative feature)
@@ -707,7 +714,7 @@ class GPUPreprocessor:
             - complex_patches: List of complex numpy arrays (H, W)
             - masks: List of binary mask arrays (H, W)
         """
-        print(f"\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
+        print("\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
         print(f"  Input shape: {self.data.shape}")
         print(f"  Patch size: {patch_size}x{patch_size}")
         print(f"  Data type: {self.data.dtype}")
@@ -726,7 +733,7 @@ class GPUPreprocessor:
         # Patchify (or use full waterfalls)
         waterfall_shape = flattened_data[0].shape
         if patch_size >= min(waterfall_shape):
-            print(f"  [2/3] Using full waterfalls (patch_size >= image size)...")
+            print("  [2/3] Using full waterfalls (patch_size >= image size)...")
             self.raw_patches = flattened_data
             self.raw_masks = flattened_flags
             print(f"    Using {len(self.raw_patches)} full waterfalls")
@@ -745,8 +752,10 @@ class GPUPreprocessor:
             print("  [3/3] Removing blank patches...")
             initial_count = len(self.raw_patches)
             has_rfi = [mask.any() for mask in self.raw_masks]
-            self.raw_patches = [p for p, keep in zip(self.raw_patches, has_rfi) if keep]
-            self.raw_masks = [m for m, keep in zip(self.raw_masks, has_rfi) if keep]
+            self.raw_patches = [
+                p for p, keep in zip(self.raw_patches, has_rfi, strict=False) if keep
+            ]
+            self.raw_masks = [m for m, keep in zip(self.raw_masks, has_rfi, strict=False) if keep]
             removed = initial_count - len(self.raw_patches)
             print(f"    Removed {removed} blank patches, kept {len(self.raw_patches)}")
         else:
@@ -769,7 +778,9 @@ class GPUPreprocessor:
         print(f"  Patch dtype: {self.raw_patches[0].dtype}")
         print(f"  Patch shape: {self.raw_patches[0].shape}")
         print(f"  Storage: {self._estimate_storage_mb():.1f} MB (complex)")
-        print(f"  vs CPU pipeline: ~{self._estimate_storage_mb() * 4:.1f} MB (4x augmentation + RGB)")
+        print(
+            f"  vs CPU pipeline: ~{self._estimate_storage_mb() * 4:.1f} MB (4x augmentation + RGB)"
+        )
         print(f"  Storage savings: ~{(1 - 1/4) * 100:.0f}%")
 
         return self.raw_patches, self.raw_masks

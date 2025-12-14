@@ -20,10 +20,7 @@ NUM_ITERATIONS = 1  # Single pass
 
 print("Loading model...")
 predictor = RFIPredictor(
-    model_path=MODEL_PATH,
-    sam_checkpoint=SAM_CHECKPOINT,
-    device=DEVICE,
-    batch_size=BATCH_SIZE
+    model_path=MODEL_PATH, sam_checkpoint=SAM_CHECKPOINT, device=DEVICE, batch_size=BATCH_SIZE
 )
 
 print("Running prediction...")
@@ -32,7 +29,7 @@ flags = predictor.predict_ms(
     num_antennas=NUM_ANTENNAS,
     patch_size=PATCH_SIZE,
     stretch="SQRT",
-    save_flags=True
+    save_flags=True,
 )
 
 print(f"Done! Flagged {flags.sum()/flags.size*100:.2f}% of data")

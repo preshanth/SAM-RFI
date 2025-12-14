@@ -2,13 +2,12 @@
 Unit tests for CLI interface
 """
 
-import pytest
 import tempfile
-import yaml
-from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
-import sys
+from unittest.mock import Mock, patch
 
+import pytest
+import yaml
 from samrfi.config.config_loader import ConfigLoader
 
 
@@ -16,12 +15,12 @@ from samrfi.config.config_loader import ConfigLoader
 def temp_config():
     """Create temporary config file"""
     config_dict = {
-        'model': {'checkpoint': 'tiny'},
-        'training': {'num_epochs': 2, 'batch_size': 1, 'device': 'cpu'},
-        'dataset': {'stretch': 'SQRT', 'flag_sigma': 5, 'patch_size': 64}
+        "model": {"checkpoint": "tiny"},
+        "training": {"num_epochs": 2, "batch_size": 1, "device": "cpu"},
+        "dataset": {"stretch": "SQRT", "flag_sigma": 5, "patch_size": 64},
     }
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(config_dict, f)
         temp_path = f.name
 
@@ -50,6 +49,7 @@ class TestCLICreateConfig:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             import os
+
             original_cwd = os.getcwd()
             os.chdir(tmpdir)
 
@@ -57,7 +57,7 @@ class TestCLICreateConfig:
                 create_config_command(args)
 
                 # Check default file created
-                assert Path('sam2_config.yaml').exists()
+                assert Path("sam2_config.yaml").exists()
             finally:
                 os.chdir(original_cwd)
 
@@ -66,7 +66,7 @@ class TestCLICreateConfig:
         from samrfi.cli import create_config_command
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / 'custom_config.yaml'
+            output_path = Path(tmpdir) / "custom_config.yaml"
 
             args = Mock()
             args.output = str(output_path)
@@ -77,7 +77,7 @@ class TestCLICreateConfig:
 
             # Verify it's a valid config
             config = ConfigLoader.load(str(output_path))
-            assert config.model_checkpoint == 'large'
+            assert config.model_checkpoint == "large"
 
 
 class TestCLIValidateConfig:
@@ -99,7 +99,7 @@ class TestCLIValidateConfig:
         from samrfi.cli import validate_config_command
 
         args = Mock()
-        args.config = '/nonexistent/config.yaml'
+        args.config = "/nonexistent/config.yaml"
 
         result = validate_config_command(args)
 
@@ -110,8 +110,8 @@ class TestCLIValidateConfig:
         from samrfi.cli import validate_config_command
 
         # Create invalid config
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            yaml.dump({'model': {'checkpoint': 'invalid_checkpoint'}}, f)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump({"model": {"checkpoint": "invalid_checkpoint"}}, f)
             temp_path = f.name
 
         try:
@@ -149,8 +149,8 @@ class TestCLIMain:
         """Test that calling CLI with no command shows help"""
         from samrfi.cli import main
 
-        with patch('sys.argv', ['samrfi']):
-            with patch('sys.exit') as mock_exit:
+        with patch("sys.argv", ["samrfi"]):
+            with patch("sys.exit") as _mock_exit:
                 try:
                     main()
                 except SystemExit:
@@ -161,9 +161,9 @@ class TestCLIMain:
         from samrfi.cli import main
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / 'test_config.yaml'
+            output_path = Path(tmpdir) / "test_config.yaml"
 
-            with patch('sys.argv', ['samrfi', 'create-config', '--output', str(output_path)]):
+            with patch("sys.argv", ["samrfi", "create-config", "--output", str(output_path)]):
                 result = main()
 
                 assert result == 0
@@ -173,8 +173,7 @@ class TestCLIMain:
         """Test main with validate-config command"""
         from samrfi.cli import main
 
-        with patch('sys.argv', ['samrfi', 'validate-config', '--config', temp_config]):
+        with patch("sys.argv", ["samrfi", "validate-config", "--config", temp_config]):
             result = main()
 
             assert result == 0  # Valid config
-

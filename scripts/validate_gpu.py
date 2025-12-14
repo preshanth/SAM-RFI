@@ -8,14 +8,13 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import time
-from pathlib import Path
-import json
 
-import torch
 import numpy as np
 import psutil
+import torch
 
 # GPU profiling
 try:
@@ -23,12 +22,12 @@ try:
 
     pynvml.nvmlInit()
     HAS_NVML = True
-except:
+except Exception:
     HAS_NVML = False
     print("Warning: pynvml not available. Install with: pip install nvidia-ml-py3")
 
-from samrfi.training.sam2_trainer import SAM2Trainer
 from samrfi.config.config_loader import ConfigLoader
+from samrfi.training.sam2_trainer import SAM2Trainer
 
 
 def print_memory_usage(label=""):
@@ -105,7 +104,7 @@ class TrainingProfiler:
         print(f"{'='*80}")
 
         # Validate dataset is not empty
-        if not hasattr(dataset_wrapper, 'dataset') or len(dataset_wrapper.dataset) == 0:
+        if not hasattr(dataset_wrapper, "dataset") or len(dataset_wrapper.dataset) == 0:
             raise ValueError("Dataset is empty or invalid - cannot profile training")
 
         # Clear cache and force synchronization
@@ -116,6 +115,7 @@ class TrainingProfiler:
 
         # Explicit garbage collection before starting
         import gc
+
         gc.collect()
 
         # Monitor memory at start
@@ -128,24 +128,32 @@ class TrainingProfiler:
         trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path="./validation_output")
 
         # Get profiling config (with defaults if not present)
-        profiling_config = getattr(config, 'profiling', {})
+        profiling_config = getattr(config, "profiling", {})
         if isinstance(profiling_config, dict):
-            profiling_enabled = profiling_config.get('enabled', False)
-            activities_config = profiling_config.get('activities', {})
-            cpu_profiling = activities_config.get('cpu', True) if isinstance(activities_config, dict) else True
-            cuda_profiling = activities_config.get('cuda', True) if isinstance(activities_config, dict) else True
-            record_shapes = profiling_config.get('record_shapes', False)
-            profile_memory = profiling_config.get('profile_memory', False)
-            with_stack = profiling_config.get('with_stack', False)
+            profiling_enabled = profiling_config.get("enabled", False)
+            activities_config = profiling_config.get("activities", {})
+            cpu_profiling = (
+                activities_config.get("cpu", True) if isinstance(activities_config, dict) else True
+            )
+            cuda_profiling = (
+                activities_config.get("cuda", True) if isinstance(activities_config, dict) else True
+            )
+            record_shapes = profiling_config.get("record_shapes", False)
+            profile_memory = profiling_config.get("profile_memory", False)
+            with_stack = profiling_config.get("with_stack", False)
         else:
             # Handle DataConfig object
-            profiling_enabled = getattr(profiling_config, 'enabled', False)
-            activities_config = getattr(profiling_config, 'activities', {})
-            cpu_profiling = activities_config.get('cpu', True) if hasattr(activities_config, 'get') else True
-            cuda_profiling = activities_config.get('cuda', True) if hasattr(activities_config, 'get') else True
-            record_shapes = getattr(profiling_config, 'record_shapes', False)
-            profile_memory = getattr(profiling_config, 'profile_memory', False)
-            with_stack = getattr(profiling_config, 'with_stack', False)
+            profiling_enabled = getattr(profiling_config, "enabled", False)
+            activities_config = getattr(profiling_config, "activities", {})
+            cpu_profiling = (
+                activities_config.get("cpu", True) if hasattr(activities_config, "get") else True
+            )
+            cuda_profiling = (
+                activities_config.get("cuda", True) if hasattr(activities_config, "get") else True
+            )
+            record_shapes = getattr(profiling_config, "record_shapes", False)
+            profile_memory = getattr(profiling_config, "profile_memory", False)
+            with_stack = getattr(profiling_config, "with_stack", False)
 
         # Start profiling
         start_time = time.time()
@@ -159,7 +167,9 @@ class TrainingProfiler:
                 if cuda_profiling:
                     activities.append(torch.profiler.ProfilerActivity.CUDA)
 
-                print(f"  Profiling: enabled (shapes={record_shapes}, memory={profile_memory}, stack={with_stack})")
+                print(
+                    f"  Profiling: enabled (shapes={record_shapes}, memory={profile_memory}, stack={with_stack})"
+                )
 
                 # Enable PyTorch profiler with config options
                 with torch.profiler.profile(
@@ -178,7 +188,7 @@ class TrainingProfiler:
                         save_model=False,  # Skip model saving during validation
                     )
             else:
-                print(f"  Profiling: disabled")
+                print("  Profiling: disabled")
                 prof = None
                 losses = trainer.train(
                     num_epochs=num_epochs,
@@ -206,7 +216,9 @@ class TrainingProfiler:
 
             # Calculate metrics
             duration = end_time - start_time
-            samples_per_sec = (len(dataset_wrapper.dataset) * num_epochs) / duration if duration > 0 else 0
+            samples_per_sec = (
+                (len(dataset_wrapper.dataset) * num_epochs) / duration if duration > 0 else 0
+            )
 
             # Extract key profiler stats if profiling was enabled
             profiler_stats = None
@@ -214,7 +226,9 @@ class TrainingProfiler:
                 key_averages = prof.key_averages()
                 # Validate profiler has data before processing
                 if key_averages and len(key_averages) > 0:
-                    top_cuda_ops = sorted(key_averages, key=lambda x: x.cuda_time_total, reverse=True)[:5]
+                    top_cuda_ops = sorted(
+                        key_averages, key=lambda x: x.cuda_time_total, reverse=True
+                    )[:5]
                     profiler_stats = [
                         {
                             "name": op.key.decode() if isinstance(op.key, bytes) else op.key,
@@ -230,7 +244,11 @@ class TrainingProfiler:
             if losses is None:
                 final_loss = None
             elif isinstance(losses, dict):
-                final_loss = losses["train"][-1] if losses.get("train") and len(losses["train"]) > 0 else None
+                final_loss = (
+                    losses["train"][-1]
+                    if losses.get("train") and len(losses["train"]) > 0
+                    else None
+                )
             else:
                 final_loss = losses[-1] if len(losses) > 0 else None
 
@@ -247,6 +265,7 @@ class TrainingProfiler:
 
             # Aggressive garbage collection
             import gc
+
             gc.collect()
             gc.collect()
 
@@ -267,7 +286,7 @@ class TrainingProfiler:
                 "top_cuda_ops": profiler_stats,  # None if profiling disabled
             }
 
-            print(f"\n✓ Success!")
+            print("\n✓ Success!")
             print(f"  Duration: {duration:.2f}s")
             print(f"  Throughput: {samples_per_sec:.2f} samples/sec")
             print(f"  Final loss: {losses[-1]:.6f}")
@@ -282,7 +301,7 @@ class TrainingProfiler:
 
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"\n✗ Out of memory!")
+                print("\n✗ Out of memory!")
                 result = {
                     "batch_size": batch_size,
                     "success": False,
@@ -303,6 +322,7 @@ class TrainingProfiler:
 
         # Final garbage collection
         import gc
+
         gc.collect()
         gc.collect()  # Call twice for circular references
 
@@ -346,13 +366,13 @@ class TrainingProfiler:
             return None
         elif isinstance(obj, bytes):
             return obj.decode()
-        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        elif isinstance(obj, np.integer | np.int64 | np.int32):
             return int(obj)
-        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        elif isinstance(obj, np.floating | np.float64 | np.float32):
             return float(obj)
         elif isinstance(obj, dict):
             return {k: self._sanitize_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
+        elif isinstance(obj, list | tuple):
             return [self._sanitize_for_json(item) for item in obj]
         else:
             return obj
@@ -424,6 +444,7 @@ def main():
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
     from samrfi.data import BatchedDataset
+
     dataset = BatchedDataset(args.dataset)
     print(f"  Loaded {len(dataset)} samples")
 

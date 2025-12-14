@@ -7,7 +7,6 @@ Wraps HuggingFace Dataset to provide batches for SAM training.
 import numpy as np
 import torch
 from torch.utils.data import Dataset as TorchDataset
-from torch.multiprocessing import Manager
 
 
 class SAMDataset(TorchDataset):
@@ -67,7 +66,7 @@ class SAMDataset(TorchDataset):
         return {
             "pixel_values": pixel_values,
             "input_boxes": input_boxes,
-            "ground_truth_mask": ground_truth_mask
+            "ground_truth_mask": ground_truth_mask,
         }
 
     def _get_bounding_box(self, mask):
@@ -140,17 +139,21 @@ class BatchedDataset(TorchDataset):
         with open(metadata_path) as f:
             self.metadata = json.load(f)
 
-        self.num_samples = self.metadata['num_samples']
-        self.samples_per_batch = self.metadata['samples_per_batch']
-        self.num_batches = self.metadata['num_batches']
+        self.num_samples = self.metadata["num_samples"]
+        self.samples_per_batch = self.metadata["samples_per_batch"]
+        self.num_batches = self.metadata["num_batches"]
 
         # Per-worker batch cache (initialized in each worker process)
         # This is a class attribute that will be separate in each forked worker
         self._worker_cache = {}
         self._worker_cache_max_size = 3  # Keep last 3 batches per worker
 
-        logger.info(f"BatchedDataset: {self.num_samples} samples across {self.num_batches} batch files")
-        logger.info(f"  Streaming mode: Workers load batches on-demand (OS cache handles efficiency)")
+        logger.info(
+            f"BatchedDataset: {self.num_samples} samples across {self.num_batches} batch files"
+        )
+        logger.info(
+            "  Streaming mode: Workers load batches on-demand (OS cache handles efficiency)"
+        )
 
     def __len__(self):
         return self.num_samples
@@ -172,8 +175,8 @@ class BatchedDataset(TorchDataset):
         batch = self._load_batch_cached(batch_num)
 
         return {
-            'image': batch['images'][local_idx].contiguous(),
-            'label': batch['labels'][local_idx].contiguous()
+            "image": batch["images"][local_idx].contiguous(),
+            "label": batch["labels"][local_idx].contiguous(),
         }
 
     def _load_batch_cached(self, batch_num):
@@ -204,13 +207,12 @@ class BatchedDataset(TorchDataset):
         """Load single batch from disk."""
         batch_file = self.data_dir / f"batch_{batch_num:03d}.pt"
         data = torch.load(batch_file, weights_only=False)
-        return {
-            'images': data['images'],
-            'labels': data['labels']
-        }
+        return {"images": data["images"], "labels": data["labels"]}
 
     def __repr__(self):
-        return (f"BatchedDataset(samples={self.num_samples}, "
-                f"batches={self.num_batches}, "
-                f"samples_per_batch={self.samples_per_batch}, "
-                f"streaming=True)")
+        return (
+            f"BatchedDataset(samples={self.num_samples}, "
+            f"batches={self.num_batches}, "
+            f"samples_per_batch={self.samples_per_batch}, "
+            f"streaming=True)"
+        )

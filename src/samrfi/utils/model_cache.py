@@ -7,17 +7,16 @@ Provides progress bars and cache location management.
 
 import os
 from pathlib import Path
-from typing import Optional, Tuple
 
 try:
-    from transformers import Sam2Model, Sam2Processor
-    from huggingface_hub import snapshot_download, hf_hub_download
+    from huggingface_hub import snapshot_download
     from tqdm import tqdm
+    from transformers import Sam2Model, Sam2Processor
 except ImportError as e:
     raise ImportError(
         f"Required packages not installed: {e}\n"
         "Install with: pip install transformers huggingface_hub tqdm"
-    )
+    ) from e
 
 
 class ModelCache:
@@ -67,7 +66,7 @@ class ModelCache:
         "large": 850,
     }
 
-    def __init__(self, cache_dir: Optional[str] = None):
+    def __init__(self, cache_dir: str | None = None):
         """
         Initialize ModelCache.
 
@@ -77,7 +76,7 @@ class ModelCache:
         """
         self.cache_dir = cache_dir
         if cache_dir:
-            os.environ['HF_HOME'] = cache_dir
+            os.environ["HF_HOME"] = cache_dir
 
     def get_model_id(self, checkpoint: str) -> str:
         """
@@ -93,11 +92,8 @@ class ModelCache:
             ValueError: If checkpoint name is invalid
         """
         if checkpoint not in self.CHECKPOINT_MAP:
-            valid = ', '.join(self.CHECKPOINT_MAP.keys())
-            raise ValueError(
-                f"Invalid checkpoint '{checkpoint}'. "
-                f"Valid options: {valid}"
-            )
+            valid = ", ".join(self.CHECKPOINT_MAP.keys())
+            raise ValueError(f"Invalid checkpoint '{checkpoint}'. " f"Valid options: {valid}")
         return self.CHECKPOINT_MAP[checkpoint]
 
     def is_cached(self, checkpoint: str) -> bool:
@@ -114,7 +110,6 @@ class ModelCache:
 
         try:
             # Try to load from cache without downloading
-            from huggingface_hub import try_to_load_from_cache
             from transformers import cached_file
 
             # Check if config.json exists in cache
@@ -123,7 +118,7 @@ class ModelCache:
                 "config.json",
                 cache_dir=self.cache_dir,
                 local_files_only=True,
-                _raise_exceptions_for_missing_entries=False
+                _raise_exceptions_for_missing_entries=False,
             )
             return config_path is not None
         except Exception:
@@ -147,33 +142,28 @@ class ModelCache:
         is_cached = self.is_cached(checkpoint)
 
         info = {
-            'is_cached': is_cached,
-            'model_id': model_id,
-            'size_mb': self.MODEL_SIZES.get(checkpoint, 0),
+            "is_cached": is_cached,
+            "model_id": model_id,
+            "size_mb": self.MODEL_SIZES.get(checkpoint, 0),
         }
 
         if is_cached:
             # Try to find cache path
             try:
                 from transformers import cached_file
+
                 config_path = cached_file(
-                    model_id,
-                    "config.json",
-                    cache_dir=self.cache_dir,
-                    local_files_only=True
+                    model_id, "config.json", cache_dir=self.cache_dir, local_files_only=True
                 )
                 if config_path:
-                    info['cache_path'] = str(Path(config_path).parent)
+                    info["cache_path"] = str(Path(config_path).parent)
             except Exception:
                 pass
 
         return info
 
     def download_model(
-        self,
-        checkpoint: str,
-        show_progress: bool = True,
-        force_download: bool = False
+        self, checkpoint: str, show_progress: bool = True, force_download: bool = False
     ) -> str:
         """
         Download model from HuggingFace (if not cached).
@@ -190,7 +180,7 @@ class ModelCache:
 
         if not force_download and self.is_cached(checkpoint):
             info = self.get_cache_info(checkpoint)
-            cache_path = info.get('cache_path', 'unknown')
+            cache_path = info.get("cache_path", "unknown")
             if show_progress:
                 print(f"✓ Model '{checkpoint}' already cached at: {cache_path}")
             return cache_path
@@ -207,7 +197,7 @@ class ModelCache:
             cache_dir=self.cache_dir,
             resume_download=True,
             force_download=force_download,
-            tqdm_class=tqdm if show_progress else None
+            tqdm_class=tqdm if show_progress else None,
         )
 
         if show_progress:
@@ -216,11 +206,8 @@ class ModelCache:
         return cache_path
 
     def load_model(
-        self,
-        checkpoint: str,
-        show_progress: bool = True,
-        device: str = "cuda"
-    ) -> Tuple[Sam2Model, Sam2Processor]:
+        self, checkpoint: str, show_progress: bool = True, device: str = "cuda"
+    ) -> tuple[Sam2Model, Sam2Processor]:
         """
         Load SAM2 model and processor (auto-downloads if not cached).
 
@@ -241,36 +228,30 @@ class ModelCache:
             size_mb = self.MODEL_SIZES.get(checkpoint, 0)
             print(f"\nModel '{checkpoint}' not found in cache.")
             print(f"Downloading from HuggingFace (~{size_mb} MB)...")
-            print(f"This is a one-time download. Subsequent runs will use cached model.\n")
+            print("This is a one-time download. Subsequent runs will use cached model.\n")
 
         # Load model and processor (auto-downloads if needed)
         if show_progress and not is_cached:
-            print(f"Loading SAM2 processor...")
-        processor = Sam2Processor.from_pretrained(
-            model_id,
-            cache_dir=self.cache_dir
-        )
+            print("Loading SAM2 processor...")
+        processor = Sam2Processor.from_pretrained(model_id, cache_dir=self.cache_dir)
 
         if show_progress and not is_cached:
-            print(f"Loading SAM2 model...")
-        model = Sam2Model.from_pretrained(
-            model_id,
-            cache_dir=self.cache_dir
-        )
+            print("Loading SAM2 model...")
+        model = Sam2Model.from_pretrained(model_id, cache_dir=self.cache_dir)
 
         # Move to device
         model = model.to(device)
 
         if show_progress:
             info = self.get_cache_info(checkpoint)
-            cache_path = info.get('cache_path', 'cache')
+            cache_path = info.get("cache_path", "cache")
             print(f"✓ Model loaded: {model_id}")
             print(f"  Device: {device}")
             print(f"  Cache: {cache_path}\n")
 
         return model, processor
 
-    def clear_cache(self, checkpoint: Optional[str] = None) -> None:
+    def clear_cache(self, checkpoint: str | None = None) -> None:
         """
         Clear model cache.
 
@@ -284,21 +265,21 @@ class ModelCache:
             print("Cache information:")
             for ckpt in self.CHECKPOINT_MAP.keys():
                 info = self.get_cache_info(ckpt)
-                status = "✓ cached" if info['is_cached'] else "✗ not cached"
+                status = "✓ cached" if info["is_cached"] else "✗ not cached"
                 print(f"  {ckpt:12} ({info['size_mb']:4.0f} MB): {status}")
             print("\nTo clear a specific model: clear_cache('checkpoint_name')")
             return
 
-        model_id = self.get_model_id(checkpoint)
         info = self.get_cache_info(checkpoint)
 
-        if not info['is_cached']:
+        if not info["is_cached"]:
             print(f"Model '{checkpoint}' is not cached.")
             return
 
-        cache_path = info.get('cache_path')
+        cache_path = info.get("cache_path")
         if cache_path and os.path.exists(cache_path):
             import shutil
+
             shutil.rmtree(cache_path)
             print(f"✓ Cleared cache for '{checkpoint}': {cache_path}")
         else:

@@ -10,11 +10,12 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+import importlib.util
 import os
 import sys
 
 # Add src directory to path for importing samrfi
-sys.path.insert(0, os.path.abspath('../src'))
+sys.path.insert(0, os.path.abspath("../src"))
 
 # Create casatools directory for ReadTheDocs build
 casatools_directory = "/home/docs/.casa/data"
@@ -22,18 +23,18 @@ casatools_directory = "/home/docs/.casa/data"
 if not os.path.exists(casatools_directory):
     os.makedirs(casatools_directory)
 
-# Import samrfi to make modules available for autodoc
-try:
-    import samrfi
-except ImportError as e:
-    print(f"Warning: Could not import samrfi: {e}")
-    print("Continuing with mock imports...")
+# Check for availability of samrfi for autodoc; avoid importing unused module
+if importlib.util.find_spec("samrfi") is None:
+    print("Warning: samrfi not available for autodoc; continuing with mock imports...")
+else:
+    # samrfi is importable; no explicit import required here
+    pass
 
 # -- Project information -----------------------------------------------------
 
-project = 'samrfi'
-copyright = '2024, Derod Deal & Preshanth Jagannathana'
-author = 'Derod Deal & Preshanth Jagannathana'
+project = "samrfi"
+copyright = "2024, Derod Deal & Preshanth Jagannathana"
+author = "Derod Deal & Preshanth Jagannathana"
 
 
 # -- General configuration ---------------------------------------------------
@@ -42,34 +43,35 @@ author = 'Derod Deal & Preshanth Jagannathana'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx_rtd_theme',
+    "sphinx.ext.autodoc",
+    "sphinx_rtd_theme",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # The master toctree document.
-master_doc = 'index'
+master_doc = "index"
 
 # From pyspeckit conf.py
-html_sidebars = {'**':['globaltoc.html', 'localtoc.html', 'relations.html',
-                      'sourcelink.html', 'searchbox.html']}
+html_sidebars = {
+    "**": ["globaltoc.html", "localtoc.html", "relations.html", "sourcelink.html", "searchbox.html"]
+}
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # Mock imports for modules not available during ReadTheDocs build
 autodoc_mock_imports = [
-    'casatools',
-    'casatasks',
-    'torch',
-    'transformers',
-    'monai',
-    'datasets',
-    'pynvml',
+    "casatools",
+    "casatasks",
+    "torch",
+    "transformers",
+    "monai",
+    "datasets",
+    "pynvml",
 ]
 
 # -- Options for HTML output -------------------------------------------------
@@ -78,9 +80,9 @@ autodoc_mock_imports = [
 #
 html_logo = "spklogo3.png"
 
-html_theme = 'sphinx_rtd_theme'
+html_theme = "sphinx_rtd_theme"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]

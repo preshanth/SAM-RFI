@@ -4,15 +4,15 @@ RFI Predictor - Apply trained SAM2 models to new data
 Supports single-pass and iterative flagging with progressive cleaning.
 """
 
-import numpy as np
-import torch
-from tqdm import tqdm
 from pathlib import Path
 
-from transformers import Sam2Processor, Sam2Model
+import numpy as np
+import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers import Sam2Model, Sam2Processor
 
-from samrfi.data import MSLoader, Preprocessor, SAMDataset, AdaptivePatcher, check_ms_compatibility
+from samrfi.data import AdaptivePatcher, MSLoader, Preprocessor, SAMDataset
 
 
 class RFIPredictor:
@@ -121,7 +121,7 @@ class RFIPredictor:
 
         # Pad data if needed
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
-            print(f"  Applying adaptive padding...")
+            print("  Applying adaptive padding...")
             data = patcher.pad_data(data)
         else:
             if not apply_existing_flags:
@@ -145,7 +145,7 @@ class RFIPredictor:
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
         # Use padded shape for reconstruction if padding was applied
-        recon_shape = patcher.get_patch_info()['padded_shape']
+        recon_shape = patcher.get_patch_info()["padded_shape"]
         predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size)
 
         # Crop flags back to original dimensions if padding was used
@@ -265,7 +265,7 @@ class RFIPredictor:
             print("  ✓ Flags saved")
 
         print(f"\n{'='*60}")
-        print(f"✓ Iterative prediction complete")
+        print("✓ Iterative prediction complete")
         print(f"  Final: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}% flagged")
         print(f"{'='*60}")
 

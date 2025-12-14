@@ -5,11 +5,12 @@ Loads raw complex patches into RAM once, then applies GPU transforms on-the-fly 
 Eliminates disk I/O bottleneck while keeping GPU busy.
 """
 
-import torch
-from torch.utils.data import Dataset as TorchDataset
-from pathlib import Path
 import json
 import logging
+from pathlib import Path
+
+import torch
+from torch.utils.data import Dataset as TorchDataset
 
 from .gpu_transforms import GPUTransforms
 
@@ -37,7 +38,7 @@ class RAMCachedDataset(TorchDataset):
     def __init__(
         self,
         data_dir,
-        device='cuda',
+        device="cuda",
         enable_augmentation=True,
         bbox_perturbation=20,
     ):
@@ -55,14 +56,16 @@ class RAMCachedDataset(TorchDataset):
             self.metadata = json.load(f)
 
         # Verify format
-        if self.metadata.get('format') != 'raw':
+        if self.metadata.get("format") != "raw":
             raise ValueError(
                 f"Expected raw format, got {self.metadata.get('format')}. "
                 f"Generate dataset with save_raw=true in config."
             )
 
-        num_batches = self.metadata['num_batches']
-        logger.info(f"Loading {self.metadata['num_samples']} raw samples from {num_batches} batch files into RAM...")
+        num_batches = self.metadata["num_batches"]
+        logger.info(
+            f"Loading {self.metadata['num_samples']} raw samples from {num_batches} batch files into RAM..."
+        )
 
         # Load ALL batches into RAM
         complex_patches_list = []
@@ -75,8 +78,8 @@ class RAMCachedDataset(TorchDataset):
             batch = torch.load(batch_file, weights_only=False)
 
             # Batch contains 'images' (raw complex) and 'labels' (masks)
-            complex_patches_list.append(batch['images'])
-            masks_list.append(batch['labels'])
+            complex_patches_list.append(batch["images"])
+            masks_list.append(batch["labels"])
 
             if (batch_idx + 1) % 5 == 0:
                 logger.info(f"  Loaded {batch_idx + 1}/{num_batches} batches")
@@ -93,18 +96,19 @@ class RAMCachedDataset(TorchDataset):
         self.masks.share_memory_()
 
         # Calculate memory usage
-        mem_gb = (self.complex_patches.element_size() * self.complex_patches.numel() +
-                  self.masks.element_size() * self.masks.numel()) / 1e9
+        mem_gb = (
+            self.complex_patches.element_size() * self.complex_patches.numel()
+            + self.masks.element_size() * self.masks.numel()
+        ) / 1e9
 
-        logger.info(f"✓ Loaded {len(self.complex_patches)} raw samples into RAM ({mem_gb:.2f} GB, shared memory)")
+        logger.info(
+            f"✓ Loaded {len(self.complex_patches)} raw samples into RAM ({mem_gb:.2f} GB, shared memory)"
+        )
         logger.info(f"  Complex patches shape: {self.complex_patches.shape}")
         logger.info(f"  Masks shape: {self.masks.shape}")
 
         # Initialize GPU transforms
-        self.gpu_transforms = GPUTransforms(
-            device=device,
-            enable_augmentation=enable_augmentation
-        )
+        self.gpu_transforms = GPUTransforms(device=device, enable_augmentation=enable_augmentation)
 
     def __len__(self):
         """
@@ -140,7 +144,7 @@ class RAMCachedDataset(TorchDataset):
         # Determine base patch index and augmentation index
         if self.enable_augmentation:
             base_idx = idx // 4  # Which raw patch
-            aug_idx = idx % 4    # Which augmentation (0-3)
+            aug_idx = idx % 4  # Which augmentation (0-3)
         else:
             base_idx = idx
             aug_idx = 0  # No augmentation
@@ -168,8 +172,8 @@ class RAMCachedDataset(TorchDataset):
         image = pixel_values.permute(1, 2, 0).float()  # (3, H, W) -> (H, W, 3)
 
         return {
-            "image": image,              # (H, W, 3) on GPU
-            "label": transformed_mask.float()    # (H, W) on GPU
+            "image": image,  # (H, W, 3) on GPU
+            "label": transformed_mask.float(),  # (H, W) on GPU
         }
 
     def _get_bounding_box_gpu(self, mask):
@@ -205,10 +209,7 @@ class RAMCachedDataset(TorchDataset):
 
             # Random perturbation (on CPU for simplicity)
             perturb = torch.randint(
-                -self.bbox_perturbation,
-                self.bbox_perturbation + 1,
-                (4,),
-                device='cpu'
+                -self.bbox_perturbation, self.bbox_perturbation + 1, (4,), device="cpu"
             )
 
             x_min = max(0, x_min + perturb[0].item())
@@ -217,19 +218,19 @@ class RAMCachedDataset(TorchDataset):
             y_max = min(H, y_max + perturb[3].item())
 
         # Return as tensor (SAM2 format: [x_min, y_min, x_max, y_max])
-        bbox = torch.tensor(
-            [[x_min, y_min, x_max, y_max]],
-            dtype=torch.float32,
-            device=self.device
-        )
+        bbox = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32, device=self.device)
 
         return bbox
 
     def __repr__(self):
-        mem_gb = (self.complex_patches.element_size() * self.complex_patches.numel() +
-                  self.masks.element_size() * self.masks.numel()) / 1e9
-        return (f"RAMCachedDataset(raw_samples={len(self.complex_patches)}, "
-                f"total_samples={len(self)}, "
-                f"augmentation={self.enable_augmentation}, "
-                f"memory={mem_gb:.2f}GB, "
-                f"device={self.device})")
+        mem_gb = (
+            self.complex_patches.element_size() * self.complex_patches.numel()
+            + self.masks.element_size() * self.masks.numel()
+        ) / 1e9
+        return (
+            f"RAMCachedDataset(raw_samples={len(self.complex_patches)}, "
+            f"total_samples={len(self)}, "
+            f"augmentation={self.enable_augmentation}, "
+            f"memory={mem_gb:.2f}GB, "
+            f"device={self.device})"
+        )

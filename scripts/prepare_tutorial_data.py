@@ -19,17 +19,15 @@ import argparse
 import sys
 from pathlib import Path
 
+from compare_flagging_methods import download_tutorial_data
+
 try:
-    from casatasks import importasdm, flagdata, hanningsmooth
+    from casatasks import flagdata, hanningsmooth, importasdm
+
     CASA_AVAILABLE = True
 except ImportError:
     print("ERROR: CASA tasks not available. Run this script within CASA.")
     CASA_AVAILABLE = False
-
-# Import download function from comparison script
-import os
-sys.path.insert(0, str(Path(__file__).parent))
-from compare_flagging_methods import download_tutorial_data
 
 
 def prepare_tutorial_ms(data_dir, output_dir, skip_download=False):
@@ -45,9 +43,9 @@ def prepare_tutorial_ms(data_dir, output_dir, skip_download=False):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("="*70)
+    print("=" * 70)
     print("VLA P-BAND TUTORIAL DATA PREPARATION")
-    print("="*70)
+    print("=" * 70)
 
     # Step 1: Download data if needed
     sdm_path = data_dir / "imag-test-copy.57080.956837025464"
@@ -64,56 +62,52 @@ def prepare_tutorial_ms(data_dir, output_dir, skip_download=False):
     ms_raw = output_dir / "3C129.ms"
     importflags_file = output_dir / "importflags.txt"
 
-    print(f"\n[Step 2/6] Importing SDM to MS...")
+    print("\n[Step 2/6] Importing SDM to MS...")
     print(f"  Input:  {sdm_path}")
     print(f"  Output: {ms_raw}")
 
     if ms_raw.exists():
         print(f"  Removing existing MS: {ms_raw}")
         import shutil
+
         shutil.rmtree(ms_raw)
 
-    importasdm(
-        asdm=str(sdm_path),
-        vis=str(ms_raw),
-        savecmds=True,
-        outfile=str(importflags_file)
-    )
+    importasdm(asdm=str(sdm_path), vis=str(ms_raw), savecmds=True, outfile=str(importflags_file))
     print(f"  ✓ MS created: {ms_raw}")
 
     # Step 3: Apply initial flags
-    print(f"\n[Step 3/6] Applying initial flags...")
+    print("\n[Step 3/6] Applying initial flags...")
 
     # Add clip zeros and shadow flags to importflags.txt
-    with open(importflags_file, 'a') as f:
+    with open(importflags_file, "a") as f:
         f.write("\nmode='clip' clipzeros=True\n")
         f.write("mode='shadow' tolerance=0.0\n")
 
     flagdata(
         vis=str(ms_raw),
-        mode='list',
+        mode="list",
         inpfile=str(importflags_file),
-        action='apply',
-        reason='any',
-        flagbackup=True
+        action="apply",
+        reason="any",
+        flagbackup=True,
     )
     print("  ✓ Initial flags applied")
 
     # Step 4: Flag dead antennas and setup scans
-    print(f"\n[Step 4/6] Flagging dead antennas and setup scans...")
+    print("\n[Step 4/6] Flagging dead antennas and setup scans...")
 
     # Flag ea19 (dead antenna)
-    flagdata(vis=str(ms_raw), mode='manual', antenna='ea19')
+    flagdata(vis=str(ms_raw), mode="manual", antenna="ea19")
     print("  ✓ Flagged ea19 (dead antenna)")
 
     # Flag setup scans
-    flagdata(vis=str(ms_raw), mode='manual', scan='1~2')
+    flagdata(vis=str(ms_raw), mode="manual", scan="1~2")
     print("  ✓ Flagged setup scans 1-2")
 
     # Step 5: Hanning smoothing
     ms_hanning = output_dir / "3C129_pband.ms"
 
-    print(f"\n[Step 5/6] Applying Hanning smoothing...")
+    print("\n[Step 5/6] Applying Hanning smoothing...")
     print(f"  Input:  {ms_raw}")
     print(f"  Output: {ms_hanning}")
     print("  This may take several minutes...")
@@ -121,34 +115,35 @@ def prepare_tutorial_ms(data_dir, output_dir, skip_download=False):
     if ms_hanning.exists():
         print(f"  Removing existing MS: {ms_hanning}")
         import shutil
+
         shutil.rmtree(ms_hanning)
 
     hanningsmooth(
         vis=str(ms_raw),
         outputvis=str(ms_hanning),
-        datacolumn='data',
-        spw='0~15'  # First 16 spectral windows
+        datacolumn="data",
+        spw="0~15",  # First 16 spectral windows
     )
     print(f"  ✓ Hanning-smoothed MS created: {ms_hanning}")
 
     # Step 6: Summary
-    print(f"\n[Step 6/6] Summary")
-    print("="*70)
-    print(f"✓ Tutorial data prepared successfully!")
+    print("\n[Step 6/6] Summary")
+    print("=" * 70)
+    print("✓ Tutorial data prepared successfully!")
     print(f"\nOutput MS: {ms_hanning}")
-    print(f"\nThis MS is ready for the comparison script:")
-    print(f"\n  python compare_flagging_methods.py \\")
+    print("\nThis MS is ready for the comparison script:")
+    print("\n  python compare_flagging_methods.py \\")
     print(f"      --ms {ms_hanning} \\")
-    print(f"      --model /path/to/sam2_model.pth \\")
-    print(f"      --output ./comparison_results/")
-    print("="*70)
+    print("      --model /path/to/sam2_model.pth \\")
+    print("      --output ./comparison_results/")
+    print("=" * 70)
 
     return ms_hanning
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Prepare VLA P-band tutorial data for SAM-RFI comparison',
+        description="Prepare VLA P-band tutorial data for SAM-RFI comparison",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 This script automates the CASA processing steps from the VLA P-band guide:
@@ -164,17 +159,21 @@ Examples:
 
   # Process existing downloaded data
   python prepare_tutorial_data.py --data-dir ./data --output ./processed --skip-download
-        """
+        """,
     )
 
-    parser.add_argument('--download', action='store_true',
-                        help='Download tutorial data before processing')
-    parser.add_argument('--data-dir', default='./tutorial_data',
-                        help='Directory containing (or for) SDM data')
-    parser.add_argument('--output', default='./processed_data',
-                        help='Output directory for processed MS')
-    parser.add_argument('--skip-download', action='store_true',
-                        help='Skip download, use existing data')
+    parser.add_argument(
+        "--download", action="store_true", help="Download tutorial data before processing"
+    )
+    parser.add_argument(
+        "--data-dir", default="./tutorial_data", help="Directory containing (or for) SDM data"
+    )
+    parser.add_argument(
+        "--output", default="./processed_data", help="Output directory for processed MS"
+    )
+    parser.add_argument(
+        "--skip-download", action="store_true", help="Skip download, use existing data"
+    )
 
     args = parser.parse_args()
 
@@ -193,15 +192,16 @@ Examples:
         ms_path = prepare_tutorial_ms(
             data_dir=args.data_dir,
             output_dir=args.output,
-            skip_download=args.skip_download or args.download
+            skip_download=args.skip_download or args.download,
         )
         print(f"\n✓ Success! MS ready at: {ms_path}")
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

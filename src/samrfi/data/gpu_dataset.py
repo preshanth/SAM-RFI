@@ -24,10 +24,10 @@ Author: SAM-RFI Team
 Date: 2025-12-08 (Original), 2025-12-12 (Physics-preserving augmentation fix)
 """
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset as TorchDataset
-import numpy as np
-from typing import Optional, Tuple, List
+
 from .gpu_transforms import GPUTransforms
 
 
@@ -54,11 +54,11 @@ class GPUTransformDataset(TorchDataset):
 
     def __init__(
         self,
-        complex_patches: List[np.ndarray],
-        masks: List[np.ndarray],
-        device: str = 'cuda',
+        complex_patches: list[np.ndarray],
+        masks: list[np.ndarray],
+        device: str = "cuda",
         enable_augmentation: bool = True,
-        stretch_type: Optional[str] = None,
+        stretch_type: str | None = None,
         normalize_before_stretch: bool = False,
         normalize_after_stretch: bool = False,
         bbox_perturbation: int = 20,
@@ -91,20 +91,17 @@ class GPUTransformDataset(TorchDataset):
         self.normalize_after_stretch = normalize_after_stretch
 
         # Initialize GPU transforms
-        self.gpu_transforms = GPUTransforms(
-            device=device,
-            enable_augmentation=enable_augmentation
-        )
+        self.gpu_transforms = GPUTransforms(device=device, enable_augmentation=enable_augmentation)
 
         # Optionally pin patches in memory for faster GPU transfer
-        if pin_memory and device in ['cuda', 'mps']:
+        if pin_memory and device in ["cuda", "mps"]:
             self._pin_patches()
 
     def _pin_patches(self):
         """Pin patches in memory for faster GPU transfer (CUDA only)."""
         # Note: torch.from_numpy creates a view, no copy
         # pin_memory() pins the underlying storage
-        if self.device == 'cuda':
+        if self.device == "cuda":
             try:
                 pinned_patches = []
                 for patch in self.complex_patches:
@@ -149,7 +146,7 @@ class GPUTransformDataset(TorchDataset):
         # Determine base patch index and augmentation index
         if self.enable_augmentation:
             base_idx = idx // 4  # Which raw patch
-            aug_idx = idx % 4    # Which augmentation (0-3)
+            aug_idx = idx % 4  # Which augmentation (0-3)
         else:
             base_idx = idx
             aug_idx = 0  # No augmentation
@@ -182,9 +179,9 @@ class GPUTransformDataset(TorchDataset):
         input_boxes = self._get_bounding_box_gpu(transformed_mask)
 
         return {
-            "pixel_values": pixel_values,          # (3, H, W) or (3, W, H) on GPU
-            "input_boxes": input_boxes,            # (1, 4) on GPU
-            "ground_truth_mask": transformed_mask  # (H, W) or (W, H) on GPU
+            "pixel_values": pixel_values,  # (3, H, W) or (3, W, H) on GPU
+            "input_boxes": input_boxes,  # (1, 4) on GPU
+            "ground_truth_mask": transformed_mask,  # (H, W) or (W, H) on GPU
         }
 
     def _get_bounding_box_gpu(self, mask: torch.Tensor) -> torch.Tensor:
@@ -220,10 +217,7 @@ class GPUTransformDataset(TorchDataset):
 
             # Random perturbation (on CPU for simplicity, negligible cost)
             perturb = torch.randint(
-                -self.bbox_perturbation,
-                self.bbox_perturbation + 1,
-                (4,),
-                device='cpu'
+                -self.bbox_perturbation, self.bbox_perturbation + 1, (4,), device="cpu"
             )
 
             x_min = max(0, x_min + perturb[0].item())
@@ -232,11 +226,7 @@ class GPUTransformDataset(TorchDataset):
             y_max = min(H, y_max + perturb[3].item())
 
         # Return as tensor (SAM2 format: [x_min, y_min, x_max, y_max])
-        bbox = torch.tensor(
-            [[x_min, y_min, x_max, y_max]],
-            dtype=torch.float32,
-            device=self.device
-        )
+        bbox = torch.tensor([[x_min, y_min, x_max, y_max]], dtype=torch.float32, device=self.device)
 
         return bbox
 
@@ -259,11 +249,11 @@ class GPUBatchTransformDataset(TorchDataset):
 
     def __init__(
         self,
-        complex_patches: List[np.ndarray],
-        masks: List[np.ndarray],
-        device: str = 'cuda',
+        complex_patches: list[np.ndarray],
+        masks: list[np.ndarray],
+        device: str = "cuda",
         enable_augmentation: bool = True,
-        stretch_type: Optional[str] = None,
+        stretch_type: str | None = None,
         normalize_before_stretch: bool = False,
         normalize_after_stretch: bool = False,
         bbox_perturbation: int = 20,
@@ -281,10 +271,7 @@ class GPUBatchTransformDataset(TorchDataset):
         self.normalize_after_stretch = normalize_after_stretch
 
         # Initialize GPU transforms
-        self.gpu_transforms = GPUTransforms(
-            device=device,
-            enable_augmentation=enable_augmentation
-        )
+        self.gpu_transforms = GPUTransforms(device=device, enable_augmentation=enable_augmentation)
 
     def __len__(self):
         """Return total number of samples (4x base patches if augmentation enabled)."""
@@ -293,7 +280,7 @@ class GPUBatchTransformDataset(TorchDataset):
         else:
             return len(self.complex_patches)
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, int]:
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, np.ndarray, int]:
         """
         Return RAW data with augmentation index.
 
@@ -305,14 +292,14 @@ class GPUBatchTransformDataset(TorchDataset):
         # Determine base patch index and augmentation index
         if self.enable_augmentation:
             base_idx = idx // 4  # Which raw patch
-            aug_idx = idx % 4    # Which augmentation (0-3)
+            aug_idx = idx % 4  # Which augmentation (0-3)
         else:
             base_idx = idx
             aug_idx = 0  # No augmentation
 
         return self.complex_patches[base_idx], self.masks[base_idx], aug_idx
 
-    def collate_fn(self, batch: List[Tuple[np.ndarray, np.ndarray, int]]) -> dict:
+    def collate_fn(self, batch: list[tuple[np.ndarray, np.ndarray, int]]) -> dict:
         """
         Custom collate function that transforms entire batch on GPU.
 
@@ -326,7 +313,7 @@ class GPUBatchTransformDataset(TorchDataset):
             Batch dict ready for training
         """
         # Separate patches, masks, and augmentation indices
-        complex_patches, masks, aug_indices = zip(*batch)
+        complex_patches, masks, aug_indices = zip(*batch, strict=False)
 
         # Process each sample with its specific augmentation
         pixel_values_list = []
@@ -340,7 +327,7 @@ class GPUBatchTransformDataset(TorchDataset):
             # Apply transforms with specific augmentation
             pixel_vals, trans_mask = self.gpu_transforms.full_transform_pipeline(
                 complex_patch=complex_patch,  # (H, W)
-                mask=mask,                    # (H, W)
+                mask=mask,  # (H, W)
                 augmentation_index=aug_indices[i],  # Apply specific augmentation
                 stretch_type=self.stretch_type,
                 normalize_before_stretch=self.normalize_before_stretch,
@@ -357,22 +344,22 @@ class GPUBatchTransformDataset(TorchDataset):
         try:
             pixel_values = torch.stack(pixel_values_list)  # (B, 3, H, W) or (B, 3, W, H)
             transformed_masks = torch.stack(transformed_masks_list)  # (B, H, W) or (B, W, H)
-        except RuntimeError:
+        except RuntimeError as err:
             # Handle case where shapes don't match (transpose augmentation mixed)
             # This shouldn't happen if batch sampler groups same augmentation together
             raise RuntimeError(
                 "Cannot batch samples with different shapes. "
                 "Ensure batch sampler groups same augmentation indices together, "
                 "or use enable_augmentation=False."
-            )
+            ) from err
 
         # Compute bounding boxes for batch (vectorized on GPU)
         input_boxes = self._get_bounding_boxes_batch_gpu(transformed_masks)
 
         return {
-            "pixel_values": pixel_values,      # (B, 3, H, W) or (B, 3, W, H)
-            "input_boxes": input_boxes,        # (B, 1, 4)
-            "ground_truth_mask": transformed_masks  # (B, H, W) or (B, W, H)
+            "pixel_values": pixel_values,  # (B, 3, H, W) or (B, 3, W, H)
+            "input_boxes": input_boxes,  # (B, 1, 4)
+            "ground_truth_mask": transformed_masks,  # (B, H, W) or (B, W, H)
         }
 
     def _get_bounding_boxes_batch_gpu(self, masks: torch.Tensor) -> torch.Tensor:
@@ -406,10 +393,7 @@ class GPUBatchTransformDataset(TorchDataset):
                 # Apply perturbation
                 if self.bbox_perturbation > 0:
                     perturb = torch.randint(
-                        -self.bbox_perturbation,
-                        self.bbox_perturbation + 1,
-                        (4,),
-                        device='cpu'
+                        -self.bbox_perturbation, self.bbox_perturbation + 1, (4,), device="cpu"
                     )
                     x_min = max(0, x_min + perturb[0].item())
                     y_min = max(0, y_min + perturb[1].item())
@@ -417,9 +401,7 @@ class GPUBatchTransformDataset(TorchDataset):
                     y_max = min(H, y_max + perturb[3].item())
 
                 bbox = torch.tensor(
-                    [[x_min, y_min, x_max, y_max]],
-                    dtype=torch.float32,
-                    device=self.device
+                    [[x_min, y_min, x_max, y_max]], dtype=torch.float32, device=self.device
                 )
 
             bboxes.append(bbox)

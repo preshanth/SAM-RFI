@@ -6,7 +6,6 @@ using padding and cropping strategies to enable SAM-RFI inference.
 """
 
 import numpy as np
-from typing import Tuple, Dict, List
 
 
 class AdaptivePatcher:
@@ -19,8 +18,9 @@ class AdaptivePatcher:
     3. Support both uniform and reflective padding
     """
 
-    def __init__(self, data_shape: Tuple[int, ...], patch_size: int = 1024,
-                 padding_mode: str = 'reflect'):
+    def __init__(
+        self, data_shape: tuple[int, ...], patch_size: int = 1024, padding_mode: str = "reflect"
+    ):
         """
         Initialize adaptive patcher
 
@@ -49,13 +49,15 @@ class AdaptivePatcher:
         self.num_patches_w = self.padded_times // patch_size
         self.total_patches_per_baseline_pol = self.num_patches_h * self.num_patches_w
 
-        print(f"\nAdaptive Patching Configuration:")
+        print("\nAdaptive Patching Configuration:")
         print(f"  Original shape:   {data_shape}")
         print(f"  Patch size:       {patch_size}")
         print(f"  Channels: {self.channels} → {self.padded_channels} (+{self.pad_channels})")
         print(f"  Times:    {self.times} → {self.padded_times} (+{self.pad_times})")
-        print(f"  Patches:  {self.num_patches_h} × {self.num_patches_w} = "
-              f"{self.num_patches_h * self.num_patches_w} per baseline/pol")
+        print(
+            f"  Patches:  {self.num_patches_h} × {self.num_patches_w} = "
+            f"{self.num_patches_h * self.num_patches_w} per baseline/pol"
+        )
 
     @staticmethod
     def _next_multiple(value: int, multiple: int) -> int:
@@ -83,8 +85,8 @@ class AdaptivePatcher:
             (0, self.pad_times),  # times: pad at end
         )
 
-        if self.padding_mode == 'constant':
-            padded = np.pad(data, pad_width, mode='constant', constant_values=0)
+        if self.padding_mode == "constant":
+            padded = np.pad(data, pad_width, mode="constant", constant_values=0)
         else:
             padded = np.pad(data, pad_width, mode=self.padding_mode)
 
@@ -100,27 +102,22 @@ class AdaptivePatcher:
         Returns:
             Cropped flags matching original shape
         """
-        return flags[:, :, :self.channels, :self.times]
+        return flags[:, :, : self.channels, : self.times]
 
-    def get_patch_info(self) -> Dict:
+    def get_patch_info(self) -> dict:
         """Get patching configuration info"""
         return {
-            'original_shape': self.original_shape,
-            'padded_shape': (self.baselines, self.pols,
-                           self.padded_channels, self.padded_times),
-            'patch_size': self.patch_size,
-            'num_patches_h': self.num_patches_h,
-            'num_patches_w': self.num_patches_w,
-            'total_patches': self.baselines * self.pols *
-                           self.num_patches_h * self.num_patches_w,
-            'padding': {
-                'channels': self.pad_channels,
-                'times': self.pad_times
-            }
+            "original_shape": self.original_shape,
+            "padded_shape": (self.baselines, self.pols, self.padded_channels, self.padded_times),
+            "patch_size": self.patch_size,
+            "num_patches_h": self.num_patches_h,
+            "num_patches_w": self.num_patches_w,
+            "total_patches": self.baselines * self.pols * self.num_patches_h * self.num_patches_w,
+            "padding": {"channels": self.pad_channels, "times": self.pad_times},
         }
 
 
-def check_ms_compatibility(ms_path: str, patch_size: int = 1024) -> Dict:
+def check_ms_compatibility(ms_path: str, patch_size: int = 1024) -> dict:
     """
     Check if MS dimensions are compatible with patch_size
 
@@ -140,38 +137,39 @@ def check_ms_compatibility(ms_path: str, patch_size: int = 1024) -> Dict:
     num_times = loader.num_times
 
     # Check divisibility
-    channels_divisible = (num_channels % patch_size == 0)
-    times_divisible = (num_times % patch_size == 0)
+    channels_divisible = num_channels % patch_size == 0
+    times_divisible = num_times % patch_size == 0
 
     # Padding required
-    pad_channels = 0 if channels_divisible else \
-        AdaptivePatcher._next_multiple(num_channels, patch_size) - num_channels
-    pad_times = 0 if times_divisible else \
-        AdaptivePatcher._next_multiple(num_times, patch_size) - num_times
+    pad_channels = (
+        0
+        if channels_divisible
+        else AdaptivePatcher._next_multiple(num_channels, patch_size) - num_channels
+    )
+    pad_times = (
+        0 if times_divisible else AdaptivePatcher._next_multiple(num_times, patch_size) - num_times
+    )
 
     return {
-        'channels': num_channels,
-        'times': num_times,
-        'patch_size': patch_size,
-        'channels_divisible': channels_divisible,
-        'times_divisible': times_divisible,
-        'fully_compatible': channels_divisible and times_divisible,
-        'padding_required': {
-            'channels': pad_channels,
-            'times': pad_times
-        },
-        'recommendation': _get_recommendation(channels_divisible, times_divisible,
-                                             pad_channels, pad_times, patch_size)
+        "channels": num_channels,
+        "times": num_times,
+        "patch_size": patch_size,
+        "channels_divisible": channels_divisible,
+        "times_divisible": times_divisible,
+        "fully_compatible": channels_divisible and times_divisible,
+        "padding_required": {"channels": pad_channels, "times": pad_times},
+        "recommendation": _get_recommendation(
+            channels_divisible, times_divisible, pad_channels, pad_times, patch_size
+        ),
     }
 
 
-def _get_recommendation(ch_div: bool, t_div: bool,
-                        pad_ch: int, pad_t: int, patch_size: int) -> str:
+def _get_recommendation(ch_div: bool, t_div: bool, pad_ch: int, pad_t: int, patch_size: int) -> str:
     """Generate recommendation message"""
     if ch_div and t_div:
         return "✓ Fully compatible - no padding needed"
 
-    msg = f"⚠ Padding required: "
+    msg = "⚠ Padding required: "
     if not ch_div:
         msg += f"+{pad_ch} channels "
     if not t_div:
@@ -181,8 +179,8 @@ def _get_recommendation(ch_div: bool, t_div: bool,
     pad_pct_t = (pad_t / (patch_size - pad_t)) * 100 if pad_t > 0 else 0
 
     if pad_pct_ch > 10 or pad_pct_t > 10:
-        msg += f"(>10% padding - consider retraining with smaller patch_size)"
+        msg += "(>10% padding - consider retraining with smaller patch_size)"
     else:
-        msg += f"(<10% padding - acceptable)"
+        msg += "(<10% padding - acceptable)"
 
     return msg

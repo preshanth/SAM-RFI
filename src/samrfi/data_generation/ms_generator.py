@@ -2,10 +2,8 @@
 MS Data Generator - Generate training data from measurement sets
 """
 
-import os
 import json
 from pathlib import Path
-from tqdm import tqdm
 
 from samrfi.data import MSLoader, Preprocessor
 
@@ -20,7 +18,7 @@ class MSDataGenerator:
         3. Patchify with 4-way rotation augmentation
         4. Normalize + stretch (SQRT/LOG10)
         5. Generate ground truth masks (MAD or custom flags)
-        6. Save HuggingFace dataset to disk
+        6. Save BatchedDataset to disk (batch_*.pt files)
     """
 
     def __init__(self, config):
@@ -67,7 +65,7 @@ class MSDataGenerator:
         loader.load(num_antennas=num_antennas, mode=data_mode)
 
         print(f"  Loaded shape: {loader.data.shape}")
-        print(f"  (baselines, polarizations, channels, time)")
+        print("  (baselines, polarizations, channels, time)")
 
         # Load flags if using custom flags
         proc_config = self.config.processing
@@ -106,8 +104,12 @@ class MSDataGenerator:
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save dataset using HuggingFace format
-        dataset.save_to_disk(str(output_dir))
+        # Save dataset using BatchWriter (BatchedDataset format)
+        from samrfi.data.torch_dataset import BatchWriter
+
+        writer = BatchWriter(output_dir, samples_per_batch=100)
+        writer.add_dataset(dataset)
+        writer.finalize()
 
         # Save metadata
         metadata = {
@@ -139,7 +141,7 @@ class MSDataGenerator:
         print(
             f"  Mask shape: {proc_config.get('patch_size', 128)}x{proc_config.get('patch_size', 128)} (binary)"
         )
-        print(f"  Format: HuggingFace Dataset")
+        print("  Format: BatchedDataset (batch_*.pt files)")
 
         print("\n" + "=" * 60)
         print("✓ Data generation complete!")

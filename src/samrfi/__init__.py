@@ -58,30 +58,29 @@ __version__ = "2.0.0"
 __author__ = "Derod Deal, Preshanth Jagannathan"
 
 # Data module
+# Config module
+from .config import ConfigLoader
 from .data import (
+    BatchedDataset,
+    BatchWriter,
+    HFDatasetWrapper,
     MSLoader,
     Preprocessor,
     SAMDataset,
-    BatchedDataset,
     TorchDataset,
-    BatchWriter,
-    HFDatasetWrapper,
 )
 
 # Data generation module
 from .data_generation import (
-    SyntheticDataGenerator,
     MSDataGenerator,
+    SyntheticDataGenerator,
 )
-
-# Training module
-from .training import SAM2Trainer
 
 # Inference module
 from .inference import RFIPredictor
 
-# Config module
-from .config import ConfigLoader
+# Training module
+from .training import SAM2Trainer
 
 # Utilities
 from .utils import ModelCache

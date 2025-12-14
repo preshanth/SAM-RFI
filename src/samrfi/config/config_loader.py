@@ -3,10 +3,11 @@ Configuration loader for SAM-RFI training and data generation
 Handles YAML config files with validation
 """
 
-import yaml
+from dataclasses import dataclass
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Any
+
+import yaml
 
 
 class DataConfig:
@@ -58,7 +59,7 @@ class TrainingConfig:
     flag_sigma: int = 5
     patch_method: str = "patchify"
     patch_size: int = 128
-    num_patches: Optional[int] = None
+    num_patches: int | None = None
     apply_stretching: bool = True
     custom_flag: bool = True
 
@@ -68,7 +69,7 @@ class TrainingConfig:
     plot_dpi: int = 300
 
     # MS loading configuration
-    num_antennas: Optional[int] = None
+    num_antennas: int | None = None
     data_mode: str = "DATA"
 
     def __post_init__(self):
@@ -137,11 +138,11 @@ class ConfigLoader:
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
         # Load YAML
-        with open(config_file, "r") as f:
+        with open(config_file) as f:
             try:
                 config_dict = yaml.safe_load(f)
             except yaml.YAMLError as e:
-                raise yaml.YAMLError(f"Failed to parse YAML config: {e}")
+                raise yaml.YAMLError(f"Failed to parse YAML config: {e}") from e
 
         if config_dict is None:
             raise ValueError(f"Empty configuration file: {config_path}")
@@ -153,12 +154,12 @@ class ConfigLoader:
         try:
             config = TrainingConfig(**flat_config)
         except TypeError as e:
-            raise ValueError(f"Invalid configuration parameters: {e}")
+            raise ValueError(f"Invalid configuration parameters: {e}") from e
 
         return config
 
     @staticmethod
-    def _flatten_config(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def _flatten_config(config_dict: dict[str, Any]) -> dict[str, Any]:
         """
         Flatten nested YAML structure to match TrainingConfig fields
 
@@ -231,11 +232,11 @@ class ConfigLoader:
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
         # Load YAML
-        with open(config_file, "r") as f:
+        with open(config_file) as f:
             try:
                 config_dict = yaml.safe_load(f)
             except yaml.YAMLError as e:
-                raise yaml.YAMLError(f"Failed to parse YAML config: {e}")
+                raise yaml.YAMLError(f"Failed to parse YAML config: {e}") from e
 
         if config_dict is None:
             raise ValueError(f"Empty configuration file: {config_path}")

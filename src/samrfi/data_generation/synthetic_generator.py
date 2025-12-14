@@ -2,15 +2,14 @@
 Synthetic Data Generator - Generate training data from synthetic RFI simulations
 """
 
-import os
 import json
 from pathlib import Path
-from tqdm import tqdm
+
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from samrfi.data import Preprocessor
-
 
 # Global generator instance for multiprocessing workers
 _global_generator = None
@@ -23,6 +22,7 @@ class RawPatchDataset:
 
     Compatible with BatchWriter interface (uses .images and .labels attributes).
     """
+
     def __init__(self, complex_patches, masks):
         """
         Args:
@@ -51,7 +51,7 @@ def _init_worker(config_dict):
 
     config = dict_to_namespace(config_dict)
     _global_generator = SyntheticDataGenerator(config)
-    _global_proc_config = config_dict.get('processing', {})
+    _global_proc_config = config_dict.get("processing", {})
 
 
 def _worker_generate_and_preprocess(**gen_kwargs):
@@ -171,12 +171,12 @@ class SyntheticDataGenerator:
         rfi_power_min = synth_config.get("rfi_power_min", 1000.0)  # 1000 Jy = 1e6 mJy
         rfi_power_max = synth_config.get("rfi_power_max", 10000.0)  # 10000 Jy
 
-        print(f"\nPhysical Parameters:")
+        print("\nPhysical Parameters:")
         print(f"  Noise level: {noise_level} mJy")
         print(f"  RFI power range: {rfi_power_min}-{rfi_power_max} Jy")
         print(f"  Dynamic range: {rfi_power_max*1000/noise_level:.1e} (~6 orders)")
 
-        print(f"\nConfiguration:")
+        print("\nConfiguration:")
         print(f"  Samples: {num_samples}")
         print(f"  Dimensions: {num_channels} channels × {num_times} times")
         print(f"  Output: {output_path}")
@@ -184,11 +184,11 @@ class SyntheticDataGenerator:
         # Get RFI configuration
         rfi_config = self._parse_rfi_config(synth_config)
 
-        print(f"\nRFI Types Enabled:")
+        print("\nRFI Types Enabled:")
         for rfi_type, params in rfi_config.items():
             count = params["count"]
             # Handle both int and [min, max] list counts
-            if isinstance(count, (list, tuple)):
+            if isinstance(count, list | tuple):
                 if count[1] > 0:  # Check max value
                     print(f"  {rfi_type}: {count[0]}-{count[1]} per sample (randomized)")
             elif count > 0:
@@ -223,10 +223,13 @@ class SyntheticDataGenerator:
         # Check for parallel generation
         generation_workers = synth_config.get("generation_workers", 1)
         if generation_workers > 1:
-            print(f"  Using {generation_workers} parallel workers (each does generation + augmentation)")
+            print(
+                f"  Using {generation_workers} parallel workers (each does generation + augmentation)"
+            )
 
         # Initialize BatchWriters for streaming to disk
         from samrfi.data.torch_dataset import BatchWriter
+
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -234,7 +237,9 @@ class SyntheticDataGenerator:
         generate_mad = synth_config.get("generate_mad_masks", False)
 
         exact_writer = BatchWriter(output_dir / "exact_masks", samples_per_batch=100)
-        mad_writer = BatchWriter(output_dir / "mad_masks", samples_per_batch=100) if generate_mad else None
+        mad_writer = (
+            BatchWriter(output_dir / "mad_masks", samples_per_batch=100) if generate_mad else None
+        )
 
         # Prepare generation kwargs for workers
         gen_kwargs = {
@@ -258,12 +263,12 @@ class SyntheticDataGenerator:
         # Create Pool ONCE outside loop (reuse for all batches)
         pool = None
         if generation_workers > 1:
-            from multiprocessing import Pool
             from functools import partial
+            from multiprocessing import Pool
 
             # Convert config to dict for pickling
             def namespace_to_dict(obj):
-                if hasattr(obj, '__dict__'):
+                if hasattr(obj, "__dict__"):
                     return {k: namespace_to_dict(v) for k, v in obj.__dict__.items()}
                 elif isinstance(obj, dict):
                     return {k: namespace_to_dict(v) for k, v in obj.items()}
@@ -284,14 +289,16 @@ class SyntheticDataGenerator:
                 batch_samples = end_idx - start_idx
 
                 expected_patches_batch = batch_samples * effective_rotations
-                print(f"\n  Batch {batch_idx + 1}/{num_batches}: {batch_samples} raw samples → {expected_patches_batch} patches expected")
+                print(
+                    f"\n  Batch {batch_idx + 1}/{num_batches}: {batch_samples} raw samples → {expected_patches_batch} patches expected"
+                )
 
                 if pool is not None:
                     # Parallel: submit tasks to existing pool
                     async_results = [pool.apply_async(worker_func) for _ in range(batch_samples)]
 
                     results = []
-                    for ar in tqdm(async_results, total=batch_samples, desc=f"    Generating"):
+                    for ar in tqdm(async_results, total=batch_samples, desc="    Generating"):
                         results.append(ar.get())
 
                     # Collect all patches from all workers
@@ -304,15 +311,19 @@ class SyntheticDataGenerator:
                     # Sequential: generate + preprocess one at a time
                     save_raw = proc_config.get("save_raw", False)
 
-                    for i in tqdm(range(batch_samples), desc=f"    Generating"):
-                        waterfall, exact_mask, rfi_params = self._generate_single_sample(**gen_kwargs)
+                    for _ in tqdm(range(batch_samples), desc="    Generating"):
+                        waterfall, exact_mask, rfi_params = self._generate_single_sample(
+                            **gen_kwargs
+                        )
 
                         if save_raw:
                             # Save raw complex patches
                             # Take magnitude of complex values, then average across polarizations
                             waterfall_squeezed = waterfall.squeeze(0)  # Remove baseline dimension
                             magnitude = np.abs(waterfall_squeezed)  # (num_pols, channels, times)
-                            averaged = magnitude.mean(axis=0).astype(np.float32)  # (channels, times)
+                            averaged = magnitude.mean(axis=0).astype(
+                                np.float32
+                            )  # (channels, times)
                             mask_averaged = exact_mask.squeeze(0).max(axis=0).astype(np.uint8)
 
                             complex_patches = torch.from_numpy(averaged).unsqueeze(0)
@@ -328,8 +339,12 @@ class SyntheticDataGenerator:
                                 flag_sigma=proc_config.get("flag_sigma", 5),
                                 use_custom_flags=True,
                                 num_patches=proc_config.get("num_patches", None),
-                                normalize_before_stretch=proc_config.get("normalize_before_stretch", True),
-                                normalize_after_stretch=proc_config.get("normalize_after_stretch", False),
+                                normalize_before_stretch=proc_config.get(
+                                    "normalize_before_stretch", True
+                                ),
+                                normalize_after_stretch=proc_config.get(
+                                    "normalize_after_stretch", False
+                                ),
                                 num_workers=0,
                                 enable_augmentation=proc_config.get("enable_augmentation", True),
                                 augmentation_rotations=proc_config.get("augmentation_rotations", 4),
@@ -343,7 +358,9 @@ class SyntheticDataGenerator:
                 exact_writer._flush()
                 total_raw_samples += batch_samples
 
-                print(f"    Wrote {total_patches_written} patches so far ({total_raw_samples}/{num_samples} raw samples processed)")
+                print(
+                    f"    Wrote {total_patches_written} patches so far ({total_raw_samples}/{num_samples} raw samples processed)"
+                )
         finally:
             # Clean up pool
             if pool is not None:
@@ -360,18 +377,20 @@ class SyntheticDataGenerator:
         save_raw = proc_config.get("save_raw", False)
         metadata_path = output_dir / "exact_masks" / "metadata.json"
         if metadata_path.exists():
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path) as f:
                 batch_metadata = json.load(f)
-            batch_metadata['format'] = 'raw' if save_raw else 'preprocessed'
-            with open(metadata_path, 'w') as f:
+            batch_metadata["format"] = "raw" if save_raw else "preprocessed"
+            with open(metadata_path, "w") as f:
                 json.dump(batch_metadata, f, indent=2)
 
         # Summary
-        print(f"\n[3/5] Generation summary:")
+        print("\n[3/5] Generation summary:")
         print(f"  Raw samples generated: {total_raw_samples}")
         print(f"  Augmentation: {effective_rotations}x rotations")
         print(f"  Total patches written: {total_patches_written}")
-        print(f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}")
+        print(
+            f"  Patch size: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)}"
+        )
         print(f"  Stretch: {proc_config.get('stretch', None) or 'None'}")
 
         # Save generation metadata (separate from batch metadata)
@@ -388,8 +407,9 @@ class SyntheticDataGenerator:
             "num_channels": num_channels,
             "num_times": num_times,
             "rfi_config": {
-                k: v for k, v in rfi_config.items()
-                if (v["count"][1] if isinstance(v["count"], (list, tuple)) else v["count"]) > 0
+                k: v
+                for k, v in rfi_config.items()
+                if (v["count"][1] if isinstance(v["count"], list | tuple) else v["count"]) > 0
             },
             "bandpass": {
                 "enabled": enable_bandpass,
@@ -421,11 +441,15 @@ class SyntheticDataGenerator:
         with open(rfi_params_path, "w") as f:
             json.dump(all_rfi_parameters, f, indent=2)
 
-        print(f"  Exact masks dataset: {output_dir / 'exact_masks'} ({exact_writer.batch_file_idx} batch files)")
+        print(
+            f"  Exact masks dataset: {output_dir / 'exact_masks'} ({exact_writer.batch_file_idx} batch files)"
+        )
         if generate_mad:
-            print(f"  MAD masks dataset: {output_dir / 'mad_masks'} ({mad_writer.batch_file_idx} batch files)")
+            print(
+                f"  MAD masks dataset: {output_dir / 'mad_masks'} ({mad_writer.batch_file_idx} batch files)"
+            )
         else:
-            print(f"  MAD masks: Skipped (generate_mad_masks=False)")
+            print("  MAD masks: Skipped (generate_mad_masks=False)")
         print(f"  Generation metadata: {metadata_path}")
         print(f"  RFI parameters: {rfi_params_path}")
 
@@ -440,19 +464,19 @@ class SyntheticDataGenerator:
         print(
             f"  Mask shape: {proc_config.get('patch_size', 128)}×{proc_config.get('patch_size', 128)} (exact binary)"
         )
-        print(f"  Format: Batched torch files (uncompressed .pt)")
+        print("  Format: Batched torch files (uncompressed .pt)")
 
         print("\n✓ Generation Complete!")
         if generate_mad:
-            print(f"  ✓ TWO datasets generated: exact masks + MAD masks")
-            print(f"  ✓ MAD masks for flagger comparison")
+            print("  ✓ TWO datasets generated: exact masks + MAD masks")
+            print("  ✓ MAD masks for flagger comparison")
         else:
-            print(f"  ✓ Dataset generated: exact masks only")
-        print(f"  ✓ Exact ground truth for training")
-        print(f"  ✓ Physical noise/RFI scales (~10^6 dynamic range)")
-        print(f"  ✓ Batched format for low-memory training")
-        print(f"  ✓ Realistic RFI types (sweeps, bursts, persistent)")
-        print(f"  ✓ Frequency sweeps: linear & quadratic")
+            print("  ✓ Dataset generated: exact masks only")
+        print("  ✓ Exact ground truth for training")
+        print("  ✓ Physical noise/RFI scales (~10^6 dynamic range)")
+        print("  ✓ Batched format for low-memory training")
+        print("  ✓ Realistic RFI types (sweeps, bursts, persistent)")
+        print("  ✓ Frequency sweeps: linear & quadratic")
         if enable_bandpass:
             print(
                 f"  ✓ Bandpass rolloff ({synth_config.get('bandpass_polynomial_order', 8)}th order)"
@@ -507,7 +531,7 @@ class SyntheticDataGenerator:
             count = params["count"]
 
             # Support random counts: if count is [min, max], sample randomly
-            if isinstance(count, (list, tuple)) and len(count) == 2:
+            if isinstance(count, list | tuple) and len(count) == 2:
                 count = np.random.randint(count[0], count[1] + 1)
 
             if count == 0:
@@ -577,7 +601,9 @@ class SyntheticDataGenerator:
                 mask = rfi_mask.copy()
             else:
                 # Pol 3+: Noise only (no RFI)
-                pol_real = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
+                pol_real = np.random.normal(
+                    noise_level, noise_level * 0.1, (num_channels, num_times)
+                )
                 mask = np.zeros_like(rfi_mask)
 
             # Add random phase for complex visibilities
@@ -687,7 +713,7 @@ class SyntheticDataGenerator:
         burst_times = np.random.choice(nt, num_bursts, replace=False)
         burst_widths = np.random.randint(2, 20, num_bursts)
 
-        for t, width in zip(burst_times, burst_widths):
+        for t, width in zip(burst_times, burst_widths, strict=False):
             time_slice = slice(max(0, t - width // 2), min(nt, t + width // 2))
             signal[freq_slice, time_slice] = amp
             mask[freq_slice, time_slice] = True
@@ -709,7 +735,7 @@ class SyntheticDataGenerator:
         burst_times = np.random.choice(nt, num_bursts, replace=False)
         burst_widths = np.random.randint(1, 5, num_bursts)
 
-        for t, width in zip(burst_times, burst_widths):
+        for t, width in zip(burst_times, burst_widths, strict=False):
             time_slice = slice(max(0, t - width // 2), min(nt, t + width // 2))
             signal[:, time_slice] = amp
             mask[:, time_slice] = True
