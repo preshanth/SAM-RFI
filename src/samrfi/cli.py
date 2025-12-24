@@ -157,11 +157,39 @@ def train_command(args):
     trainer = SAM2Trainer(dataset_wrapper, device=config.device, dir_path=config.dir_path)
 
     losses = trainer.train(
+        # Basic training params
         num_epochs=config.num_epochs,
         batch_size=config.batch_size,
         sam_checkpoint=config.model_checkpoint,
         learning_rate=config.learning_rate,
-        plot=config.save_plots,
+        weight_decay=config.weight_decay,
+        # Optimizer settings
+        optimizer=config.optimizer,
+        adam_betas=config.adam_betas,
+        adam_eps=config.adam_eps,
+        momentum=config.momentum,
+        # Loss function settings
+        loss_function=config.loss_function,
+        loss_sigmoid=config.loss_sigmoid,
+        loss_squared_pred=config.loss_squared_pred,
+        loss_reduction=config.loss_reduction,
+        # Model architecture
+        multimask_output=config.multimask_output,
+        freeze_vision_encoder=config.freeze_vision_encoder,
+        freeze_prompt_encoder=config.freeze_prompt_encoder,
+        # Data augmentation
+        bbox_perturbation=config.bbox_perturbation,
+        # DataLoader settings
+        num_workers=config.num_workers,
+        prefetch_factor=config.prefetch_factor,
+        persistent_workers=config.persistent_workers,
+        pin_memory=config.pin_memory,
+        # Training optimization
+        log_interval=config.log_interval,
+        cuda_cache_clear_interval=config.cuda_cache_clear_interval,
+        # Output settings
+        plot=config.plot,
+        save_model=config.save_model,
         validation_dataset=val_dataset,
         model_path=args.resume,  # Resume from checkpoint if provided
     )

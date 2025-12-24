@@ -136,7 +136,7 @@ class Preprocessor:
         augmentation_rotations=4,
     ):
         """
-        Create HuggingFace Dataset from waterfall data.
+        Create TorchDataset from waterfall data.
 
         Args:
             patch_size: Size of square patches (default 128)
@@ -151,7 +151,7 @@ class Preprocessor:
             augmentation_rotations: Number of rotations (1=none, 2=flip, 4=full, default 4)
 
         Returns:
-            HuggingFace Dataset with 'image' and 'label' fields
+            TorchDataset with torch tensor images (H, W, 3) and labels (H, W)
         """
         print("\n[Preprocessor] Creating dataset...")
         print(f"  Input shape: {self.data.shape}")

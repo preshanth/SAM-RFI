@@ -114,6 +114,7 @@ packages = [
     "samrfi.config",
     "samrfi.data_generation",
     "samrfi.inference",
+    "samrfi.evaluation",
     "samrfi.datasets",
 ]
 package-dir = {"" = "src"}
