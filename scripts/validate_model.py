@@ -14,6 +14,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from tqdm import tqdm
 
 from samrfi.data_generation import SyntheticDataGenerator
@@ -27,7 +28,7 @@ def generate_validation_samples(num_samples, config):
 
     Args:
         num_samples: Number of samples to generate
-        config: Configuration object for synthetic generator
+        config: Configuration object for synthetic generator (DataConfig or dict-like)
 
     Returns:
         List of (waterfall_data, ground_truth_mask) tuples
@@ -40,15 +41,65 @@ def generate_validation_samples(num_samples, config):
     generator = SyntheticDataGenerator(config)
     samples = []
 
+    # Extract synthetic config from provided object (support DataConfig or dict)
+    if hasattr(config, "synthetic"):
+        synth_config = config.synthetic
+        proc_config = getattr(config, "processing", {})
+    elif isinstance(config, dict):
+        synth_config = config.get("synthetic", {})
+        proc_config = config.get("processing", {})
+    else:
+        # Fallback: assume loading via ConfigLoader.load_data was not used
+        raise ValueError(
+            'Config for validation must include a "synthetic" section (use ConfigLoader.load_data)'
+        )
+
+    # Build generation kwargs consistent with SyntheticDataGenerator.generate()
+    num_channels = synth_config.get("num_channels", 1024)
+    num_times = synth_config.get("num_times", 1024)
+    noise_level = synth_config.get("noise_mjy", 1.0)
+    rfi_power_min = synth_config.get("rfi_power_min", 1000.0)
+    rfi_power_max = synth_config.get("rfi_power_max", 10000.0)
+
+    rfi_config = generator._parse_rfi_config(synth_config)
+
+    enable_bandpass = synth_config.get("enable_bandpass_rolloff", False)
+    bandpass_order = synth_config.get("bandpass_polynomial_order", 8)
+    num_polarizations = synth_config.get("num_polarizations", 1)
+    pol_corr = synth_config.get("polarization_correlation", 0.8)
+
+    gen_kwargs = {
+        "num_channels": num_channels,
+        "num_times": num_times,
+        "noise_level": noise_level,
+        "rfi_power_min": rfi_power_min,
+        "rfi_power_max": rfi_power_max,
+        "rfi_config": rfi_config,
+        "enable_bandpass": enable_bandpass,
+        "bandpass_order": bandpass_order,
+        "num_polarizations": num_polarizations,
+        "pol_corr": pol_corr,
+        "synth_config": synth_config,
+    }
+
     for i in tqdm(range(num_samples), desc="Generating samples"):
-        waterfall, exact_mask, rfi_params = generator._generate_single_sample()
+        waterfall, exact_mask, rfi_params = generator._generate_single_sample(**gen_kwargs)
         samples.append((waterfall, exact_mask))
 
     print(f"✓ Generated {len(samples)} validation samples")
     return samples
 
 
-def run_validation(model_path, template_ms, output_dir, num_samples=10, config=None):
+def run_validation(
+    model_path,
+    template_ms,
+    output_dir,
+    num_samples=10,
+    config=None,
+    sam_checkpoint="large",
+    allow_partial_load=False,
+    auto_select_sam=False,
+):
     """
     Run full validation: generate data, predict, compare, plot.
 
@@ -58,6 +109,9 @@ def run_validation(model_path, template_ms, output_dir, num_samples=10, config=N
         output_dir: Directory to save results
         num_samples: Number of samples to validate
         config: Synthetic data configuration (uses default if None)
+        sam_checkpoint: SAM variant to instantiate ('tiny','small','base_plus','large')
+        allow_partial_load: If True, allow partial loading of checkpoint when shapes mismatch
+        auto_select_sam: If True, automatically select the SAM variant that best matches the checkpoint
 
     Returns:
         Dictionary with aggregated metrics
@@ -77,7 +131,13 @@ def run_validation(model_path, template_ms, output_dir, num_samples=10, config=N
     print(f"\n{'='*60}")
     print("Loading Model")
     print(f"{'='*60}")
-    predictor = RFIPredictor(model_path=model_path, device="cuda")
+    predictor = RFIPredictor(
+        model_path=model_path,
+        sam_checkpoint=sam_checkpoint,
+        device="cuda",
+        allow_partial_load=allow_partial_load,
+        auto_select_sam=auto_select_sam,
+    )
 
     # Process each sample
     all_metrics = []
@@ -141,7 +201,7 @@ def run_validation(model_path, template_ms, output_dir, num_samples=10, config=N
     print("Validation Results")
     print(f"{'='*60}")
     print(f"Samples: {len(all_metrics)}")
-    print(f"\nAggregate Metrics:")
+    print("\nAggregate Metrics:")
     for metric, value in aggregated.items():
         print(f"  {metric:12s}: {value['mean']:.3f} ± {value['std']:.3f}")
 
@@ -256,15 +316,65 @@ def main():
     parser.add_argument(
         "--config", help="Path to synthetic data config (uses default if not provided)"
     )
+    parser.add_argument(
+        "--sam-checkpoint",
+        choices=["tiny", "small", "base_plus", "large"],
+        default="large",
+        help="SAM2 base checkpoint variant to instantiate (default: large)",
+    )
+    parser.add_argument(
+        "--allow-partial-load",
+        action="store_true",
+        help="Allow partial loading of checkpoint when shapes mismatch (not recommended)",
+    )
+    parser.add_argument(
+        "--auto-select-sam",
+        action="store_true",
+        help="Auto-select the SAM2 variant that best matches the checkpoint (may download multiple models; potentially slow)",
+    )
+    parser.add_argument(
+        "--print-checkpoint-keys",
+        action="store_true",
+        help="Print checkpoint top-level keys and model parameter shapes (if present) and exit",
+    )
 
     args = parser.parse_args()
 
-    # Load config if provided
+    # Load config if provided (data-generation style config expected)
     config = None
     if args.config:
         from samrfi.config import ConfigLoader
 
-        config = ConfigLoader.load(args.config)
+        # Use load_data to preserve the nested 'synthetic' and 'processing' sections
+        config = ConfigLoader.load_data(args.config)
+
+    # Optionally print checkpoint info and exit
+    if args.print_checkpoint_keys:
+        ck = torch.load(args.model, map_location="cpu")
+        print("Checkpoint type:", type(ck))
+        if isinstance(ck, dict):
+            print("Top-level keys:", list(ck.keys()))
+            # If model_state_dict present, show a subset of its keys and shapes
+            candidate = None
+            if "model_state_dict" in ck:
+                candidate = ck["model_state_dict"]
+            elif "state_dict" in ck:
+                candidate = ck["state_dict"]
+            elif all(isinstance(v, torch.Tensor) for v in ck.values()):
+                candidate = ck
+
+            if candidate is not None:
+                print("\nModel parameter sample (first 40 items):")
+                for i, (k, v) in enumerate(candidate.items()):
+                    if i >= 40:
+                        break
+                    print(f"  {k}: {tuple(v.shape) if hasattr(v, 'shape') else type(v)}")
+            else:
+                print("No obvious model_state_dict found in checkpoint.")
+        else:
+            print("Checkpoint is not a dict; likely a plain state_dict mapping")
+        print("\nExiting (print-checkpoint-keys requested).")
+        return
 
     # Run validation
     results = run_validation(
@@ -273,6 +383,9 @@ def main():
         output_dir=args.output,
         num_samples=args.num_samples,
         config=config,
+        sam_checkpoint=args.sam_checkpoint,
+        allow_partial_load=args.allow_partial_load,
+        auto_select_sam=args.auto_select_sam,
     )
 
     # Save results to JSON
@@ -285,7 +398,7 @@ def main():
     with open(Path(args.output) / "results.json", "w") as f:
         json.dump(results_serializable, f, indent=2)
 
-    print(f"\n✓ Validation complete!")
+    print("\n✓ Validation complete!")
 
 
 if __name__ == "__main__":

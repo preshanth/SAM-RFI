@@ -90,10 +90,7 @@ def inject_synthetic_data(
     # For simplicity, assume all SPWs have same channel count
     # and we're filling all SPWs with the same data
     if len(set(channels_per_spw)) > 1:
-        print(
-            "  WARNING: MS has SPWs with different channel counts. "
-            "Using first SPW only."
-        )
+        print("  WARNING: MS has SPWs with different channel counts. " "Using first SPW only.")
 
     channels_in_spw = channels_per_spw[0]
 
@@ -119,14 +116,10 @@ def inject_synthetic_data(
 
         for spw_idx in range(num_spw):
             # Query this baseline + SPW
-            subtable = tb.query(
-                f"DATA_DESC_ID=={spw_idx} && ANTENNA1=={ant1} && ANTENNA2=={ant2}"
-            )
+            subtable = tb.query(f"DATA_DESC_ID=={spw_idx} && ANTENNA1=={ant1} && ANTENNA2=={ant2}")
 
             if subtable.nrows() == 0:
-                print(
-                    f"  WARNING: No rows for baseline ({ant1},{ant2}), SPW {spw_idx}"
-                )
+                print(f"  WARNING: No rows for baseline ({ant1},{ant2}), SPW {spw_idx}")
                 subtable.close()
                 continue
 
@@ -138,8 +131,115 @@ def inject_synthetic_data(
             else:
                 spw_data = baseline_data  # Same data for all SPWs
 
-            # Write to DATA column
-            subtable.putcol("DATA", spw_data)
+            # Write to DATA column: read existing cell shape first and build a matching array
+            nrows = subtable.nrows()
+
+            # Ensure time dimension matches rows in this subtable
+            if spw_data.shape[2] != nrows:
+                subtable.close()
+                raise ValueError(
+                    f"Time mismatch for baseline ({ant1},{ant2}), SPW {spw_idx}: "
+                    f"data times={spw_data.shape[2]} but MS has {nrows} rows"
+                )
+
+            # Read existing DATA column in bulk to infer per-row shape and dtype
+            try:
+                existing = subtable.getcol("DATA")
+            except Exception as e:
+                subtable.close()
+                raise RuntimeError(
+                    "Unable to read DATA column with getcol; MS may have non-uniform row shapes. "
+                    "Aborting injection." + f" (error: {e})"
+                )
+
+            # existing typical shape: (npol, nchan, nrows) or (npol, nchan, nrows, extra)
+            # Find which axis corresponds to rows (should equal nrows)
+            row_axis = None
+            for ax in range(existing.ndim):
+                if existing.shape[ax] == nrows:
+                    row_axis = ax
+                    break
+
+            if row_axis is None:
+                subtable.close()
+                raise RuntimeError(
+                    f"Unexpected DATA column shape {existing.shape}; cannot find rows axis matching {nrows}"
+                )
+
+            cell_dtype = existing.dtype
+
+            # We will construct new_col with same shape as existing, then fill it
+            new_col = np.empty_like(existing)
+
+            npols = spw_data.shape[0]
+            nchan = spw_data.shape[1]
+
+            # Determine how to map spw_data (pols, chan, time) into existing axes
+            # Strategy: identify axes for pols and channels in existing array (excluding row_axis)
+            other_axes = [i for i in range(existing.ndim) if i != row_axis]
+            if len(other_axes) < 2:
+                subtable.close()
+                raise RuntimeError(f"DATA column has unexpected ndim {existing.ndim}")
+
+            ax_pol, ax_chan = other_axes[0], other_axes[1]
+
+            # Determine if order is (pol,chan,rows) or (chan,pol,rows)
+            pol_size = existing.shape[ax_pol]
+            chan_size = existing.shape[ax_chan]
+
+            transpose = False
+            add_axis = False
+
+            if pol_size == npols and chan_size == nchan:
+                transpose = False
+            elif pol_size == nchan and chan_size == npols:
+                transpose = True
+            else:
+                # Maybe there is an extra trailing singleton axis (e.g., (pol, chan, rows, 1))
+                # Try to handle if one of other_axes corresponds to a trailing extra dim
+                # We'll handle by checking for singleton dims later per-cell
+                pass
+
+            # Fill new_col by iterating over time rows for speed and clarity
+            for t in range(nrows):
+                cell = spw_data[:, :, t]  # (pols, channels)
+                if transpose:
+                    cell = cell.T
+                # Place cell into new_col along row_axis==t
+                # Build an index tuple of slices
+                idx = [slice(None)] * existing.ndim
+                idx[row_axis] = t
+                # If existing has extra dims beyond pol/chan/time, we expect them to be singleton
+                # and will broadcast the cell into that shape
+                # Create a view of destination with shape matching cell
+                dest = new_col[tuple(idx)]
+                # dest has shape (pol, chan) or (pol, chan, extra)
+                if dest.ndim == 2:
+                    dest[:] = cell.astype(cell_dtype)
+                elif dest.ndim == 3 and dest.shape[2] == 1:
+                    dest[:, :, 0] = cell.astype(cell_dtype)
+                else:
+                    subtable.close()
+                    raise RuntimeError(
+                        f"Unsupported per-row DATA cell shape when writing: {dest.shape}"
+                    )
+
+            # Try bulk write first, fall back to per-row putcell if needed
+            try:
+                subtable.putcol("DATA", new_col)
+            except Exception:
+                # Fallback: per-row writes
+                for row_idx in range(nrows):
+                    # Extract cell-sized slice matching existing layout
+                    idx = [slice(None)] * existing.ndim
+                    idx[row_axis] = row_idx
+                    cell_val = new_col[tuple(idx)]
+                    try:
+                        subtable.putcell("DATA", row_idx, cell_val)
+                    except Exception as e:
+                        subtable.close()
+                        raise RuntimeError(f"Failed to write DATA row {row_idx}: {e}")
+
             subtable.close()
 
     tb.close()

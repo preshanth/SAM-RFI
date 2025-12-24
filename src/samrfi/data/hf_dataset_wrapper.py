@@ -4,8 +4,9 @@ Conversion utilities between TorchDataset/BatchedDataset and HuggingFace Dataset
 
 import numpy as np
 import torch
-from datasets import Dataset
 from PIL import Image
+
+from datasets import Dataset
 
 from .torch_dataset import TorchDataset
 

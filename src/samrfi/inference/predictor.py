@@ -29,7 +29,15 @@ class RFIPredictor:
         >>> flags = predictor.predict_iterative('observation.ms', num_iterations=3)
     """
 
-    def __init__(self, model_path, sam_checkpoint="large", device="cuda", batch_size=4):
+    def __init__(
+        self,
+        model_path,
+        sam_checkpoint="large",
+        device="cuda",
+        batch_size=4,
+        allow_partial_load: bool = False,
+        auto_select_sam: bool = False,
+    ):
         """
         Initialize predictor.
 
@@ -42,6 +50,7 @@ class RFIPredictor:
         self.model_path = Path(model_path)
         self.device = device
         self.batch_size = batch_size
+        self.auto_select_sam = auto_select_sam
 
         # Map checkpoint names to HuggingFace model names
         checkpoint_map = {
@@ -60,10 +69,140 @@ class RFIPredictor:
         self.model = Sam2Model.from_pretrained(model_name)
 
         # Load trained weights
+        # Note: We load the SAM2 architecture via HuggingFace (Sam2Model.from_pretrained)
+        # because it provides the model class and pretrained backbone. The file you pass
+        # via `model_path` is expected to be either a plain state_dict (mapping of tensor
+        # names -> tensors) or a full training checkpoint dict containing a 'model_state_dict'
+        # (and possibly optimizer state, epoch, metadata). We support both formats here.
         print(f"Loading trained weights from: {self.model_path}")
         checkpoint = torch.load(self.model_path, map_location=device)
-        self.model.load_state_dict(checkpoint)
 
+        # Resolve state_dict from common wrapper formats
+        state_dict = None
+        if isinstance(checkpoint, dict):
+            if "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
+            elif "state_dict" in checkpoint:
+                state_dict = checkpoint["state_dict"]
+            else:
+                # Heuristic: if all values are tensors, treat as state_dict
+                if all(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+                    state_dict = checkpoint
+                else:
+                    # Try a few common candidate keys
+                    for candidate in ("model", "model_state", "model_state_dict"):
+                        if candidate in checkpoint:
+                            state_dict = checkpoint[candidate]
+                            break
+        else:
+            # checkpoint is likely a state_dict mapping
+            state_dict = checkpoint
+
+        if state_dict is None:
+            raise ValueError(
+                f"Unrecognized checkpoint format when loading {self.model_path}. Keys: {list(checkpoint.keys())}"
+            )
+
+        # Helper: if auto-selection is enabled we will compare the checkpoint against
+        # the available SAM variants and choose the one with the fewest mismatches.
+        def _variant_score(candidate_variant):
+            model_name_c = checkpoint_map.get(candidate_variant)
+            try:
+                m_c = Sam2Model.from_pretrained(model_name_c)
+            except Exception as e:
+                print(f"Failed to instantiate model for variant {candidate_variant}: {e}")
+                return (1e9, None)  # very bad score
+            mism, missing, unexpected = _compare_to_model(m_c)
+            score = len(mism) + len(missing) + len(unexpected)
+            return (score, (mism, missing, unexpected))
+
+        # Auto-selection helper exposed as method for potential reuse
+        def _auto_select_internal():
+            candidates = ["tiny", "small", "base_plus", "large"]
+            scores = []
+            for c in candidates:
+                print(f"Testing SAM variant: {c} ...")
+                s, details = _variant_score(c)
+                scores.append((s, c, details))
+            scores.sort()
+            best = scores[0]
+            if best[0] >= 1e9:
+                return None
+            return best[1]
+
+        # Attach method to self for later usage
+        self._auto_select_sam_variant = lambda sd: (lambda: _auto_select_internal())()
+
+        # Before loading, detect obvious shape mismatches and missing/unexpected keys so we can
+        # provide a clear error message rather than silently continuing with partially-initialized
+        # weights which often leads to silent bad results.
+        def _compare_to_model(model_obj):
+            ms = model_obj.state_dict()
+            mism = []
+            for k, v in state_dict.items():
+                if k in ms and isinstance(v, torch.Tensor) and v.shape != ms[k].shape:
+                    mism.append((k, tuple(v.shape), tuple(ms[k].shape)))
+            missing = [k for k in ms.keys() if k not in state_dict]
+            unexpected = [k for k in state_dict.keys() if k not in ms]
+            return mism, missing, unexpected
+
+        model_state = self.model.state_dict()
+        mismatched, missing_in_ckpt, unexpected_in_ckpt = _compare_to_model(self.model)
+
+        # If there are shape mismatches and user asked for auto-selection, attempt to find best match
+        if mismatched and self.auto_select_sam:
+            print(
+                "Warning: shape mismatches detected; attempting to auto-select the SAM variant that best matches the checkpoint (this may download models and be slow)..."
+            )
+            best_variant = self._auto_select_sam_variant(state_dict)
+            if best_variant:
+                print(
+                    f"Auto-selected SAM variant: {best_variant}. Re-instantiating model and retrying load."
+                )
+                model_name = checkpoint_map.get(best_variant, checkpoint_map["large"])
+                self.processor = Sam2Processor.from_pretrained(model_name)
+                self.model = Sam2Model.from_pretrained(model_name)
+                # Recompute mismatches against new model
+                mismatched, missing_in_ckpt, unexpected_in_ckpt = _compare_to_model(self.model)
+            else:
+                print("Auto-selection failed to find a better match; proceeding to error handling.")
+
+        # If there are shape mismatches, fail early unless user explicitly allows partial loads
+        if mismatched and not allow_partial_load:
+            msg_lines = [
+                "Checkpoint / model architecture mismatch detected:",
+                f"  - Mismatched parameter shapes: {len(mismatched)}",
+                f"  - Missing keys in checkpoint: {len(missing_in_ckpt)}",
+                f"  - Unexpected keys in checkpoint: {len(unexpected_in_ckpt)}",
+                "First few mismatches (checkpoint_shape -> model_shape):",
+            ]
+            for k, ck_shape, model_shape in mismatched[:10]:
+                msg_lines.append(f"  {k}: {ck_shape} -> {model_shape}")
+
+            msg_lines.append("")
+            msg_lines.append(
+                "Suggestion: make sure the `sam_checkpoint` argument matches the architecture used when the checkpoint was created (tiny/small/base_plus/large),"
+            )
+            msg_lines.append(
+                "or set `allow_partial_load=True` when constructing RFIPredictor to permit partial loading (not recommended unless you know what you're doing)."
+            )
+
+            raise ValueError("\n".join(msg_lines))
+
+        # Attempt to load state dict. If mismatches exist but allow_partial_load=True we'll
+        # load with strict=False and print a summary for the user.
+        if mismatched and allow_partial_load:
+            print(
+                f"Warning: {len(mismatched)} parameter shape mismatches detected; loading with strict=False (partial init)."
+            )
+            load_result = self.model.load_state_dict(state_dict, strict=False)
+            # load_result is a namedtuple: (missing_keys, unexpected_keys)
+            print(
+                f"  Missing keys: {len(load_result.missing_keys)}; Unexpected keys: {len(load_result.unexpected_keys)}"
+            )
+        else:
+            # No mismatches (or allowed above) — do a strict load
+            self.model.load_state_dict(state_dict)
         # Move to device
         self.model.to(device)
         self.model.eval()

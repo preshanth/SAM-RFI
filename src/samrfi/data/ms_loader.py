@@ -45,7 +45,7 @@ class MSLoader:
 
         # Main table
         self.tb = table()
-        self.tb.open(ms_path, nomodify=False)
+        self.tb.open(self.ms_path, nomodify=False)
 
         # Get number of time samples
         subtable = self.tb.query("DATA_DESC_ID==0 && ANTENNA1==0 && ANTENNA2==1")

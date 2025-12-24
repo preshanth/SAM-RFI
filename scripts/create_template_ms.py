@@ -10,10 +10,14 @@ Usage:
 """
 
 import argparse
+import os
+import re
 import shutil
 from pathlib import Path
 
-from casatasks import simobserve
+from casatasks import flagdata
+from casatasks.private import simutil
+from casatools import ctsys, measures, simulator, table
 
 
 def create_template_ms(
@@ -70,52 +74,113 @@ def create_template_ms(
         print(f"\nRemoving existing project: {project_dir}")
         shutil.rmtree(project_dir)
 
-    # Run simobserve
-    print(f"\nRunning simobserve...")
-    print("This will create an empty MS with the specified structure...")
+    # Create MS using casatools simulator (replacement for simobserve)
+    print("\nCreating MS with casatools simulator...")
 
-    simobserve(
-        project=project_name,
-        skymodel="",  # Empty sky (no sources)
-        inbright="",
-        indirection="J2000 10h00m00.0s -30d00m00.0s",  # Arbitrary direction
-        incell="0.5arcsec",
-        inwidth=bandwidth,
-        incenter=frequency,
-        innchan=num_channels,
-        # Observation parameters
-        obsmode="int",  # Interferometer
-        antennalist=antennalist,
-        totaltime=total_time_str,
-        integration=f"{integration_time}s",
-        # Output
-        thermalnoise="",  # No noise
-        graphics="none",
-        verbose=False,
+    # Helper to parse human-readable freq/bandwidth strings like '1.5GHz', '128MHz'
+    def _parse_size(s):
+        s = str(s).strip()
+        # Match a numeric value optionally followed by a unit like Hz, kHz, MHz, GHz (case-insensitive)
+        m = re.match(r"^([0-9]*\.?[0-9]+)\s*([kKmMgG]?[hH][zZ])?$", s)
+        if not m:
+            raise ValueError(f"Cannot parse frequency/bandwidth size: {s}")
+        val = float(m.group(1))
+        unit = (m.group(2) or "Hz").lower()
+        multipliers = {"hz": 1.0, "khz": 1e3, "mhz": 1e6, "ghz": 1e9}
+        return val * multipliers.get(unit, 1.0)
+
+    msname = str(output_path)
+
+    # Remove any existing MS at target
+    if os.path.exists(msname):
+        print(f"Removing existing MS: {msname}")
+        shutil.rmtree(msname)
+
+    # Prepare antennalist path (try to resolve within CASA simmos if given as simple name)
+    antennalist_path = antennalist
+    if not os.path.isabs(antennalist_path) or not os.path.exists(antennalist_path):
+        try:
+            simmos_dir = ctsys.resolve("alma/simmos")
+            candidate = os.path.join(simmos_dir, antennalist)
+            if os.path.exists(candidate):
+                antennalist_path = candidate
+        except Exception:
+            # fallback to given antennalist
+            pass
+
+    # Open simulator and construct MS
+    sm = simulator()
+    me = measures()
+    mysu = simutil.simutil()
+
+    sm.open(ms=msname)
+
+    # Read antenna config and optionally limit to requested number of antennas
+    (x, y, z, d, an, an2, telname, obspos) = mysu.readantenna(antennalist_path)
+    if num_antennas and num_antennas < len(an):
+        an = an[:num_antennas]
+        x = x[:num_antennas]
+        y = y[:num_antennas]
+        z = z[:num_antennas]
+        d = d[:num_antennas]
+
+    sm.setconfig(
+        telescopename=telname,
+        x=x,
+        y=y,
+        z=z,
+        dishdiameter=d,
+        mount=["alt-az"],
+        antname=an,
+        coordsystem="local",
+        referencelocation=me.observatory(telname),
     )
 
-    # Find the created MS
-    # simobserve creates: project/project.antennalist.ms
-    ms_pattern = list(project_dir.glob("*.ms"))
+    sm.setfeed(mode="perfect R L", pol=[""])
 
-    if not ms_pattern:
-        raise FileNotFoundError(f"No MS created in {project_dir}")
+    center_freq_hz = _parse_size(frequency)
+    bandwidth_hz = _parse_size(bandwidth)
+    deltafreq_hz = bandwidth_hz / max(1, num_channels)
 
-    created_ms = ms_pattern[0]
-    print(f"\n✓ MS created: {created_ms}")
+    sm.setspwindow(
+        spwname="SPW0",
+        freq=f"{int(center_freq_hz)}Hz",
+        deltafreq=f"{int(bandwidth_hz)}Hz",
+        freqresolution=f"{int(deltafreq_hz)}Hz",
+        nchannels=num_channels,
+        stokes="RR RL LR LL",
+    )
 
-    # Move to desired output location
-    if output_path.exists():
-        shutil.rmtree(output_path)
+    # Phase center (match previous indirection)
+    sm.setfield(
+        sourcename="fake",
+        sourcedirection=me.direction(rf="J2000", v0="10h00m00.0s", v1="-30d00m00.0s"),
+    )
 
-    shutil.move(str(created_ms), str(output_path))
-    print(f"✓ Moved to: {output_path}")
+    sm.setlimits(shadowlimit=0.01, elevationlimit="1deg")
+    sm.setauto(autocorrwt=0.0)
 
-    # Clean up project directory
-    shutil.rmtree(project_dir)
+    # Compute start/stop times from total_time_sec
+    total_time_hours = total_time_sec / 3600.0
+    start = f"-{total_time_hours/2:.6f}h"
+    stop = f"+{total_time_hours/2:.6f}h"
+
+    sm.settimes(
+        integrationtime=f"{integration_time}s",
+        usehourangle=True,
+        referencetime=me.epoch("UTC", "2019/10/4/00:00:00"),
+    )
+
+    sm.observe(sourcename="fake", spwname="SPW0", starttime=start, stoptime=stop)
+
+    sm.close()
+
+    # Ensure DATA column exists/unflag everything
+    flagdata(vis=msname, mode="unflag")
+
+    print(f"\n✓ MS created: {msname}")
 
     # Verify dimensions
-    from casatools import table
 
     tb = table()
     tb.open(str(output_path))
@@ -165,12 +230,8 @@ def main():
         default="vla.d.cfg",
         help="Antenna configuration (default: vla.d.cfg)",
     )
-    parser.add_argument(
-        "--frequency", default="1.5GHz", help="Center frequency (default: 1.5GHz)"
-    )
-    parser.add_argument(
-        "--bandwidth", default="128MHz", help="Total bandwidth (default: 128MHz)"
-    )
+    parser.add_argument("--frequency", default="1.5GHz", help="Center frequency (default: 1.5GHz)")
+    parser.add_argument("--bandwidth", default="128MHz", help="Total bandwidth (default: 128MHz)")
 
     args = parser.parse_args()
 
