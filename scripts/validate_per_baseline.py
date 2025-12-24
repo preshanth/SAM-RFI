@@ -207,15 +207,14 @@ def main():
         baseline_map=baseline_list,
     )
 
-    # Run prediction ONCE on full MS
+    # Run SAM prediction on in-memory data (fast, no MS reload)
     print(f"\n{'='*60}")
-    print("Running Prediction")
+    print("Running SAM-RFI Prediction")
     print(f"{'='*60}")
-    predicted_flags = predictor.predict_ms(
-        ms_path=work_ms,
+    predicted_flags = predictor.predict_array(
+        data=full_waterfall,
         patch_size=patch_size,
         stretch=stretch,
-        save_flags=False,
         enable_augmentation=enable_aug,
         normalize_before_stretch=norm_before,
         normalize_after_stretch=norm_after,

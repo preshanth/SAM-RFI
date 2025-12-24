@@ -134,6 +134,7 @@ class Preprocessor:
         num_workers=4,
         enable_augmentation=True,
         augmentation_rotations=4,
+        inference_mode=False,
     ):
         """
         Create TorchDataset from waterfall data.
@@ -149,6 +150,7 @@ class Preprocessor:
             num_workers: Number of parallel workers for preprocessing (0 for sequential, -1 for all cores, default 4)
             enable_augmentation: Enable rotation augmentation (default True)
             augmentation_rotations: Number of rotations (1=none, 2=flip, 4=full, default 4)
+            inference_mode: If True, skip MAD flag generation and shuffling (for inference, default False)
 
         Returns:
             TorchDataset with torch tensor images (H, W, 3) and labels (H, W)
@@ -233,7 +235,14 @@ class Preprocessor:
 
         # Step 6: Generate or use flags
         # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
-        if use_custom_flags and augmented_flags is not None:
+        if inference_mode:
+            print("  [6/7] Inference mode: creating dummy flags (not used)...")
+            # Create dummy flags - not used during inference
+            self.patch_flags = np.zeros(
+                (len(self.patches), self.patches[0].shape[0], self.patches[0].shape[1]),
+                dtype=np.uint8,
+            )
+        elif use_custom_flags and augmented_flags is not None:
             print("  [6/7] Using custom flags (respecting incoming flags)...")
             # Flags already patchified (or converted to array) in Step 2
             self.patch_flags = augmented_flags
@@ -245,16 +254,22 @@ class Preprocessor:
 
         print(f"    Flag patches: {self.patch_flags.shape}")
 
-        # Step 7: Remove blank patches
-        print("  [7/7] Removing blank patches...")
-        initial_count = len(self.patches)
-        self._remove_blank_patches()
-        removed = initial_count - len(self.patches)
-        print(f"    Removed {removed} blank patches, {len(self.patches)} remain")
+        # Step 7: Remove blank patches (skip in inference mode to preserve order)
+        if not inference_mode:
+            print("  [7/7] Removing blank patches...")
+            initial_count = len(self.patches)
+            self._remove_blank_patches()
+            removed = initial_count - len(self.patches)
+            print(f"    Removed {removed} blank patches, {len(self.patches)} remain")
+        else:
+            print("  [7/7] Inference mode: skipping blank patch removal (preserves order)")
 
-        # Step 8: Shuffle
-        print("  [8/8] Shuffling patches...")
-        self._shuffle()
+        # Step 8: Shuffle (skip in inference mode to preserve order)
+        if not inference_mode:
+            print("  [8/8] Shuffling patches...")
+            self._shuffle()
+        else:
+            print("  [8/8] Inference mode: skipping shuffle (preserves order)")
 
         # Limit number of patches if requested
         if num_patches and num_patches < len(self.patches):

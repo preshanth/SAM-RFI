@@ -209,6 +209,74 @@ class RFIPredictor:
 
         print(f"✓ Model loaded on {device}")
 
+    def predict_array(
+        self,
+        data,
+        patch_size=1024,
+        stretch=None,
+        enable_augmentation=False,
+        normalize_before_stretch=False,
+        normalize_after_stretch=False,
+    ):
+        """
+        Predict on numpy array directly without MS I/O.
+
+        Args:
+            data: Complex visibility data (baselines, pols, channels, times)
+            patch_size: Patch size for prediction
+            stretch: Stretch function ('SQRT' or 'LOG10' or None)
+            enable_augmentation: Enable rotation augmentation (default False)
+            normalize_before_stretch: Normalize before stretch (default False)
+            normalize_after_stretch: Normalize after stretch (default False)
+
+        Returns:
+            Predicted flags array (baselines, pols, channels, times)
+        """
+        print(f"\n{'='*60}")
+        print("RFI Prediction - Array Mode")
+        print(f"{'='*60}")
+
+        data_shape = data.shape
+        print(f"  Input shape: {data_shape}")
+
+        # Get magnitude
+        if np.iscomplexobj(data):
+            magnitude_data = np.abs(data)
+        else:
+            magnitude_data = data
+
+        # Preprocess
+        print("\nPreprocessing data...")
+        preprocessor = Preprocessor(magnitude_data, flags=None)
+        dataset = preprocessor.create_dataset(
+            patch_size=patch_size,
+            stretch=stretch,
+            flag_sigma=5,
+            use_custom_flags=False,
+            enable_augmentation=enable_augmentation,
+            augmentation_rotations=1,
+            normalize_before_stretch=normalize_before_stretch,
+            normalize_after_stretch=normalize_after_stretch,
+            inference_mode=True,
+        )
+
+        # Predict
+        print("\nRunning SAM2 prediction...")
+        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
+
+        # Reconstruct
+        print("Reconstructing flags...")
+        predicted_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
+
+        flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
+        print(f"  Flagged: {flag_percent:.2f}% of data")
+
+        print(f"\n{'='*60}")
+        print("✓ Prediction complete")
+        print(f"{'='*60}")
+
+        return predicted_flags
+
     def predict_ms(
         self,
         ms_path,
@@ -288,7 +356,7 @@ class RFIPredictor:
 
         # Predict
         print("\n[4/4] Running SAM2 prediction...")
-        predicted_patches = self._predict_dataset(dataset)
+        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
 
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
@@ -395,7 +463,7 @@ class RFIPredictor:
 
             # Predict
             print("\n[3/4] Running SAM2 prediction...")
-            predicted_patches = self._predict_dataset(dataset)
+            predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
 
             # Reconstruct flags
             print("\n[4/4] Reconstructing flags...")
@@ -425,12 +493,13 @@ class RFIPredictor:
 
         return cumulative_flags
 
-    def _predict_dataset(self, dataset):
+    def _predict_dataset(self, dataset, target_size=None):
         """
         Run model prediction on dataset.
 
         Args:
             dataset: HuggingFace Dataset with patches
+            target_size: Target size for output masks (H, W). If None, uses model output size (256x256)
 
         Returns:
             List of predicted masks (boolean arrays)
@@ -457,6 +526,20 @@ class RFIPredictor:
 
                 # Threshold and convert to boolean
                 pred_masks = (torch.sigmoid(pred_masks) > 0.5).cpu().numpy()
+
+                # Resize if target size specified and different from output
+                if target_size is not None and pred_masks.shape[1:] != target_size:
+                    import cv2
+
+                    resized_masks = []
+                    for mask in pred_masks:
+                        resized = cv2.resize(
+                            mask.astype(np.uint8),
+                            (target_size[1], target_size[0]),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
+                        resized_masks.append(resized.astype(bool))
+                    pred_masks = np.array(resized_masks)
 
                 predicted_masks.extend(pred_masks)
 
