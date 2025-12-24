@@ -67,6 +67,8 @@ def main():
     # Extract params
     synth_config = config.synthetic
     proc_config = config.processing
+    val_config = getattr(config, "validation", {})
+
     patch_size = proc_config.get("patch_size", 1024)
     stretch = proc_config.get("stretch", None)
     enable_aug = proc_config.get("enable_augmentation", False)
@@ -74,10 +76,17 @@ def main():
     norm_before = proc_config.get("normalize_before_stretch", False)
     norm_after = proc_config.get("normalize_after_stretch", False)
 
+    # Use sam_checkpoint from config if not explicitly passed via CLI
+    if args.sam_checkpoint == "large":  # Default value from argparse
+        sam_checkpoint = val_config.get("sam_checkpoint", "large")
+    else:
+        sam_checkpoint = args.sam_checkpoint
+
     print(f"  Patch size: {patch_size}")
     print(f"  Stretch: {stretch}")
     print(f"  Augmentation: {enable_aug} (rotations={aug_rot})")
     print(f"  Normalize before/after: {norm_before}/{norm_after}")
+    print(f"  SAM checkpoint: {sam_checkpoint}")
 
     # Initialize generator
     print(f"\n{'='*60}")
@@ -115,9 +124,7 @@ def main():
     print(f"\n{'='*60}")
     print("Loading Model")
     print(f"{'='*60}")
-    predictor = RFIPredictor(
-        model_path=args.model, sam_checkpoint=args.sam_checkpoint, device="cuda"
-    )
+    predictor = RFIPredictor(model_path=args.model, sam_checkpoint=sam_checkpoint, device="cuda")
 
     # Create working MS (copy of template)
     template_ms = Path(args.template_ms)

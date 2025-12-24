@@ -44,11 +44,14 @@ def inject_synthetic_data(
     else:
         output_ms_path = Path(output_ms_path)
 
-    # Copy template MS
-    print(f"Copying template MS: {template_ms_path} → {output_ms_path}")
-    if output_ms_path.exists():
-        shutil.rmtree(output_ms_path)
-    shutil.copytree(template_ms_path, output_ms_path)
+    # Copy template MS only if different (otherwise modify in-place)
+    if template_ms_path.resolve() != output_ms_path.resolve():
+        print(f"Copying template MS: {template_ms_path} → {output_ms_path}")
+        if output_ms_path.exists():
+            shutil.rmtree(output_ms_path)
+        shutil.copytree(template_ms_path, output_ms_path)
+    else:
+        print(f"Modifying MS in-place: {output_ms_path}")
 
     # Validate data shape
     num_baselines, num_pols, num_channels, num_times = synthetic_data.shape

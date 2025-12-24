@@ -43,5 +43,6 @@ validation:
   # Output directory
   output_dir: ./validation_results
 
-  # Model checkpoint
+  # SAM model variant to use (tiny/small/base_plus/large)
+  # MUST match the model architecture used during training
   sam_checkpoint: large
