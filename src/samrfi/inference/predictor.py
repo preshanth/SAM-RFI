@@ -217,6 +217,9 @@ class RFIPredictor:
         stretch="SQRT",
         apply_existing_flags=False,
         save_flags=True,
+        enable_augmentation=False,
+        normalize_before_stretch=False,
+        normalize_after_stretch=False,
     ):
         """
         Single-pass prediction on measurement set.
@@ -225,9 +228,12 @@ class RFIPredictor:
             ms_path: Path to measurement set
             num_antennas: Number of antennas to load (None = all)
             patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT' or 'LOG10')
+            stretch: Stretch function ('SQRT' or 'LOG10' or None)
             apply_existing_flags: If True, mask existing flags before prediction
             save_flags: If True, save flags back to MS
+            enable_augmentation: Enable rotation augmentation (default False for inference)
+            normalize_before_stretch: Normalize before stretch (default False)
+            normalize_after_stretch: Normalize after stretch (default False)
 
         Returns:
             Predicted flags array (baselines, pols, channels, times)
@@ -275,6 +281,10 @@ class RFIPredictor:
             flag_sigma=5,
             use_custom_flags=False,
             apply_stretching=True,
+            enable_augmentation=enable_augmentation,
+            augmentation_rotations=1,
+            normalize_before_stretch=normalize_before_stretch,
+            normalize_after_stretch=normalize_after_stretch,
         )
 
         # Predict
@@ -315,6 +325,9 @@ class RFIPredictor:
         patch_size=128,
         stretch="SQRT",
         save_flags=True,
+        enable_augmentation=False,
+        normalize_before_stretch=False,
+        normalize_after_stretch=False,
     ):
         """
         Iterative prediction with progressive cleaning.
@@ -376,6 +389,10 @@ class RFIPredictor:
                 flag_sigma=5,
                 use_custom_flags=False,
                 apply_stretching=True,
+                enable_augmentation=enable_augmentation,
+                augmentation_rotations=1,
+                normalize_before_stretch=normalize_before_stretch,
+                normalize_after_stretch=normalize_after_stretch,
             )
 
             # Predict

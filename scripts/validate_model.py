@@ -119,15 +119,7 @@ def run_validation(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate synthetic data if config provided
-    if config is not None:
-        samples = generate_validation_samples(num_samples, config)
-    else:
-        print("No config provided - expecting pre-generated data")
-        # TODO: Load pre-generated samples
-        raise NotImplementedError("Pre-generated data loading not yet implemented")
-
-    # Initialize predictor
+    # Initialize predictor FIRST (loads model to GPU)
     print(f"\n{'='*60}")
     print("Loading Model")
     print(f"{'='*60}")
@@ -139,16 +131,64 @@ def run_validation(
         auto_select_sam=auto_select_sam,
     )
 
-    # Process each sample
+    # Initialize generator (don't generate all samples upfront!)
+    if config is None:
+        print("No config provided - expecting pre-generated data")
+        raise NotImplementedError("Pre-generated data loading not yet implemented")
+
+    print(f"\n{'='*60}")
+    print("Generating Validation Data On-The-Fly")
+    print(f"{'='*60}")
+    print(f"Samples: {num_samples}")
+
+    generator = SyntheticDataGenerator(config)
+
+    # Extract config for generation
+    if hasattr(config, "synthetic"):
+        synth_config = config.synthetic
+    elif isinstance(config, dict):
+        synth_config = config.get("synthetic", {})
+    else:
+        raise ValueError('Config must include a "synthetic" section')
+
+    # Build generation kwargs
+    num_channels = synth_config.get("num_channels", 1024)
+    num_times = synth_config.get("num_times", 1024)
+    noise_level = synth_config.get("noise_mjy", 1.0)
+    rfi_power_min = synth_config.get("rfi_power_min", 1000.0)
+    rfi_power_max = synth_config.get("rfi_power_max", 10000.0)
+    rfi_config = generator._parse_rfi_config(synth_config)
+    enable_bandpass = synth_config.get("enable_bandpass_rolloff", False)
+    bandpass_order = synth_config.get("bandpass_polynomial_order", 8)
+    num_polarizations = synth_config.get("num_polarizations", 1)
+    pol_corr = synth_config.get("polarization_correlation", 0.8)
+
+    gen_kwargs = {
+        "num_channels": num_channels,
+        "num_times": num_times,
+        "noise_level": noise_level,
+        "rfi_power_min": rfi_power_min,
+        "rfi_power_max": rfi_power_max,
+        "rfi_config": rfi_config,
+        "enable_bandpass": enable_bandpass,
+        "bandpass_order": bandpass_order,
+        "num_polarizations": num_polarizations,
+        "pol_corr": pol_corr,
+        "synth_config": synth_config,
+    }
+
+    # Process samples ONE AT A TIME to avoid RAM exhaustion
     all_metrics = []
     predictions_list = []
     ground_truth_list = []
 
     print(f"\n{'='*60}")
-    print("Running Predictions")
+    print("Running Validation (Generate → Predict → Evaluate)")
     print(f"{'='*60}")
 
-    for sample_idx, (waterfall, ground_truth) in enumerate(tqdm(samples, desc="Samples")):
+    for sample_idx in tqdm(range(num_samples), desc="Samples"):
+        # Generate ONE sample
+        waterfall, ground_truth, rfi_params = generator._generate_single_sample(**gen_kwargs)
         # Inject into MS
         synthetic_ms = output_dir / f"sample_{sample_idx:03d}.ms"
         inject_synthetic_data(
@@ -312,7 +352,7 @@ def main():
     parser.add_argument(
         "--output", default="./validation_results", help="Output directory for results"
     )
-    parser.add_argument("--num-samples", type=int, default=10, help="Number of validation samples")
+    parser.add_argument("--num-samples", type=int, default=1, help="Number of validation samples")
     parser.add_argument(
         "--config", help="Path to synthetic data config (uses default if not provided)"
     )
