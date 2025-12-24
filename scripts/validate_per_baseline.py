@@ -138,7 +138,7 @@ def main():
     shutil.copytree(template_ms, work_ms)
     print(f"  Created: {work_ms}")
 
-    # Get number of antennas from template
+    # Get MS metadata
     from casatools import table
 
     tb_ant = table()
@@ -146,8 +146,17 @@ def main():
     num_antennas = tb_ant.nrows()
     tb_ant.close()
 
+    # Get number of polarizations from MS
+    tb_main = table()
+    tb_main.open(str(template_ms))
+    # Query first row to get pol dimension
+    subtable = tb_main.query("ANTENNA1==0 && ANTENNA2==1")
+    data_sample = subtable.getcol("DATA")
+    num_pols = data_sample.shape[0]  # First dimension is pols
+    subtable.close()
+    tb_main.close()
+
     # Build baseline list in same order as MSLoader.load()
-    # This matches the order in MSLoader line 97-98: for i in range(num_antennas): for j in range(i+1, num_antennas)
     baseline_list = []
     for i in range(num_antennas):
         for j in range(i + 1, num_antennas):
@@ -156,50 +165,76 @@ def main():
     num_baselines_total = len(baseline_list)
     num_baselines_validate = min(args.num_baselines, num_baselines_total)
 
+    print(
+        f"  MS structure: {num_antennas} antennas, {num_baselines_total} baselines, {num_pols} pols"
+    )
+
     print(f"\n{'='*60}")
     print(f"Validating {num_baselines_validate}/{num_baselines_total} Baselines")
     print(f"{'='*60}")
 
-    # Storage for results
+    # Generate synthetic data for ALL baselines at once
+    print(f"\n{'='*60}")
+    print("Generating Synthetic Data")
+    print(f"{'='*60}")
+    print(f"  Generating {num_baselines_total} baselines with {num_pols} pols...")
+
+    # Override num_polarizations to match MS
+    gen_kwargs["num_polarizations"] = num_pols
+
+    all_waterfalls = []
+    all_ground_truth = []
+
+    for baseline_idx in tqdm(range(num_baselines_total), desc="Generating"):
+        waterfall, ground_truth, rfi_params = generator._generate_single_sample(**gen_kwargs)
+        all_waterfalls.append(waterfall[0])  # Remove extra baseline dimension
+        all_ground_truth.append(ground_truth[0])
+
+    # Stack into full arrays
+    full_waterfall = np.stack(all_waterfalls)  # (num_baselines, pols, channels, times)
+    full_ground_truth = np.stack(all_ground_truth)  # (num_baselines, pols, channels, times)
+
+    print(f"  Generated shape: {full_waterfall.shape}")
+
+    # Inject all baselines into MS
+    print(f"\n{'='*60}")
+    print("Injecting Synthetic Data")
+    print(f"{'='*60}")
+    inject_synthetic_data(
+        template_ms_path=work_ms,
+        synthetic_data=full_waterfall,
+        output_ms_path=work_ms,
+        baseline_map=baseline_list,
+    )
+
+    # Run prediction ONCE on full MS
+    print(f"\n{'='*60}")
+    print("Running Prediction")
+    print(f"{'='*60}")
+    predicted_flags = predictor.predict_ms(
+        ms_path=work_ms,
+        patch_size=patch_size,
+        stretch=stretch,
+        save_flags=False,
+        enable_augmentation=enable_aug,
+        normalize_before_stretch=norm_before,
+        normalize_after_stretch=norm_after,
+    )
+
+    # Extract and compare metrics per baseline
+    print(f"\n{'='*60}")
+    print("Computing Per-Baseline Metrics")
+    print(f"{'='*60}")
+
     all_metrics = []
     baseline_labels = []
 
-    # Validate each baseline
-    for baseline_idx in tqdm(range(num_baselines_validate), desc="Baselines"):
+    for baseline_idx in tqdm(range(num_baselines_validate), desc="Metrics"):
         ant1, ant2 = baseline_list[baseline_idx]
         baseline_labels.append(f"{ant1}-{ant2}")
 
-        # Generate synthetic data for this baseline
-        waterfall, ground_truth, rfi_params = generator._generate_single_sample(**gen_kwargs)
-
-        # Inject into MS at this baseline
-        inject_synthetic_data(
-            template_ms_path=work_ms,
-            synthetic_data=waterfall,
-            output_ms_path=work_ms,
-            baseline_map=[(ant1, ant2)],
-        )
-
-        # Run prediction on full MS
-        predicted_flags = predictor.predict_ms(
-            ms_path=work_ms,
-            patch_size=patch_size,
-            stretch=stretch,
-            save_flags=False,
-            enable_augmentation=enable_aug,
-            normalize_before_stretch=norm_before,
-            normalize_after_stretch=norm_after,
-        )
-
-        # Extract flags for this baseline
-        # Need to find index in predicted_flags that corresponds to (ant1, ant2)
-        # predicted_flags has shape (num_baselines, pols, channels, times)
-        # We need to map (ant1, ant2) to the index
-
-        # The predictor loads baselines in order, so we need the baseline map from loader
-        # For now, assume baseline_idx matches (this needs verification)
         pred_baseline = predicted_flags[baseline_idx]  # (pols, channels, times)
-        gt_baseline = ground_truth[0]  # (pols, channels, times)
+        gt_baseline = full_ground_truth[baseline_idx]  # (pols, channels, times)
 
         # Flatten across pols for comparison
         pred_flat = pred_baseline.max(axis=0)  # (channels, times)
