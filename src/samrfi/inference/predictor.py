@@ -521,8 +521,14 @@ class RFIPredictor:
                     pixel_values=pixel_values, input_boxes=input_boxes, multimask_output=False
                 )
 
-                # Get masks - outputs.pred_masks is (B, 1, H, W)
-                pred_masks = outputs.pred_masks  # Keep as (B, 1, H, W) for interpolation
+                # Get masks - check actual shape
+                pred_masks = outputs.pred_masks
+                print(f"DEBUG: pred_masks.shape = {pred_masks.shape}")  # DEBUG
+
+                # SAM2 outputs (B, num_masks, H, W) where num_masks=1 for multimask_output=False
+                # We need (B, C, H, W) for interpolate, so unsqueeze to add channel dim
+                if pred_masks.ndim == 3:
+                    pred_masks = pred_masks.unsqueeze(1)  # (B, H, W) -> (B, 1, H, W)
 
                 # Resize on GPU if target size specified and different from output
                 if target_size is not None and pred_masks.shape[2:] != target_size:
