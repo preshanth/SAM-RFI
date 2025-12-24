@@ -524,22 +524,19 @@ class RFIPredictor:
                 # Get masks
                 pred_masks = outputs.pred_masks.squeeze(1)  # (B, H, W)
 
+                # Resize on GPU if target size specified and different from output
+                if target_size is not None and pred_masks.shape[1:] != target_size:
+                    pred_masks = torch.nn.functional.interpolate(
+                        pred_masks.unsqueeze(1),  # (B, 1, H, W)
+                        size=target_size,
+                        mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(
+                        1
+                    )  # (B, H, W)
+
                 # Threshold and convert to boolean
                 pred_masks = (torch.sigmoid(pred_masks) > 0.5).cpu().numpy()
-
-                # Resize if target size specified and different from output
-                if target_size is not None and pred_masks.shape[1:] != target_size:
-                    import cv2
-
-                    resized_masks = []
-                    for mask in pred_masks:
-                        resized = cv2.resize(
-                            mask.astype(np.uint8),
-                            (target_size[1], target_size[0]),
-                            interpolation=cv2.INTER_NEAREST,
-                        )
-                        resized_masks.append(resized.astype(bool))
-                    pred_masks = np.array(resized_masks)
 
                 predicted_masks.extend(pred_masks)
 

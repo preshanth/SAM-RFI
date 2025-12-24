@@ -196,17 +196,6 @@ def main():
 
     print(f"  Generated shape: {full_waterfall.shape}")
 
-    # Inject all baselines into MS
-    print(f"\n{'='*60}")
-    print("Injecting Synthetic Data")
-    print(f"{'='*60}")
-    inject_synthetic_data(
-        template_ms_path=work_ms,
-        synthetic_data=full_waterfall,
-        output_ms_path=work_ms,
-        baseline_map=baseline_list,
-    )
-
     # Run SAM prediction on in-memory data (fast, no MS reload)
     print(f"\n{'='*60}")
     print("Running SAM-RFI Prediction")
@@ -265,6 +254,17 @@ def main():
 
     with open(output_dir / "results.json", "w") as f:
         json.dump(results, f, indent=2)
+
+    # Inject synthetic data to MS (for tfcrop/rflag comparison later)
+    print(f"\n{'='*60}")
+    print("Injecting Synthetic Data to MS (for CASA flaggers)")
+    print(f"{'='*60}")
+    inject_synthetic_data(
+        template_ms_path=work_ms,
+        synthetic_data=full_waterfall,
+        output_ms_path=work_ms,
+        baseline_map=baseline_list,
+    )
 
     # Print summary
     print(f"\n{'='*60}")
