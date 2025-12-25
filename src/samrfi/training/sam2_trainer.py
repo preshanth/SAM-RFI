@@ -5,6 +5,7 @@ Mirrors the working SAM1 training approach
 
 import gc
 import logging
+import multiprocessing
 import os
 import time
 from datetime import datetime
@@ -138,6 +139,12 @@ class SAM2Trainer:
             validation_dataset: Optional HuggingFace dataset for validation
             save_model: Whether to save model checkpoint (default: True, set False for validation)
         """
+
+        # Fix multiprocessing for CUDA in workers (required for GPU transforms)
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass  # Already set
 
         # Map checkpoint names to HuggingFace model IDs
         checkpoint_map = {
