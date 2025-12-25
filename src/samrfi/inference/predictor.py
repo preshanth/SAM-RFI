@@ -217,6 +217,8 @@ class RFIPredictor:
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
+        return_probabilities=False,
+        threshold=0.5,
     ):
         """
         Predict on numpy array directly without MS I/O.
@@ -228,9 +230,11 @@ class RFIPredictor:
             enable_augmentation: Enable rotation augmentation (default False)
             normalize_before_stretch: Normalize before stretch (default False)
             normalize_after_stretch: Normalize after stretch (default False)
+            return_probabilities: Return continuous probabilities [0,1] instead of binary flags (default False)
+            threshold: Probability threshold for RFI detection (default: 0.5)
 
         Returns:
-            Predicted flags array (baselines, pols, channels, times)
+            Predicted probabilities (if return_probabilities=True) or flags array (baselines, pols, channels, times)
         """
         print(f"\n{'='*60}")
         print("RFI Prediction - Array Mode")
@@ -238,16 +242,11 @@ class RFIPredictor:
 
         data_shape = data.shape
         print(f"  Input shape: {data_shape}")
+        print(f"  Data dtype: {data.dtype}, complex: {np.iscomplexobj(data)}")
 
-        # Get magnitude
-        if np.iscomplexobj(data):
-            magnitude_data = np.abs(data)
-        else:
-            magnitude_data = data
-
-        # Preprocess
+        # Preprocess (pass complex data directly - Preprocessor will extract features)
         print("\nPreprocessing data...")
-        preprocessor = Preprocessor(magnitude_data, flags=None)
+        preprocessor = Preprocessor(data, flags=None)
         dataset = preprocessor.create_dataset(
             patch_size=patch_size,
             stretch=stretch,
@@ -262,20 +261,26 @@ class RFIPredictor:
 
         # Predict
         print("\nRunning SAM2 prediction...")
-        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
+        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), return_probabilities=return_probabilities, threshold=threshold)
 
         # Reconstruct
-        print("Reconstructing flags...")
-        predicted_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
+        if return_probabilities:
+            print("Reconstructing probability maps...")
+        else:
+            print("Reconstructing flags...")
+        result = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
 
-        flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
-        print(f"  Flagged: {flag_percent:.2f}% of data")
+        if return_probabilities:
+            print(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
+        else:
+            flag_percent = np.sum(result) / result.size * 100
+            print(f"  Flagged: {flag_percent:.2f}% of data")
 
         print(f"\n{'='*60}")
         print("✓ Prediction complete")
         print(f"{'='*60}")
 
-        return predicted_flags
+        return result
 
     def predict_ms(
         self,
@@ -288,6 +293,7 @@ class RFIPredictor:
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
+        threshold=0.5,
     ):
         """
         Single-pass prediction on measurement set.
@@ -297,6 +303,7 @@ class RFIPredictor:
             num_antennas: Number of antennas to load (None = all)
             patch_size: Patch size for prediction
             stretch: Stretch function ('SQRT' or 'LOG10' or None)
+            threshold: Probability threshold for RFI detection (default: 0.5)
             apply_existing_flags: If True, mask existing flags before prediction
             save_flags: If True, save flags back to MS
             enable_augmentation: Enable rotation augmentation (default False for inference)
@@ -356,7 +363,7 @@ class RFIPredictor:
 
         # Predict
         print("\n[4/4] Running SAM2 prediction...")
-        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
+        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), threshold=threshold)
 
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
@@ -395,6 +402,7 @@ class RFIPredictor:
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
+        threshold=0.5,
     ):
         """
         Iterative prediction with progressive cleaning.
@@ -411,6 +419,7 @@ class RFIPredictor:
             patch_size: Patch size for prediction
             stretch: Stretch function ('SQRT' or 'LOG10')
             save_flags: If True, save final flags to MS
+            threshold: Probability threshold for RFI detection (default: 0.5)
 
         Returns:
             Cumulative flags from all iterations
@@ -463,7 +472,7 @@ class RFIPredictor:
 
             # Predict
             print("\n[3/4] Running SAM2 prediction...")
-            predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size))
+            predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), threshold=threshold)
 
             # Reconstruct flags
             print("\n[4/4] Reconstructing flags...")
@@ -493,16 +502,18 @@ class RFIPredictor:
 
         return cumulative_flags
 
-    def _predict_dataset(self, dataset, target_size=None):
+    def _predict_dataset(self, dataset, target_size=None, return_probabilities=False, threshold=0.5):
         """
         Run model prediction on dataset.
 
         Args:
             dataset: HuggingFace Dataset with patches
             target_size: Target size for output masks (H, W). If None, uses model output size (256x256)
+            return_probabilities: Return continuous probabilities [0,1] instead of binary masks
+            threshold: Probability threshold for binary classification (default: 0.5)
 
         Returns:
-            List of predicted masks (boolean arrays)
+            List of predicted masks (boolean arrays if return_probabilities=False, float arrays otherwise)
         """
         # Create SAM dataset wrapper
         sam_dataset = SAMDataset(dataset, self.processor)
@@ -536,11 +547,19 @@ class RFIPredictor:
                         align_corners=False,
                     )  # (B, 1, H, W)
 
-                # Remove channel dimension and threshold
+                # Remove channel dimension
                 pred_masks = pred_masks.squeeze(1)  # (B, H, W)
-                pred_masks = (torch.sigmoid(pred_masks) > 0.5).cpu().numpy()
+                sigmoid_probs = torch.sigmoid(pred_masks)
 
-                predicted_masks.extend(pred_masks)
+                # Debug: print probability distribution
+                print(f"  Sigmoid probs - min: {sigmoid_probs.min():.4f}, max: {sigmoid_probs.max():.4f}, mean: {sigmoid_probs.mean():.4f}")
+
+                # Return probabilities or thresholded masks
+                if return_probabilities:
+                    predicted_masks.extend(sigmoid_probs.cpu().numpy())
+                else:
+                    pred_masks = (sigmoid_probs > threshold).cpu().numpy()
+                    predicted_masks.extend(pred_masks)
 
         return predicted_masks
 
@@ -551,17 +570,18 @@ class RFIPredictor:
         This reverses the patchification process (with 4-way rotation).
 
         Args:
-            predicted_patches: List of predicted patch masks
+            predicted_patches: List of predicted patch masks (bool or float)
             data_shape: Original data shape (baselines, pols, channels, times)
             patch_size: Size of patches
 
         Returns:
-            Reconstructed flags matching data_shape
+            Reconstructed flags matching data_shape (bool or float matching input)
         """
         baselines, pols, channels, times = data_shape
 
-        # Initialize full flag array
-        full_flags = np.zeros(data_shape, dtype=bool)
+        # Initialize full flag array (dtype matches input patches)
+        is_probability = predicted_patches[0].dtype in (np.float32, np.float64)
+        full_flags = np.zeros(data_shape, dtype=np.float32 if is_probability else bool)
 
         # Track which patches correspond to which baseline/pol
         patch_idx = 0
@@ -604,8 +624,14 @@ class RFIPredictor:
                             t_start = j * patch_size
                             t_end = (j + 1) * patch_size
 
-                            full_flags[
-                                baseline, pol, ch_start:ch_end, t_start:t_end
-                            ] |= reconstructed
+                            if is_probability:
+                                # For probabilities, take max across rotations
+                                full_flags[baseline, pol, ch_start:ch_end, t_start:t_end] = np.maximum(
+                                    full_flags[baseline, pol, ch_start:ch_end, t_start:t_end],
+                                    reconstructed
+                                )
+                            else:
+                                # For boolean, use bitwise OR
+                                full_flags[baseline, pol, ch_start:ch_end, t_start:t_end] |= reconstructed
 
         return full_flags

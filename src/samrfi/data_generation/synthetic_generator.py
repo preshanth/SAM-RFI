@@ -174,7 +174,22 @@ class SyntheticDataGenerator:
         print("\nPhysical Parameters:")
         print(f"  Noise level: {noise_level} mJy")
         print(f"  RFI power range: {rfi_power_min}-{rfi_power_max} Jy")
-        print(f"  Dynamic range: {rfi_power_max*1000/noise_level:.1e} (~6 orders)")
+
+        # Compute dynamic range (handle both scalar and range values)
+        is_range = isinstance(noise_level, (list, tuple)) or isinstance(rfi_power_max, (list, tuple))
+        if is_range:
+            # Ranges provided - show min/max dynamic range
+            noise_min = noise_level[0] if isinstance(noise_level, (list, tuple)) else noise_level
+            noise_max = noise_level[1] if isinstance(noise_level, (list, tuple)) else noise_level
+            rfi_min = rfi_power_min[0] if isinstance(rfi_power_min, (list, tuple)) else rfi_power_min
+            rfi_max = rfi_power_max[1] if isinstance(rfi_power_max, (list, tuple)) else rfi_power_max
+            dr_min = rfi_min * 1000 / noise_max  # Weakest RFI / highest noise
+            dr_max = rfi_max * 1000 / noise_min  # Strongest RFI / lowest noise
+            print(f"  Dynamic range: {dr_min:.1e} to {dr_max:.1e} (randomized per sample)")
+        else:
+            # Fixed values
+            dr_value = rfi_power_max * 1000 / noise_level
+            print(f"  Dynamic range: {dr_value:.1e}")
 
         print("\nConfiguration:")
         print(f"  Samples: {num_samples}")
@@ -395,13 +410,19 @@ class SyntheticDataGenerator:
 
         # Save generation metadata (separate from batch metadata)
         print("\n[4/5] Saving generation metadata...")
+        # Compute dynamic range for metadata (use previously computed values)
+        if is_range:
+            dynamic_range_str = f"{dr_min:.1e} to {dr_max:.1e}"
+        else:
+            dynamic_range_str = f"{dr_value:.1e}"
+
         metadata = {
             "source": "synthetic",
             "physical_parameters": {
                 "noise_mjy": noise_level,
                 "rfi_power_min_jy": rfi_power_min,
                 "rfi_power_max_jy": rfi_power_max,
-                "dynamic_range": float(rfi_power_max * 1000 / noise_level),
+                "dynamic_range": dynamic_range_str,
             },
             "num_raw_samples": total_raw_samples,
             "num_channels": num_channels,
@@ -512,6 +533,16 @@ class SyntheticDataGenerator:
             exact_mask: (1, num_polarizations, channels, times) - binary mask of RFI locations
             rfi_params: dict of RFI parameters for this sample
         """
+        # Sample noise level if range provided
+        if isinstance(noise_level, (list, tuple)):
+            noise_level = np.random.uniform(noise_level[0], noise_level[1])
+
+        # Sample RFI power ranges if provided
+        if isinstance(rfi_power_min, (list, tuple)):
+            rfi_power_min = np.random.uniform(rfi_power_min[0], rfi_power_min[1])
+        if isinstance(rfi_power_max, (list, tuple)):
+            rfi_power_max = np.random.uniform(rfi_power_max[0], rfi_power_max[1])
+
         # Create base spectrograph (clean Gaussian noise at mJy scale)
         baseline = np.random.normal(noise_level, noise_level * 0.1, (num_channels, num_times))
 

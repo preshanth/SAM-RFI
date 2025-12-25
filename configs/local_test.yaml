@@ -1,0 +1,53 @@
+# Local test config for 1080ti (11GB VRAM, 64GB RAM)
+# Tests unfrozen vision encoder with small dataset
+
+data:
+  train_generation_config: configs/test_train_200.yaml
+  train_dataset: ./datasets/test_train_200/exact_masks
+  val_generation_config: configs/test_val_50.yaml
+  val_dataset: ./datasets/test_val_50/exact_masks
+  mask_type: exact_masks
+
+training:
+  device: cuda
+  num_epochs: 5
+  batch_size: 1           # Batch=1 safe for unfrozen encoder on 1080ti
+  learning_rate: 1.0e-6   # Lower LR for vision encoder
+  model_checkpoint: tiny  # Tiny model for 1080ti
+  output_dir: ./test_output
+
+  # Optimizer settings
+  optimizer: adamw
+  weight_decay: 0.01
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+
+  # Loss function
+  loss_function: dicece
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean
+
+  # Model architecture - UNFROZEN vision encoder
+  multimask_output: false
+  freeze_vision_encoder: false  # TEST: unfreeze for fine-tuning
+  freeze_prompt_encoder: true
+
+  # Data augmentation
+  bbox_perturbation: 20
+
+  # DataLoader settings - Conservative for 64GB RAM
+  num_workers: 2
+  data_cache_ram_gb: 10    # Small cache for test dataset
+  val_data_cache_ram_gb: 3
+  prefetch_factor: 2
+  persistent_workers: true
+  pin_memory: true
+
+  # Training optimization
+  log_interval: 20
+  cuda_cache_clear_interval: 10
+
+  # Output
+  plot: true
+  save_model: true
