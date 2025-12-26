@@ -185,7 +185,7 @@ class Preprocessor:
 
         # Step 2: Patchify (or skip if patch_size >= image dimensions)
         waterfall_shape = augmented_data[0].shape
-        if patch_size >= min(waterfall_shape):
+        if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
             # Skip patching - use full waterfalls
             print(
                 f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})..."
@@ -316,6 +316,7 @@ class Preprocessor:
             "flag_sigma": flag_sigma,
             "normalize_before_stretch": normalize_before_stretch,
             "normalize_after_stretch": normalize_after_stretch,
+            "augmentation_rotations": augmentation_rotations,
         }
 
         self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
@@ -747,7 +748,7 @@ class GPUPreprocessor:
 
         # Patchify (or use full waterfalls)
         waterfall_shape = flattened_data[0].shape
-        if patch_size >= min(waterfall_shape):
+        if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
             print("  [2/3] Using full waterfalls (patch_size >= image size)...")
             self.raw_patches = flattened_data
             self.raw_masks = flattened_flags

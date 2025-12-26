@@ -251,11 +251,75 @@ class RFIPredictor:
         else:
             # No mismatches (or allowed above) — do a strict load
             self.model.load_state_dict(state_dict)
+
+        # Store preprocessing metadata from checkpoint for validation
+        self.checkpoint_preprocessing = checkpoint.get("preprocessing", {})
+
         # Move to device
         self.model.to(device)
         self.model.eval()
 
         print(f"✓ Model loaded on {device}")
+
+        # Display preprocessing info if available
+        if self.checkpoint_preprocessing:
+            print("\nCheckpoint preprocessing config:")
+            for key, value in self.checkpoint_preprocessing.items():
+                print(f"  {key}: {value}")
+
+    def _validate_preprocessing_params(self, patch_size, stretch, normalize_before_stretch=False, normalize_after_stretch=False):
+        """
+        Validate inference preprocessing parameters against checkpoint metadata.
+
+        Raises ValueError if critical parameters mismatch (patch_size).
+        Warns if non-critical parameters mismatch (stretch, normalization).
+
+        Args:
+            patch_size: Patch size for inference
+            stretch: Stretch function ('SQRT', 'LOG10', or None)
+            normalize_before_stretch: Normalization before stretch
+            normalize_after_stretch: Normalization after stretch
+        """
+        if not self.checkpoint_preprocessing:
+            # No metadata in checkpoint (old checkpoint), skip validation
+            return
+
+        # Critical: patch_size must match
+        checkpoint_patch_size = self.checkpoint_preprocessing.get("patch_size")
+        if checkpoint_patch_size and checkpoint_patch_size != "unknown" and checkpoint_patch_size != patch_size:
+            raise ValueError(
+                f"\n❌ CRITICAL: Patch size mismatch!\n"
+                f"   Model trained with patch_size={checkpoint_patch_size}\n"
+                f"   But inference using patch_size={patch_size}\n"
+                f"   Predictions will be incorrect!\n"
+                f"   → Use --patch-size {checkpoint_patch_size}"
+            )
+
+        # Warning: stretch function should match
+        checkpoint_stretch = self.checkpoint_preprocessing.get("stretch")
+        if checkpoint_stretch is not None and checkpoint_stretch != stretch:
+            print(
+                f"\n⚠️  WARNING: Stretch function mismatch\n"
+                f"   Model trained with stretch={checkpoint_stretch}\n"
+                f"   But inference using stretch={stretch}\n"
+                f"   This may reduce accuracy."
+            )
+
+        # Info: normalization parameters (less critical for synthetic data)
+        checkpoint_norm_before = self.checkpoint_preprocessing.get("normalize_before_stretch")
+        checkpoint_norm_after = self.checkpoint_preprocessing.get("normalize_after_stretch")
+
+        if checkpoint_norm_before is not None and checkpoint_norm_before != normalize_before_stretch:
+            print(
+                f"   Note: normalize_before_stretch differs "
+                f"(training={checkpoint_norm_before}, inference={normalize_before_stretch})"
+            )
+
+        if checkpoint_norm_after is not None and checkpoint_norm_after != normalize_after_stretch:
+            print(
+                f"   Note: normalize_after_stretch differs "
+                f"(training={checkpoint_norm_after}, inference={normalize_after_stretch})"
+            )
 
     def predict_array(
         self,
@@ -288,6 +352,9 @@ class RFIPredictor:
         print("RFI Prediction - Array Mode")
         print(f"{'='*60}")
 
+        # Validate preprocessing parameters against checkpoint
+        self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
+
         data_shape = data.shape
         print(f"  Input shape: {data_shape}")
         print(f"  Data dtype: {data.dtype}, complex: {np.iscomplexobj(data)}")
@@ -316,7 +383,9 @@ class RFIPredictor:
             print("Reconstructing probability maps...")
         else:
             print("Reconstructing flags...")
-        result = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
+        # Extract augmentation state from dataset metadata
+        num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
+        result = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations)
 
         if return_probabilities:
             print(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
@@ -364,6 +433,9 @@ class RFIPredictor:
         print(f"\n{'='*60}")
         print("RFI Prediction - Single Pass")
         print(f"{'='*60}")
+
+        # Validate preprocessing parameters against checkpoint
+        self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
 
         # Load MS
         print("\n[1/4] Loading measurement set...")
@@ -415,9 +487,11 @@ class RFIPredictor:
 
         # Reconstruct full flags from patches
         print("\nReconstructing full flag array...")
+        # Extract augmentation state from dataset metadata
+        num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
         # Use padded shape for reconstruction if padding was applied
         recon_shape = patcher.get_patch_info()["padded_shape"]
-        predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size)
+        predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size, num_rotations)
 
         # Crop flags back to original dimensions if padding was used
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
@@ -478,6 +552,9 @@ class RFIPredictor:
         print(f"RFI Prediction - Iterative ({num_iterations} passes)")
         print(f"{'='*60}")
 
+        # Validate preprocessing parameters against checkpoint
+        self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
+
         # Load MS once
         print("\n[Setup] Loading measurement set...")
         loader = MSLoader(ms_path)
@@ -532,7 +609,9 @@ class RFIPredictor:
 
             # Reconstruct flags
             print("\n[4/4] Reconstructing flags...")
-            iteration_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size)
+            # Extract augmentation state from dataset metadata
+            num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
+            iteration_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations)
 
             # Combine with cumulative flags
             new_flags = iteration_flags & ~cumulative_flags  # Only count new flags
@@ -619,16 +698,17 @@ class RFIPredictor:
 
         return predicted_masks
 
-    def _reconstruct_flags(self, predicted_patches, data_shape, patch_size):
+    def _reconstruct_flags(self, predicted_patches, data_shape, patch_size, num_rotations=1):
         """
         Reconstruct full flag array from predicted patches.
 
-        This reverses the patchification process (with 4-way rotation).
+        This reverses the patchification process (with N-way rotation).
 
         Args:
             predicted_patches: List of predicted patch masks (bool or float)
             data_shape: Original data shape (baselines, pols, channels, times)
             patch_size: Size of patches
+            num_rotations: Number of rotations used during augmentation (default: 1)
 
         Returns:
             Reconstructed flags matching data_shape (bool or float matching input)
@@ -644,8 +724,8 @@ class RFIPredictor:
 
         for baseline in range(baselines):
             for pol in range(pols):
-                # For each polarization, we had 4 rotations
-                for rotation in range(4):
+                # For each polarization, we had N rotations
+                for rotation in range(num_rotations):
                     # Get patches for this rotation
                     num_patches_h = channels // patch_size
                     num_patches_w = times // patch_size

@@ -332,14 +332,29 @@ class SAM2Trainer:
         model.to(self.device)
         model.train()
 
-        # Extract patch_size for checkpoint saving
+        # Extract preprocessing metadata for checkpoint saving
         params = getattr(self.RFIDataset, "dataset_params", None)
         if params:
-            patch_size = params.get("patch_size", "unknown")
+            preprocessing_metadata = {
+                "patch_size": params.get("patch_size", "unknown"),
+                "augmentation_rotations": params.get("augmentation_rotations", 4),
+                "stretch": params.get("stretch", None),
+                "normalize_before_stretch": params.get("normalize_before_stretch", True),
+                "normalize_after_stretch": params.get("normalize_after_stretch", False),
+            }
         else:
             dataset = self.RFIDataset.dataset
             metadata = getattr(dataset, "metadata", {})
-            patch_size = metadata.get("patch_size", "unknown")
+            preprocessing_metadata = {
+                "patch_size": metadata.get("patch_size", "unknown"),
+                "augmentation_rotations": metadata.get("augmentation_rotations", 4),
+                "stretch": metadata.get("stretch", None),
+                "normalize_before_stretch": metadata.get("normalize_before_stretch", True),
+                "normalize_after_stretch": metadata.get("normalize_after_stretch", False),
+            }
+
+        # Keep patch_size for backward compatibility and logging
+        patch_size = preprocessing_metadata["patch_size"]
 
         logger.info("\nTraining SAM2 model...")
         logger.info(f"  Epochs: {num_epochs} (starting from {start_epoch})")
@@ -515,7 +530,8 @@ class SAM2Trainer:
                         "epoch": epoch,
                         "training_losses": train_losses[: epoch + 1 - start_epoch],
                         "validation_losses": val_losses[: epoch + 1 - start_epoch],
-                        "patch_size": patch_size,
+                        "patch_size": patch_size,  # Kept for backward compatibility
+                        "preprocessing": preprocessing_metadata,
                         "config": {
                             "sam_checkpoint": sam_checkpoint,
                             "learning_rate": learning_rate,
@@ -611,7 +627,8 @@ class SAM2Trainer:
             "epoch": epoch,
             "training_losses": self.ave_meanloss,
             "validation_losses": self.val_losses,
-            "patch_size": patch_size,
+            "patch_size": patch_size,  # Kept for backward compatibility
+            "preprocessing": preprocessing_metadata,
             "config": {
                 "sam_checkpoint": sam_checkpoint,
                 "learning_rate": learning_rate,
