@@ -3,6 +3,7 @@ Command-line interface for SAM-RFI training
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -10,12 +11,15 @@ import numpy as np
 import pandas as pd
 
 from .config.config_loader import ConfigLoader
+from .config import validate_all
 from .data import MSLoader
 from .data_generation.ms_generator import MSDataGenerator
 from .data_generation.synthetic_generator import SyntheticDataGenerator
 from .evaluation.metrics import evaluate_segmentation
 from .inference import RFIPredictor
 from .training.sam2_trainer import SAM2Trainer
+from .utils import logger, setup_logger
+from .utils.errors import ConfigValidationError
 
 
 def generate_data_command(args):
@@ -112,8 +116,16 @@ def train_command(args):
     print("=" * 60)
 
     # Load configuration
-    print(f"\nLoading configuration from: {args.config}")
+    logger.info(f"\nLoading configuration from: {args.config}")
     config = ConfigLoader.load(args.config)
+
+    # Validate configuration
+    try:
+        validate_all(config)
+        logger.info("Configuration validation passed")
+    except ConfigValidationError as e:
+        logger.error(f"Configuration validation failed: {e}")
+        sys.exit(1)
 
     # Override config with command-line arguments
     if not args.dataset:
@@ -408,6 +420,18 @@ Examples:
         """,
     )
 
+    # Global logging arguments (available for all commands)
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: INFO)",
+    )
+    parser.add_argument(
+        "--log-file",
+        help="Write logs to file (in addition to console)",
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Generate data command
@@ -517,6 +541,10 @@ Examples:
         parser.print_help()
         return 1
 
+    # Setup logging (after parsing args, before any commands)
+    log_level = getattr(logging, args.log_level)
+    setup_logger(level=log_level, log_file=args.log_file)
+
     # Execute command
     try:
         if args.command == "generate-data":
@@ -539,8 +567,11 @@ Examples:
         elif args.command == "evaluate":
             evaluate_command(args)
             return 0
+    except ConfigValidationError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
     except Exception as e:
-        print(f"\n✗ Error: {e}", file=sys.stderr)
+        logger.error(f"Error: {e}")
         import traceback
 
         traceback.print_exc()

@@ -39,7 +39,7 @@ class TestPatchification:
 
         # Verify patch shape
         sample = dataset[0]
-        assert sample["images"].shape == (1024, 1024, 3), "Patch should be 1024×1024×3"
+        assert sample["image"].shape == (1024, 1024, 3), "Patch should be 1024×1024×3"
 
     def test_patchification_1024x1024_no_split(self, synthetic_waterfall_medium):
         """
@@ -119,7 +119,7 @@ class TestFeatureExtraction:
         )
 
         sample = dataset[0]
-        images = sample["images"]
+        images = sample["image"]
 
         # Check shape: (H, W, 3) channels
         assert images.shape == (256, 256, 3), f"Expected (256, 256, 3), got {images.shape}"
@@ -146,8 +146,8 @@ class TestFeatureExtraction:
         # All patches should have same shape
         for i in range(min(5, len(dataset))):
             sample = dataset[i]
-            assert sample["images"].shape == (128, 128, 3), \
-                f"Patch {i} has incorrect shape: {sample['images'].shape}"
+            assert sample["image"].shape == (128, 128, 3), \
+                f"Patch {i} has incorrect shape: {sample['image'].shape}"
 
 
 class TestNormalization:
@@ -165,7 +165,7 @@ class TestNormalization:
         )
 
         sample = dataset[0]
-        images = sample["images"]
+        images = sample["image"]
 
         # After ImageNet normalization: (pixel - mean) / std
         # Mean ~= [0.485, 0.456, 0.406], Std ~= [0.229, 0.224, 0.225]

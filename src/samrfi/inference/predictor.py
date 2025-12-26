@@ -13,6 +13,8 @@ from tqdm import tqdm
 from transformers import Sam2Model, Sam2Processor
 
 from samrfi.data import AdaptivePatcher, MSLoader, Preprocessor, SAMDataset
+from samrfi.utils import logger
+from samrfi.utils.errors import CheckpointMismatchError
 
 
 # Monkey-patch transformers Sam2Model to fix view/reshape bug
@@ -110,7 +112,7 @@ class RFIPredictor:
 
         model_name = checkpoint_map.get(sam_checkpoint, checkpoint_map["large"])
 
-        print(f"Loading SAM2 model: {model_name}")
+        logger.info(f"Loading SAM2 model: {model_name}")
 
         # Load processor and model
         self.processor = Sam2Processor.from_pretrained(model_name)
@@ -122,7 +124,7 @@ class RFIPredictor:
         # via `model_path` is expected to be either a plain state_dict (mapping of tensor
         # names -> tensors) or a full training checkpoint dict containing a 'model_state_dict'
         # (and possibly optimizer state, epoch, metadata). We support both formats here.
-        print(f"Loading trained weights from: {self.model_path}")
+        logger.info(f"Loading trained weights from: {self.model_path}")
         checkpoint = torch.load(self.model_path, map_location=device)
 
         # Resolve state_dict from common wrapper formats
@@ -158,7 +160,7 @@ class RFIPredictor:
             try:
                 m_c = Sam2Model.from_pretrained(model_name_c)
             except Exception as e:
-                print(f"Failed to instantiate model for variant {candidate_variant}: {e}")
+                logger.warning(f"Failed to instantiate model for variant {candidate_variant}: {e}")
                 return (1e9, None)  # very bad score
             mism, missing, unexpected = _compare_to_model(m_c)
             score = len(mism) + len(missing) + len(unexpected)
@@ -169,7 +171,7 @@ class RFIPredictor:
             candidates = ["tiny", "small", "base_plus", "large"]
             scores = []
             for c in candidates:
-                print(f"Testing SAM variant: {c} ...")
+                logger.info(f"Testing SAM variant: {c} ...")
                 s, details = _variant_score(c)
                 scores.append((s, c, details))
             scores.sort()
@@ -199,12 +201,12 @@ class RFIPredictor:
 
         # If there are shape mismatches and user asked for auto-selection, attempt to find best match
         if mismatched and self.auto_select_sam:
-            print(
-                "Warning: shape mismatches detected; attempting to auto-select the SAM variant that best matches the checkpoint (this may download models and be slow)..."
+            logger.warning(
+                "Shape mismatches detected; attempting to auto-select the SAM variant that best matches the checkpoint (this may download models and be slow)..."
             )
             best_variant = self._auto_select_sam_variant(state_dict)
             if best_variant:
-                print(
+                logger.info(
                     f"Auto-selected SAM variant: {best_variant}. Re-instantiating model and retrying load."
                 )
                 model_name = checkpoint_map.get(best_variant, checkpoint_map["large"])
@@ -213,7 +215,7 @@ class RFIPredictor:
                 # Recompute mismatches against new model
                 mismatched, missing_in_ckpt, unexpected_in_ckpt = _compare_to_model(self.model)
             else:
-                print("Auto-selection failed to find a better match; proceeding to error handling.")
+                logger.warning("Auto-selection failed to find a better match; proceeding to error handling.")
 
         # If there are shape mismatches, fail early unless user explicitly allows partial loads
         if mismatched and not allow_partial_load:
@@ -259,19 +261,21 @@ class RFIPredictor:
         self.model.to(device)
         self.model.eval()
 
-        print(f"✓ Model loaded on {device}")
+        logger.info(f"✓ Model loaded on {device}")
 
         # Display preprocessing info if available
         if self.checkpoint_preprocessing:
             print("\nCheckpoint preprocessing config:")
             for key, value in self.checkpoint_preprocessing.items():
-                print(f"  {key}: {value}")
+                line = f"  {key}: {value}"
+                logger.info(line)
+                print(line)
 
     def _validate_preprocessing_params(self, patch_size, stretch, normalize_before_stretch=False, normalize_after_stretch=False):
         """
         Validate inference preprocessing parameters against checkpoint metadata.
 
-        Raises ValueError if critical parameters mismatch (patch_size).
+        Raises CheckpointMismatchError if critical parameters mismatch (patch_size).
         Warns if non-critical parameters mismatch (stretch, normalization).
 
         Args:
@@ -279,6 +283,9 @@ class RFIPredictor:
             stretch: Stretch function ('SQRT', 'LOG10', or None)
             normalize_before_stretch: Normalization before stretch
             normalize_after_stretch: Normalization after stretch
+
+        Raises:
+            CheckpointMismatchError: If patch_size doesn't match checkpoint
         """
         if not self.checkpoint_preprocessing:
             # No metadata in checkpoint (old checkpoint), skip validation
@@ -287,37 +294,35 @@ class RFIPredictor:
         # Critical: patch_size must match
         checkpoint_patch_size = self.checkpoint_preprocessing.get("patch_size")
         if checkpoint_patch_size and checkpoint_patch_size != "unknown" and checkpoint_patch_size != patch_size:
-            raise ValueError(
-                f"\n❌ CRITICAL: Patch size mismatch!\n"
-                f"   Model trained with patch_size={checkpoint_patch_size}\n"
-                f"   But inference using patch_size={patch_size}\n"
-                f"   Predictions will be incorrect!\n"
-                f"   → Use --patch-size {checkpoint_patch_size}"
+            raise CheckpointMismatchError(
+                param_name="patch_size",
+                checkpoint_value=checkpoint_patch_size,
+                inference_value=patch_size
             )
 
         # Warning: stretch function should match
         checkpoint_stretch = self.checkpoint_preprocessing.get("stretch")
         if checkpoint_stretch is not None and checkpoint_stretch != stretch:
-            print(
-                f"\n⚠️  WARNING: Stretch function mismatch\n"
-                f"   Model trained with stretch={checkpoint_stretch}\n"
-                f"   But inference using stretch={stretch}\n"
-                f"   This may reduce accuracy."
+            logger.warning(
+                f"Stretch function mismatch: model trained with stretch={checkpoint_stretch}, "
+                f"inference using stretch={stretch}. This may reduce accuracy."
             )
+            # Also print to stdout so tests and users see a clear WARNING line
+            print(f"WARNING: {warning_msg}")
 
         # Info: normalization parameters (less critical for synthetic data)
         checkpoint_norm_before = self.checkpoint_preprocessing.get("normalize_before_stretch")
         checkpoint_norm_after = self.checkpoint_preprocessing.get("normalize_after_stretch")
 
         if checkpoint_norm_before is not None and checkpoint_norm_before != normalize_before_stretch:
-            print(
-                f"   Note: normalize_before_stretch differs "
+            logger.info(
+                f"Note: normalize_before_stretch differs "
                 f"(training={checkpoint_norm_before}, inference={normalize_before_stretch})"
             )
 
         if checkpoint_norm_after is not None and checkpoint_norm_after != normalize_after_stretch:
-            print(
-                f"   Note: normalize_after_stretch differs "
+            logger.info(
+                f"Note: normalize_after_stretch differs "
                 f"(training={checkpoint_norm_after}, inference={normalize_after_stretch})"
             )
 
@@ -348,19 +353,19 @@ class RFIPredictor:
         Returns:
             Predicted probabilities (if return_probabilities=True) or flags array (baselines, pols, channels, times)
         """
-        print(f"\n{'='*60}")
-        print("RFI Prediction - Array Mode")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("RFI Prediction - Array Mode")
+        logger.info(f"{'='*60}")
 
         # Validate preprocessing parameters against checkpoint
         self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
 
         data_shape = data.shape
-        print(f"  Input shape: {data_shape}")
-        print(f"  Data dtype: {data.dtype}, complex: {np.iscomplexobj(data)}")
+        logger.info(f"  Input shape: {data_shape}")
+        logger.info(f"  Data dtype: {data.dtype}, complex: {np.iscomplexobj(data)}")
 
         # Preprocess (pass complex data directly - Preprocessor will extract features)
-        print("\nPreprocessing data...")
+        logger.info("\nPreprocessing data...")
         preprocessor = Preprocessor(data, flags=None)
         dataset = preprocessor.create_dataset(
             patch_size=patch_size,
@@ -375,7 +380,7 @@ class RFIPredictor:
         )
 
         # Predict
-        print("\nRunning SAM2 prediction...")
+        logger.info("\nRunning SAM2 prediction...")
         predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), return_probabilities=return_probabilities, threshold=threshold)
 
         # Reconstruct
@@ -388,14 +393,14 @@ class RFIPredictor:
         result = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations)
 
         if return_probabilities:
-            print(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
+            logger.info(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
         else:
             flag_percent = np.sum(result) / result.size * 100
-            print(f"  Flagged: {flag_percent:.2f}% of data")
+            logger.info(f"  Flagged: {flag_percent:.2f}% of data")
 
-        print(f"\n{'='*60}")
-        print("✓ Prediction complete")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("✓ Prediction complete")
+        logger.info(f"{'='*60}")
 
         return result
 
@@ -430,20 +435,20 @@ class RFIPredictor:
         Returns:
             Predicted flags array (baselines, pols, channels, times)
         """
-        print(f"\n{'='*60}")
-        print("RFI Prediction - Single Pass")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("RFI Prediction - Single Pass")
+        logger.info(f"{'='*60}")
 
         # Validate preprocessing parameters against checkpoint
         self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
 
         # Load MS
-        print("\n[1/4] Loading measurement set...")
+        logger.info("\n[1/4] Loading measurement set...")
         loader = MSLoader(ms_path)
         loader.load(num_antennas=num_antennas, mode="DATA")
 
         data_shape = loader.data.shape
-        print(f"  Data shape: {data_shape}")
+        logger.info(f"  Data shape: {data_shape}")
 
         # Check MS compatibility and setup adaptive patching if needed
         baselines, pols, channels, times = data_shape
@@ -457,7 +462,7 @@ class RFIPredictor:
             print("\n[2/4] Loading and applying existing flags...")
             existing_flags = loader.load_flags()
             data = np.where(existing_flags, np.nan, data)
-            print(f"  Masked {np.sum(existing_flags)/existing_flags.size*100:.2f}% of data")
+            logger.info(f"  Masked {np.sum(existing_flags)/existing_flags.size*100:.2f}% of data")
 
         # Pad data if needed
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
@@ -468,7 +473,7 @@ class RFIPredictor:
                 print("\n[2/4] No padding needed - data dimensions compatible")
 
         # Preprocess
-        print("\n[3/4] Preprocessing data...")
+        logger.info("\n[3/4] Preprocessing data...")
         preprocessor = Preprocessor(data, flags=None)
         dataset = preprocessor.create_dataset(
             patch_size=patch_size,
@@ -482,24 +487,24 @@ class RFIPredictor:
         )
 
         # Predict
-        print("\n[4/4] Running SAM2 prediction...")
+        logger.info("\n[4/4] Running SAM2 prediction...")
         predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), threshold=threshold)
 
         # Reconstruct full flags from patches
-        print("\nReconstructing full flag array...")
+        logger.info("\nReconstructing full flag array...")
         # Extract augmentation state from dataset metadata
         num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
         # Use padded shape for reconstruction if padding was applied
         recon_shape = patcher.get_patch_info()["padded_shape"]
         predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size, num_rotations)
 
-        # Crop flags back to original dimensions if padding was used
+        # Crop flags to original dimensions if padding was used
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
             print("  Cropping flags to original dimensions...")
             predicted_flags = patcher.crop_flags(predicted_flags)
 
         flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
-        print(f"  Flagged: {flag_percent:.2f}% of data")
+        logger.info(f"  Flagged: {flag_percent:.2f}% of data")
 
         # Save flags
         if save_flags:
@@ -507,9 +512,9 @@ class RFIPredictor:
             loader.save_flags(predicted_flags)
             print("  ✓ Flags saved")
 
-        print(f"\n{'='*60}")
-        print("✓ Prediction complete")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("✓ Prediction complete")
+        logger.info(f"{'='*60}")
 
         return predicted_flags
 
@@ -548,26 +553,26 @@ class RFIPredictor:
         Returns:
             Cumulative flags from all iterations
         """
-        print(f"\n{'='*60}")
-        print(f"RFI Prediction - Iterative ({num_iterations} passes)")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"RFI Prediction - Iterative ({num_iterations} passes)")
+        logger.info(f"{'='*60}")
 
         # Validate preprocessing parameters against checkpoint
         self._validate_preprocessing_params(patch_size, stretch, normalize_before_stretch, normalize_after_stretch)
 
         # Load MS once
-        print("\n[Setup] Loading measurement set...")
+        logger.info("\n[Setup] Loading measurement set...")
         loader = MSLoader(ms_path)
         loader.load(num_antennas=num_antennas, mode="DATA")
 
         data_shape = loader.data.shape
-        print(f"  Data shape: {data_shape}")
+        logger.info(f"  Data shape: {data_shape}")
 
         # Initialize cumulative flags
         if apply_existing_flags:
             print("\n[Setup] Loading existing MS flags...")
             cumulative_flags = loader.load_flags()
-            print(f"  Existing flags: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}%")
+            logger.info(f"  Existing flags: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}%")
         else:
             cumulative_flags = np.zeros(data_shape, dtype=bool)
 
@@ -575,9 +580,9 @@ class RFIPredictor:
 
         # Iterative flagging
         for iteration in range(num_iterations):
-            print(f"\n{'='*60}")
-            print(f"Iteration {iteration+1}/{num_iterations}")
-            print(f"{'='*60}")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Iteration {iteration+1}/{num_iterations}")
+            logger.info(f"{'='*60}")
 
             # Apply cumulative flags to data
             if iteration > 0:
@@ -620,20 +625,20 @@ class RFIPredictor:
             new_percent = np.sum(new_flags) / new_flags.size * 100
             total_percent = np.sum(cumulative_flags) / cumulative_flags.size * 100
 
-            print(f"\n  New flags this iteration: {new_percent:.2f}%")
-            print(f"  Total flagged: {total_percent:.2f}%")
+            logger.info(f"\n  New flags this iteration: {new_percent:.2f}%")
+            logger.info(f"  Total flagged: {total_percent:.2f}%")
 
         # Save final flags
         if save_flags:
-            print(f"\n{'='*60}")
+            logger.info(f"\n{'='*60}")
             print("Saving final flags to MS...")
             loader.save_flags(cumulative_flags)
             print("  ✓ Flags saved")
 
-        print(f"\n{'='*60}")
-        print("✓ Iterative prediction complete")
-        print(f"  Final: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}% flagged")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info("✓ Iterative prediction complete")
+        logger.info(f"  Final: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}% flagged")
+        logger.info(f"{'='*60}")
 
         return cumulative_flags
 
@@ -687,7 +692,7 @@ class RFIPredictor:
                 sigmoid_probs = torch.sigmoid(pred_masks)
 
                 # Debug: print probability distribution
-                print(f"  Sigmoid probs - min: {sigmoid_probs.min():.4f}, max: {sigmoid_probs.max():.4f}, mean: {sigmoid_probs.mean():.4f}")
+                logger.info(f"  Sigmoid probs - min: {sigmoid_probs.min():.4f}, max: {sigmoid_probs.max():.4f}, mean: {sigmoid_probs.mean():.4f}")
 
                 # Return probabilities or thresholded masks
                 if return_probabilities:

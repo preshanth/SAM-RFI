@@ -50,16 +50,25 @@ def compute_precision(pred, true):
         true: Ground truth binary mask (torch.Tensor or numpy array)
 
     Returns:
-        float: Precision in [0, 1], or 1.0 if no predictions made
+        float: Precision in [0, 1]
+               Returns 1.0 if no predictions on clean data (correct abstention)
+               Returns 0.0 if no predictions on RFI data (failure to detect)
     """
     pred = _to_numpy(pred).astype(bool)
     true = _to_numpy(true).astype(bool)
 
     tp = np.logical_and(pred, true).sum()
     fp = np.logical_and(pred, ~true).sum()
+    fn = np.logical_and(~pred, true).sum()
 
     if tp + fp == 0:
-        return 1.0  # No predictions = no false positives
+        # No predictions made
+        if fn == 0:
+            # No RFI in ground truth = correct abstention
+            return 1.0
+        else:
+            # RFI exists but not detected = failure
+            return 0.0
 
     return tp / (tp + fp)
 

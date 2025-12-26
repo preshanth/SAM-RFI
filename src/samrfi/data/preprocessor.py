@@ -13,6 +13,7 @@ from patchify import patchify
 from scipy import stats
 
 from .torch_dataset import TorchDataset
+from samrfi.utils import logger
 
 
 # Standalone functions for multiprocessing (must be picklable)
@@ -155,131 +156,131 @@ class Preprocessor:
         Returns:
             TorchDataset with torch tensor images (H, W, 3) and labels (H, W)
         """
-        print("\n[Preprocessor] Creating dataset...")
-        print(f"  Input shape: {self.data.shape}")
-        print(f"  Patch size: {patch_size}x{patch_size}")
-        print(f"  Normalize before stretch: {normalize_before_stretch}")
-        print(f"  Stretch: {stretch if stretch else 'None'}")
-        print(f"  Normalize after stretch: {normalize_after_stretch}")
-        print(f"  Parallel workers: {num_workers if num_workers else 'sequential'}")
+        logger.info("\n[Preprocessor] Creating dataset...")
+        logger.info(f"  Input shape: {self.data.shape}")
+        logger.info(f"  Patch size: {patch_size}x{patch_size}")
+        logger.info(f"  Normalize before stretch: {normalize_before_stretch}")
+        logger.info(f"  Stretch: {stretch if stretch else 'None'}")
+        logger.info(f"  Normalize after stretch: {normalize_after_stretch}")
+        logger.info(f"  Parallel workers: {num_workers if num_workers else 'sequential'}")
 
         # Step 1: Augmentation (rotation)
         if enable_augmentation and augmentation_rotations > 1:
-            print(f"  [1/7] Applying {augmentation_rotations}-way rotation augmentation...")
+            logger.info(f"  [1/7] Applying {augmentation_rotations}-way rotation augmentation...")
             augmented_data = self._apply_rotations(self.data, augmentation_rotations)
-            print(f"    Augmented to {len(augmented_data)} waterfalls")
+            logger.info(f"    Augmented to {len(augmented_data)} waterfalls")
 
             if use_custom_flags and self.flags is not None:
                 augmented_flags = self._apply_rotations(self.flags, augmentation_rotations)
             else:
                 augmented_flags = None
         else:
-            print("  [1/7] Skipping augmentation (disabled or rotations=1)")
+            logger.info("  [1/7] Skipping augmentation (disabled or rotations=1)")
             # Flatten data without rotation
             augmented_data = [pol for baseline in self.data for pol in baseline]
             if use_custom_flags and self.flags is not None:
                 augmented_flags = [pol for baseline in self.flags for pol in baseline]
             else:
                 augmented_flags = None
-            print(f"    Using {len(augmented_data)} waterfalls (no augmentation)")
+            logger.info(f"    Using {len(augmented_data)} waterfalls (no augmentation)")
 
         # Step 2: Patchify (or skip if patch_size >= image dimensions)
         waterfall_shape = augmented_data[0].shape
         if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
             # Skip patching - use full waterfalls
-            print(
+            logger.info(
                 f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})..."
             )
             self.patches = np.array(augmented_data)
             if augmented_flags is not None:
                 augmented_flags = np.array(augmented_flags)
-            print(f"    Using {len(self.patches)} full waterfalls")
+            logger.info(f"    Using {len(self.patches)} full waterfalls")
         else:
             # Apply patching
-            print(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
+            logger.info(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
             self.patches = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
             if augmented_flags is not None:
                 augmented_flags = self._create_patches(
                     augmented_flags, patch_size, num_workers=num_workers
                 )
-            print(f"    Created {len(self.patches)} patches")
+            logger.info(f"    Created {len(self.patches)} patches")
 
         # Check if data is complex
         is_complex = np.iscomplexobj(self.patches[0]) if len(self.patches) > 0 else False
 
         if is_complex:
-            print("  [3/7] Complex data detected - skipping normalization (will extract channels)")
-            print("  [4/7] Skipping stretch (using gradient/log_amp/phase channels)")
-            print("  [5/7] Skipping normalization (channels normalized independently)")
+            logger.info("  [3/7] Complex data detected - skipping normalization (will extract channels)")
+            logger.info("  [4/7] Skipping stretch (using gradient/log_amp/phase channels)")
+            logger.info("  [5/7] Skipping normalization (channels normalized independently)")
         else:
             # Step 3: Normalize before stretch (optional, real data only)
             if normalize_before_stretch:
-                print("  [3/7] Normalizing patches (before stretch)...")
+                logger.info("  [3/7] Normalizing patches (before stretch)...")
                 self.patches = self._normalize(self.patches)
             else:
-                print("  [3/7] Skipping normalization before stretch")
+                logger.info("  [3/7] Skipping normalization before stretch")
 
             # Step 4: Apply stretch (optional, real data only)
             if stretch:
-                print(f"  [4/7] Applying {stretch} stretch...")
+                logger.info(f"  [4/7] Applying {stretch} stretch...")
                 self.patches = self._apply_stretch(self.patches, stretch)
             else:
-                print("  [4/7] Skipping stretch")
+                logger.info("  [4/7] Skipping stretch")
 
             # Step 5: Normalize after stretch (optional, real data only)
             if normalize_after_stretch:
-                print("  [5/7] Normalizing patches (after stretch)...")
+                logger.info("  [5/7] Normalizing patches (after stretch)...")
                 self.patches = self._normalize(self.patches)
             else:
-                print("  [5/7] Skipping normalization after stretch")
+                logger.info("  [5/7] Skipping normalization after stretch")
 
         # Step 6: Generate or use flags
         # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
         if inference_mode:
-            print("  [6/7] Inference mode: creating dummy flags (not used)...")
+            logger.info("  [6/7] Inference mode: creating dummy flags (not used)...")
             # Create dummy flags - not used during inference
             self.patch_flags = np.zeros(
                 (len(self.patches), self.patches[0].shape[0], self.patches[0].shape[1]),
                 dtype=np.uint8,
             )
         elif use_custom_flags and augmented_flags is not None:
-            print("  [6/7] Using custom flags (respecting incoming flags)...")
+            logger.info("  [6/7] Using custom flags (respecting incoming flags)...")
             # Flags already patchified (or converted to array) in Step 2
             self.patch_flags = augmented_flags
         else:
-            print(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
+            logger.info(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
             self.patch_flags = self._generate_mad_flags(
                 self.patches, flag_sigma, num_workers=num_workers
             )
 
-        print(f"    Flag patches: {self.patch_flags.shape}")
+        logger.info(f"    Flag patches: {self.patch_flags.shape}")
 
         # Step 7: Remove blank patches (skip in inference mode to preserve order)
         if not inference_mode:
-            print("  [7/7] Removing blank patches...")
+            logger.info("  [7/7] Removing blank patches...")
             initial_count = len(self.patches)
             self._remove_blank_patches()
             removed = initial_count - len(self.patches)
-            print(f"    Removed {removed} blank patches, {len(self.patches)} remain")
+            logger.info(f"    Removed {removed} blank patches, {len(self.patches)} remain")
         else:
-            print("  [7/7] Inference mode: skipping blank patch removal (preserves order)")
+            logger.info("  [7/7] Inference mode: skipping blank patch removal (preserves order)")
 
         # Step 8: Shuffle (skip in inference mode to preserve order)
         if not inference_mode:
-            print("  [8/8] Shuffling patches...")
+            logger.info("  [8/8] Shuffling patches...")
             self._shuffle()
         else:
-            print("  [8/8] Inference mode: skipping shuffle (preserves order)")
+            logger.info("  [8/8] Inference mode: skipping shuffle (preserves order)")
 
         # Limit number of patches if requested
         if num_patches and num_patches < len(self.patches):
             self.patches = self.patches[:num_patches]
             self.patch_flags = self.patch_flags[:num_patches]
-            print(f"    Limited to {num_patches} patches")
+            logger.info(f"    Limited to {num_patches} patches")
 
         # Create TorchDataset
-        print("\n  Creating TorchDataset...")
-        print("    Extracting 3-channel representations (gradient, log_amp, phase)...")
+        logger.info("\n  Creating TorchDataset...")
+        logger.info("    Extracting 3-channel representations (gradient, log_amp, phase)...")
 
         # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
         images_3ch = []
@@ -299,13 +300,13 @@ class Preprocessor:
         images_array = np.array(images_3ch, dtype=np.float32)
 
         # Apply SAM2 ImageNet normalization (preprocess once, not during training)
-        print("    Applying SAM2 ImageNet normalization...")
+        logger.info("    Applying SAM2 ImageNet normalization...")
         images_array = self._apply_sam2_normalization(images_array)
 
         labels_array = np.array(self.patch_flags, dtype=np.uint8)
 
         # Convert to torch tensors
-        print("    Converting to torch tensors...")
+        logger.info("    Converting to torch tensors...")
         images_tensor = torch.from_numpy(images_array).to(torch.float32)
         labels_tensor = torch.from_numpy(labels_array).to(torch.uint8)
 
@@ -320,9 +321,9 @@ class Preprocessor:
         }
 
         self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
-        print(f"  ✓ Dataset ready: {len(self.dataset)} samples")
-        print("    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
-        print(f"    {self.dataset}")
+        logger.info(f"  ✓ Dataset ready: {len(self.dataset)} samples")
+        logger.info("    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
+        logger.info(f"    {self.dataset}")
 
         return self.dataset
 
@@ -730,15 +731,15 @@ class GPUPreprocessor:
             - complex_patches: List of complex numpy arrays (H, W)
             - masks: List of binary mask arrays (H, W)
         """
-        print("\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
-        print(f"  Input shape: {self.data.shape}")
-        print(f"  Patch size: {patch_size}x{patch_size}")
-        print(f"  Data type: {self.data.dtype}")
+        logger.info("\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
+        logger.info(f"  Input shape: {self.data.shape}")
+        logger.info(f"  Patch size: {patch_size}x{patch_size}")
+        logger.info(f"  Data type: {self.data.dtype}")
 
         # Flatten data (no augmentation - done on GPU later)
-        print("  [1/3] Flattening waterfalls (no augmentation)...")
+        logger.info("  [1/3] Flattening waterfalls (no augmentation)...")
         flattened_data = [pol for baseline in self.data for pol in baseline]
-        print(f"    Using {len(flattened_data)} waterfalls")
+        logger.info(f"    Using {len(flattened_data)} waterfalls")
 
         if self.flags is not None:
             flattened_flags = [pol for baseline in self.flags for pol in baseline]
@@ -749,23 +750,23 @@ class GPUPreprocessor:
         # Patchify (or use full waterfalls)
         waterfall_shape = flattened_data[0].shape
         if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
-            print("  [2/3] Using full waterfalls (patch_size >= image size)...")
+            logger.info("  [2/3] Using full waterfalls (patch_size >= image size)...")
             self.raw_patches = flattened_data
             self.raw_masks = flattened_flags
-            print(f"    Using {len(self.raw_patches)} full waterfalls")
+            logger.info(f"    Using {len(self.raw_patches)} full waterfalls")
         else:
-            print(f"  [2/3] Patchifying into {patch_size}x{patch_size} patches...")
+            logger.info(f"  [2/3] Patchifying into {patch_size}x{patch_size} patches...")
             self.raw_patches = self._create_patches(
                 flattened_data, patch_size, num_workers=num_workers
             )
             self.raw_masks = self._create_patches(
                 flattened_flags, patch_size, num_workers=num_workers
             )
-            print(f"    Created {len(self.raw_patches)} patches")
+            logger.info(f"    Created {len(self.raw_patches)} patches")
 
         # Remove blank patches (optional)
         if remove_blank:
-            print("  [3/3] Removing blank patches...")
+            logger.info("  [3/3] Removing blank patches...")
             initial_count = len(self.raw_patches)
             has_rfi = [mask.any() for mask in self.raw_masks]
             self.raw_patches = [
@@ -773,31 +774,31 @@ class GPUPreprocessor:
             ]
             self.raw_masks = [m for m, keep in zip(self.raw_masks, has_rfi, strict=False) if keep]
             removed = initial_count - len(self.raw_patches)
-            print(f"    Removed {removed} blank patches, kept {len(self.raw_patches)}")
+            logger.info(f"    Removed {removed} blank patches, kept {len(self.raw_patches)}")
         else:
-            print("  [3/3] Keeping all patches (blank removal disabled)")
+            logger.info("  [3/3] Keeping all patches (blank removal disabled)")
 
         # Limit patches if requested
         if num_patches and num_patches < len(self.raw_patches):
-            print(f"  Limiting to {num_patches} patches...")
+            logger.info(f"  Limiting to {num_patches} patches...")
             indices = np.random.choice(len(self.raw_patches), num_patches, replace=False)
             self.raw_patches = [self.raw_patches[i] for i in indices]
             self.raw_masks = [self.raw_masks[i] for i in indices]
 
         # Shuffle
-        print("  Shuffling patches...")
+        logger.info("  Shuffling patches...")
         indices = np.random.permutation(len(self.raw_patches))
         self.raw_patches = [self.raw_patches[i] for i in indices]
         self.raw_masks = [self.raw_masks[i] for i in indices]
 
-        print(f"\n[GPUPreprocessor] Done! Created {len(self.raw_patches)} raw patches")
-        print(f"  Patch dtype: {self.raw_patches[0].dtype}")
-        print(f"  Patch shape: {self.raw_patches[0].shape}")
-        print(f"  Storage: {self._estimate_storage_mb():.1f} MB (complex)")
-        print(
+        logger.info(f"\n[GPUPreprocessor] Done! Created {len(self.raw_patches)} raw patches")
+        logger.info(f"  Patch dtype: {self.raw_patches[0].dtype}")
+        logger.info(f"  Patch shape: {self.raw_patches[0].shape}")
+        logger.info(f"  Storage: {self._estimate_storage_mb():.1f} MB (complex)")
+        logger.info(
             f"  vs CPU pipeline: ~{self._estimate_storage_mb() * 4:.1f} MB (4x augmentation + RGB)"
         )
-        print(f"  Storage savings: ~{(1 - 1/4) * 100:.0f}%")
+        logger.info(f"  Storage savings: ~{(1 - 1/4) * 100:.0f}%")
 
         return self.raw_patches, self.raw_masks
 

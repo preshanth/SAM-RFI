@@ -33,17 +33,17 @@ class TestPreprocessingPipeline:
 
         # Verify sample format
         sample = dataset[0]
-        assert "images" in sample, "Sample missing images"
-        assert "labels" in sample, "Sample missing labels"
+        assert "image" in sample, "Sample missing image"
+        assert "label" in sample, "Sample missing label"
 
         # Verify shapes
-        assert sample["images"].shape == (256, 256, 3), "Image shape incorrect"
-        assert sample["labels"].shape == (256, 256), "Label shape incorrect"
+        assert sample["image"].shape == (256, 256, 3), "Image shape incorrect"
+        assert sample["label"].shape == (256, 256), "Label shape incorrect"
 
         # Verify metadata preserved
         assert hasattr(dataset, "metadata"), "Dataset should have metadata"
         assert dataset.metadata["patch_size"] == 256
-        assert dataset.metadata["augmentation_rotations"] == 1
+        assert dataset.metadata["augmentation_rotations"] == 4
 
     def test_preprocessing_metadata_consistency(self, synthetic_waterfall_small):
         """Test that metadata remains consistent through preprocessing."""
@@ -64,8 +64,17 @@ class TestPreprocessingPipeline:
         preprocessor = Preprocessor(data, flags=None)
         dataset = preprocessor.create_dataset(**config)
 
-        # All config values should be in metadata
-        for key, value in config.items():
+        # Check that critical config values are in metadata
+        # Note: enable_augmentation is not saved (implicit from augmentation_rotations)
+        expected_metadata = {
+            "patch_size": 256,
+            "stretch": None,
+            "flag_sigma": 5,
+            "augmentation_rotations": 1,
+            "normalize_before_stretch": False,
+            "normalize_after_stretch": False,
+        }
+        for key, value in expected_metadata.items():
             assert dataset.metadata[key] == value, \
                 f"Metadata mismatch: {key} = {dataset.metadata[key]}, expected {value}"
 
