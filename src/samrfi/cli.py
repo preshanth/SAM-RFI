@@ -6,9 +6,14 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from .config.config_loader import ConfigLoader
+from .data import MSLoader
 from .data_generation.ms_generator import MSDataGenerator
 from .data_generation.synthetic_generator import SyntheticDataGenerator
+from .evaluation.metrics import evaluate_segmentation
 from .inference import RFIPredictor
 from .training.sam2_trainer import SAM2Trainer
 
@@ -283,6 +288,9 @@ def predict_command(args):
         batch_size=args.batch_size,
     )
 
+    # Convert "None" string to None
+    stretch = None if args.stretch == "None" else args.stretch
+
     # Determine if iterative
     num_iterations = args.iterations if args.iterations else 1
     is_iterative = num_iterations > 1
@@ -294,8 +302,9 @@ def predict_command(args):
             num_iterations=num_iterations,
             num_antennas=args.num_antennas,
             patch_size=args.patch_size,
-            stretch=args.stretch,
+            stretch=stretch,
             save_flags=not args.no_save,
+            apply_existing_flags=args.apply_existing,
         )
     else:
         print("\nMode: Single-pass flagging")
@@ -303,7 +312,7 @@ def predict_command(args):
             ms_path=args.input,
             num_antennas=args.num_antennas,
             patch_size=args.patch_size,
-            stretch=args.stretch,
+            stretch=stretch,
             apply_existing_flags=args.apply_existing,
             save_flags=not args.no_save,
         )
@@ -314,6 +323,59 @@ def predict_command(args):
     print(f"Total flagged: {flags.sum()/flags.size*100:.2f}%")
     if not args.no_save:
         print(f"Flags saved to: {args.input}")
+
+
+def evaluate_command(args):
+    """Execute evaluation command - compute metrics given ground truth and predicted flags"""
+    print("=" * 60)
+    print("SAM-RFI Evaluation")
+    print("=" * 60)
+
+    # Load ground truth
+    print(f"\n[1/3] Loading ground truth from: {args.ground_truth}")
+    ground_truth = np.load(args.ground_truth)
+    print(f"  Ground truth shape: {ground_truth.shape}")
+    gt_percent = np.sum(ground_truth) / ground_truth.size * 100
+    print(f"  Ground truth RFI: {gt_percent:.2f}%")
+
+    # Load predicted flags from MS
+    print(f"\n[2/3] Loading predicted flags from MS: {args.input}")
+    loader = MSLoader(args.input)
+    loader.load()
+    predicted_flags = loader.load_flags()
+    print(f"  Predicted flags shape: {predicted_flags.shape}")
+    pred_percent = np.sum(predicted_flags) / predicted_flags.size * 100
+    print(f"  Predicted RFI: {pred_percent:.2f}%")
+
+    # Check shape compatibility
+    if ground_truth.shape != predicted_flags.shape:
+        print(f"\n✗ Error: Shape mismatch!")
+        print(f"  Ground truth: {ground_truth.shape}")
+        print(f"  Predicted: {predicted_flags.shape}")
+        return 1
+
+    # Compute metrics
+    print(f"\n[3/3] Computing metrics...")
+    metrics = evaluate_segmentation(predicted_flags, ground_truth)
+
+    # Display metrics
+    print("\n" + "=" * 60)
+    print("Evaluation Results")
+    print("=" * 60)
+    for metric_name, value in metrics.items():
+        print(f"  {metric_name.upper():12s}: {value:.4f}")
+
+    # Save to CSV
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    df = pd.DataFrame([metrics])
+    df.insert(0, 'ms_path', args.input)
+    df.insert(1, 'ground_truth_path', args.ground_truth)
+    df.to_csv(output_path, index=False)
+
+    print(f"\n✓ Metrics saved to: {output_path}")
+    print("=" * 60)
 
 
 def main():
@@ -424,8 +486,8 @@ Examples:
     predict_parser.add_argument(
         "--stretch",
         default="SQRT",
-        choices=["SQRT", "LOG10"],
-        help="Stretch function (default: SQRT)",
+        choices=["SQRT", "LOG10", "None"],
+        help="Stretch function (default: SQRT, use None for synthetic data)",
     )
     predict_parser.add_argument(
         "--device", default="cuda", choices=["cuda", "cpu"], help="Compute device (default: cuda)"
@@ -434,10 +496,18 @@ Examples:
     predict_parser.add_argument(
         "--apply-existing",
         action="store_true",
-        help="Apply existing MS flags before prediction (single-pass only)",
+        help="Apply existing MS flags before prediction",
     )
     predict_parser.add_argument(
         "--no-save", action="store_true", help="Do not save flags to MS (prediction only)"
+    )
+
+    # Evaluate parser
+    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate predictions against ground truth")
+    evaluate_parser.add_argument("--input", required=True, help="Path to measurement set with predicted flags")
+    evaluate_parser.add_argument("--ground-truth", required=True, help="Path to ground truth .npy file")
+    evaluate_parser.add_argument(
+        "--output", default="metrics.csv", help="Output CSV file path (default: metrics.csv)"
     )
 
     # Parse arguments
@@ -465,6 +535,9 @@ Examples:
             return 0
         elif args.command == "predict":
             predict_command(args)
+            return 0
+        elif args.command == "evaluate":
+            evaluate_command(args)
             return 0
     except Exception as e:
         print(f"\n✗ Error: {e}", file=sys.stderr)

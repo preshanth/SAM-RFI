@@ -15,6 +15,54 @@ from transformers import Sam2Model, Sam2Processor
 from samrfi.data import AdaptivePatcher, MSLoader, Preprocessor, SAMDataset
 
 
+# Monkey-patch transformers Sam2Model to fix view/reshape bug
+# The bug: feat.permute(1, 2, 0).view(...) fails because permute makes tensor non-contiguous
+# Fix: Replace view() with reshape() which handles non-contiguous tensors
+def _patch_sam2_view_to_reshape():
+    """
+    Patch Sam2Model.forward to use reshape instead of view after permute operations.
+
+    This fixes RuntimeError: view size is not compatible with input tensor's size and stride
+    (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+    """
+    import transformers.models.sam2.modeling_sam2 as sam2_module
+
+    # Save original forward method
+    original_forward = sam2_module.Sam2Model.forward
+
+    def patched_forward(self, *args, **kwargs):
+        """Wrapped forward that ensures tensors are contiguous before view operations"""
+        # Temporarily replace tensor.view with a safe version
+        original_view = torch.Tensor.view
+
+        def safe_view(tensor, *shape):
+            """Use reshape instead of view to handle non-contiguous tensors"""
+            try:
+                return original_view(tensor, *shape)
+            except RuntimeError as e:
+                if "view size is not compatible" in str(e):
+                    # Fall back to reshape which handles non-contiguous tensors
+                    return tensor.reshape(*shape)
+                raise
+
+        # Monkey-patch view for this forward pass
+        torch.Tensor.view = safe_view
+        try:
+            result = original_forward(self, *args, **kwargs)
+        finally:
+            # Restore original view
+            torch.Tensor.view = original_view
+
+        return result
+
+    # Apply the patch
+    sam2_module.Sam2Model.forward = patched_forward
+
+
+# Apply patch at module load time
+_patch_sam2_view_to_reshape()
+
+
 class RFIPredictor:
     """
     Apply trained SAM2 model to predict RFI flags.
@@ -399,6 +447,7 @@ class RFIPredictor:
         patch_size=128,
         stretch="SQRT",
         save_flags=True,
+        apply_existing_flags=False,
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
@@ -417,8 +466,9 @@ class RFIPredictor:
             num_iterations: Number of flagging passes
             num_antennas: Number of antennas to load (None = all)
             patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT' or 'LOG10')
+            stretch: Stretch function ('SQRT', 'LOG10', or None)
             save_flags: If True, save final flags to MS
+            apply_existing_flags: If True, load and preserve existing MS flags
             threshold: Probability threshold for RFI detection (default: 0.5)
 
         Returns:
@@ -437,7 +487,13 @@ class RFIPredictor:
         print(f"  Data shape: {data_shape}")
 
         # Initialize cumulative flags
-        cumulative_flags = np.zeros(data_shape, dtype=bool)
+        if apply_existing_flags:
+            print("\n[Setup] Loading existing MS flags...")
+            cumulative_flags = loader.load_flags()
+            print(f"  Existing flags: {np.sum(cumulative_flags)/cumulative_flags.size*100:.2f}%")
+        else:
+            cumulative_flags = np.zeros(data_shape, dtype=bool)
+
         original_data = loader.magnitude.copy()
 
         # Iterative flagging
@@ -523,9 +579,9 @@ class RFIPredictor:
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Predicting patches"):
-                # Move to device
-                pixel_values = batch["pixel_values"].to(self.device)
-                input_boxes = batch["input_boxes"].to(self.device)
+                # Move to device and ensure contiguity
+                pixel_values = batch["pixel_values"].to(self.device).contiguous()
+                input_boxes = batch["input_boxes"].to(self.device).contiguous()
 
                 # Forward pass
                 outputs = self.model(

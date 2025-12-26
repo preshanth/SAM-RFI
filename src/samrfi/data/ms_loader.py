@@ -99,11 +99,21 @@ class MSLoader:
                 # Allocate array for this baseline
                 baseline_data = np.zeros([4, total_channels, self.num_times], dtype="complex128")
 
+                # Check if this baseline has any data
+                has_data = False
+
                 # Load all SPWs for this baseline
                 for spw_idx, spw in enumerate(same_spw_list):
                     subtable = self.tb.query(
                         f"DATA_DESC_ID=={spw} && ANTENNA1=={i} && ANTENNA2=={j}"
                     )
+
+                    # Skip if no data for this baseline/SPW
+                    if subtable.nrows() == 0:
+                        subtable.close()
+                        continue
+
+                    has_data = True
 
                     # Extract data for this SPW
                     spw_data = subtable.getcol(mode)
@@ -115,8 +125,10 @@ class MSLoader:
 
                     subtable.close()
 
-                data_list.append(baseline_data)
-                baseline_map.append((i, j))
+                # Only add baseline if it has data
+                if has_data:
+                    data_list.append(baseline_data)
+                    baseline_map.append((i, j))
 
         # Stack all baselines
         self.data = np.stack(data_list)  # Shape: (baselines, pols, channels, times)
