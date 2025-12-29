@@ -83,9 +83,9 @@ class SAMDataset(TorchDataset):
         y_indices, x_indices = torch.where(mask > 0)
 
         if len(x_indices) == 0 or len(y_indices) == 0:
-            # Empty mask - return center box (as Python int)
+            # Empty mask (inference mode) - use full image bbox
             H, W = mask.shape
-            return [int(W // 4), int(H // 4), int(3 * W // 4), int(3 * H // 4)]
+            return [0, 0, int(W), int(H)]
 
         x_min, x_max = x_indices.min().item(), x_indices.max().item()
         y_min, y_max = y_indices.min().item(), y_indices.max().item()

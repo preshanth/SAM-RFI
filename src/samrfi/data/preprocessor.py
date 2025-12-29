@@ -19,15 +19,56 @@ from samrfi.utils import logger
 # Standalone functions for multiprocessing (must be picklable)
 def _patchify_single_waterfall(waterfall, patch_size):
     """
-    Patchify a single waterfall into patches.
+    Patchify a single waterfall into patches with automatic padding.
 
     Args:
         waterfall: 2D array (channels, times)
         patch_size: Size of square patches
 
     Returns:
-        List of patches from this waterfall
+        Tuple: (patch_list, original_shape)
     """
+    channels, times = waterfall.shape
+    original_shape = (channels, times)
+
+    # Quick check: skip padding if already compatible
+    if (channels % patch_size == 0 and times % patch_size == 0 and
+        channels >= patch_size and times >= patch_size):
+        logger.debug(f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed")
+        patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+        # Extract patches
+        patch_list = []
+        for i in range(patches.shape[0]):
+            for j in range(patches.shape[1]):
+                patch_list.append(patches[i, j])
+
+        return patch_list, original_shape
+
+    # Calculate padding needed
+    pad_channels = 0
+    pad_times = 0
+
+    if channels < patch_size:
+        pad_channels = patch_size - channels
+    elif channels % patch_size != 0:
+        pad_channels = patch_size - (channels % patch_size)
+
+    if times < patch_size:
+        pad_times = patch_size - times
+    elif times % patch_size != 0:
+        pad_times = patch_size - (times % patch_size)
+
+    # Apply padding if needed
+    if pad_channels > 0 or pad_times > 0:
+        logger.debug(f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})")
+        waterfall = np.pad(
+            waterfall,
+            ((0, pad_channels), (0, pad_times)),
+            mode='constant',
+            constant_values=0
+        )
+
     patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
 
     # Extract patches
@@ -36,7 +77,7 @@ def _patchify_single_waterfall(waterfall, patch_size):
         for j in range(patches.shape[1]):
             patch_list.append(patches[i, j])
 
-    return patch_list
+    return patch_list, original_shape
 
 
 def _compute_mad_flag_single_patch(patch, sigma):
@@ -198,12 +239,14 @@ class Preprocessor:
         else:
             # Apply patching
             logger.info(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
-            self.patches = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
+            self.patches, original_shapes = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
             if augmented_flags is not None:
-                augmented_flags = self._create_patches(
+                augmented_flags, _ = self._create_patches(
                     augmented_flags, patch_size, num_workers=num_workers
                 )
             logger.info(f"    Created {len(self.patches)} patches")
+            # Store original shapes for reconstruction
+            self.original_shapes = original_shapes
 
         # Check if data is complex
         is_complex = np.iscomplexobj(self.patches[0]) if len(self.patches) > 0 else False
@@ -318,6 +361,7 @@ class Preprocessor:
             "normalize_before_stretch": normalize_before_stretch,
             "normalize_after_stretch": normalize_after_stretch,
             "augmentation_rotations": augmentation_rotations,
+            "original_shapes": getattr(self, 'original_shapes', None),
         }
 
         self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
@@ -403,7 +447,7 @@ class Preprocessor:
             num_workers: Number of parallel workers (None/0 for sequential, -1 for all cores)
 
         Returns:
-            Array of patches, shape (num_patches, patch_size, patch_size)
+            Tuple: (patches_array, original_shapes)
         """
         if num_workers and num_workers != 0:
             # Parallel processing
@@ -413,12 +457,48 @@ class Preprocessor:
                 patch_func = partial(_patchify_single_waterfall, patch_size=patch_size)
                 results = pool.map(patch_func, data_list)
 
-            # Flatten results
-            all_patches = [patch for waterfall_patches in results for patch in waterfall_patches]
-        else:
-            # Sequential processing (original code)
+            # Unpack results: each result is (patch_list, original_shape)
             all_patches = []
+            original_shapes = []
+            for patch_list, orig_shape in results:
+                all_patches.extend(patch_list)
+                original_shapes.append(orig_shape)
+        else:
+            # Sequential processing
+            all_patches = []
+            original_shapes = []
             for waterfall in data_list:
+                channels, times = waterfall.shape
+                original_shapes.append((channels, times))
+
+                # Quick check: skip padding if already compatible
+                if (channels % patch_size == 0 and times % patch_size == 0 and
+                    channels >= patch_size and times >= patch_size):
+                    logger.debug(f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed")
+                else:
+                    # Apply padding
+                    pad_channels = 0
+                    pad_times = 0
+
+                    if channels < patch_size:
+                        pad_channels = patch_size - channels
+                    elif channels % patch_size != 0:
+                        pad_channels = patch_size - (channels % patch_size)
+
+                    if times < patch_size:
+                        pad_times = patch_size - times
+                    elif times % patch_size != 0:
+                        pad_times = patch_size - (times % patch_size)
+
+                    if pad_channels > 0 or pad_times > 0:
+                        logger.debug(f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})")
+                        waterfall = np.pad(
+                            waterfall,
+                            ((0, pad_channels), (0, pad_times)),
+                            mode='constant',
+                            constant_values=0
+                        )
+
                 # Patchify this waterfall
                 patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
 
@@ -427,7 +507,7 @@ class Preprocessor:
                     for j in range(patches.shape[1]):
                         all_patches.append(patches[i, j])
 
-        return np.array(all_patches)
+        return np.array(all_patches), original_shapes
 
     def _extract_channels_from_complex(self, complex_data):
         """
@@ -756,13 +836,14 @@ class GPUPreprocessor:
             logger.info(f"    Using {len(self.raw_patches)} full waterfalls")
         else:
             logger.info(f"  [2/3] Patchifying into {patch_size}x{patch_size} patches...")
-            self.raw_patches = self._create_patches(
+            self.raw_patches, original_shapes = self._create_patches(
                 flattened_data, patch_size, num_workers=num_workers
             )
-            self.raw_masks = self._create_patches(
+            self.raw_masks, _ = self._create_patches(
                 flattened_flags, patch_size, num_workers=num_workers
             )
             logger.info(f"    Created {len(self.raw_patches)} patches")
+            self.original_shapes = original_shapes
 
         # Remove blank patches (optional)
         if remove_blank:

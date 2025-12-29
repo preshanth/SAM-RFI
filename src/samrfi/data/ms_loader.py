@@ -140,6 +140,65 @@ class MSLoader:
 
         return self.data
 
+    def load_single_baseline(self, ant1=0, ant2=1, pol_idx=0, mode="DATA"):
+        """
+        Load single baseline, single polarization.
+
+        Args:
+            ant1: First antenna
+            ant2: Second antenna
+            pol_idx: Polarization index (0=XX, 1=XY, 2=YX, 3=YY)
+            mode: Column to load ('DATA', 'CORRECTED_DATA', etc.)
+
+        Returns:
+            Complex array shape: (total_channels, num_times)
+        """
+        # Filter to SPWs with same number of channels
+        same_spw_list = []
+        same_channels_list = []
+
+        for spw, num_chan in enumerate(self.channels_per_spw):
+            if num_chan == self.channels_per_spw[0]:
+                same_spw_list.append(spw)
+                same_channels_list.append(num_chan)
+
+        num_channels = same_channels_list[0]
+        num_spw = len(same_spw_list)
+        total_channels = num_spw * num_channels
+
+        print(f"\nLoading single baseline from {self.ms_path}...")
+        print(f"  Baseline: {ant1}-{ant2}, Pol: {pol_idx}")
+        print(f"  SPWs: {num_spw} ({num_channels} channels each = {total_channels} total)")
+        print(f"  Times: {self.num_times}")
+
+        # Allocate array for this baseline
+        baseline_data = np.zeros([total_channels, self.num_times], dtype="complex128")
+
+        # Load all SPWs for this baseline
+        for spw_idx, spw in enumerate(same_spw_list):
+            subtable = self.tb.query(
+                f"DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}"
+            )
+
+            if subtable.nrows() == 0:
+                subtable.close()
+                raise ValueError(f"No data for baseline {ant1}-{ant2} in SPW {spw}")
+
+            # Extract data for this SPW, single pol
+            spw_data = subtable.getcol(mode)  # Shape: (pols, channels, times)
+            spw_data_pol = spw_data[pol_idx, :, :]  # Shape: (channels, times)
+
+            # Place in combined array
+            start_ch = spw_idx * num_channels
+            end_ch = (spw_idx + 1) * num_channels
+            baseline_data[start_ch:end_ch, :] = spw_data_pol
+
+            subtable.close()
+
+        print(f"  Loaded shape: {baseline_data.shape}")
+
+        return baseline_data
+
     def load_flags(self):
         """
         Load existing flags from MS.

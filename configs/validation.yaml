@@ -33,7 +33,7 @@ processing:
   normalize_after_stretch: false
 
   # NO stretch for synthetic data
-  stretch: sqrt
+  stretch: null
 
   # Flag generation (not used during validation but kept for compatibility)
   flag_sigma: 5

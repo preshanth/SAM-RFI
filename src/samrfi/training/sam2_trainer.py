@@ -25,7 +25,7 @@ from samrfi.data import RAMCachedDataset, SAMDataset
 logger = logging.getLogger(__name__)
 
 # Ensure logging is configured (fallback for standalone use)
-if not logging.getLogger().handlers:
+if not logger.hasHandlers():
     logging.basicConfig(
         level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )

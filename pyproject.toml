@@ -47,6 +47,7 @@ dependencies = [
 # Mac GPU (Apple Silicon):    pip install samrfi[mps]  or  samrfi[gpu]
 # NVIDIA GPU:                 pip install samrfi[cuda]
 # With CASA tools:            pip install samrfi[gpu,casa]
+# Interactive visualization:  pip install samrfi[viz]
 # Development:                pip install samrfi[dev]
 # Everything:                 pip install samrfi[all]
 # ============================================================================
@@ -78,9 +79,18 @@ casa = [
     "casatasks>=6.5.0",
 ]
 
+# Interactive visualization (HoloViz stack for large MS exploration)
+viz = [
+    "holoviews>=1.18.0",
+    "datashader>=0.16.0",
+    "bokeh>=3.3.0",
+    "panel>=1.3.0",  # Interactive widgets and dashboards
+    "colorcet>=3.0.0",  # Perceptually uniform colormaps
+]
+
 # Development dependencies (includes GPU + CASA + testing tools)
 dev = [
-    "samrfi[gpu,casa]",
+    "samrfi[gpu,casa,viz]",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "black>=23.0.0",
@@ -116,6 +126,7 @@ packages = [
     "samrfi.inference",
     "samrfi.evaluation",
     "samrfi.datasets",
+    "samrfi.visualization",
 ]
 package-dir = {"" = "src"}
 

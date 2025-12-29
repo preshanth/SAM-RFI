@@ -303,10 +303,11 @@ class RFIPredictor:
         # Warning: stretch function should match
         checkpoint_stretch = self.checkpoint_preprocessing.get("stretch")
         if checkpoint_stretch is not None and checkpoint_stretch != stretch:
-            logger.warning(
+            warning_msg = (
                 f"Stretch function mismatch: model trained with stretch={checkpoint_stretch}, "
                 f"inference using stretch={stretch}. This may reduce accuracy."
             )
+            logger.warning(warning_msg)
             # Also print to stdout so tests and users see a clear WARNING line
             print(f"WARNING: {warning_msg}")
 
@@ -336,6 +337,7 @@ class RFIPredictor:
         normalize_after_stretch=False,
         return_probabilities=False,
         threshold=0.5,
+        save_probabilities=None,
     ):
         """
         Predict on numpy array directly without MS I/O.
@@ -348,7 +350,8 @@ class RFIPredictor:
             normalize_before_stretch: Normalize before stretch (default False)
             normalize_after_stretch: Normalize after stretch (default False)
             return_probabilities: Return continuous probabilities [0,1] instead of binary flags (default False)
-            threshold: Probability threshold for RFI detection (default: 0.5)
+            threshold: Probability threshold for RFI detection (default: 0.5, None=use mean)
+            save_probabilities: Path to save probability maps (.npy file, optional)
 
         Returns:
             Predicted probabilities (if return_probabilities=True) or flags array (baselines, pols, channels, times)
@@ -379,22 +382,65 @@ class RFIPredictor:
             inference_mode=True,
         )
 
-        # Predict
+        # Predict - always get probabilities if we need to save them
         logger.info("\nRunning SAM2 prediction...")
-        predicted_patches = self._predict_dataset(dataset, target_size=(patch_size, patch_size), return_probabilities=return_probabilities, threshold=threshold)
+        need_probabilities = return_probabilities or save_probabilities is not None
+        predicted_patches = self._predict_dataset(
+            dataset,
+            target_size=(patch_size, patch_size),
+            return_probabilities=need_probabilities,
+            threshold=threshold if not need_probabilities else None
+        )
 
         # Reconstruct
-        if return_probabilities:
-            print("Reconstructing probability maps...")
-        else:
-            print("Reconstructing flags...")
+        print("Reconstructing probability maps..." if need_probabilities else "Reconstructing flags...")
         # Extract augmentation state from dataset metadata
         num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
-        result = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations)
 
-        if return_probabilities:
-            logger.info(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
+        # Get padded shape for reconstruction loop
+        metadata = getattr(dataset, 'metadata', {})
+        original_shapes = metadata.get('original_shapes')
+        if original_shapes is not None and len(original_shapes) > 0:
+            orig_channels, orig_times = original_shapes[0]
+            # Calculate padded dimensions
+            baselines, pols, channels, times = data_shape
+
+            pad_channels = 0
+            if orig_channels < patch_size:
+                pad_channels = patch_size - orig_channels
+            elif orig_channels % patch_size != 0:
+                pad_channels = patch_size - (orig_channels % patch_size)
+
+            pad_times = 0
+            if orig_times < patch_size:
+                pad_times = patch_size - orig_times
+            elif orig_times % patch_size != 0:
+                pad_times = patch_size - (orig_times % patch_size)
+
+            padded_shape = (baselines, pols, orig_channels + pad_channels, orig_times + pad_times)
+            logger.debug(f"[predict_array] Using padded shape for reconstruction: {data_shape} → {padded_shape}")
+            recon_shape = padded_shape
         else:
+            recon_shape = data_shape
+
+        result = self._reconstruct_flags(predicted_patches, recon_shape, patch_size, num_rotations, dataset=dataset)
+
+        # Save probabilities if requested
+        if save_probabilities is not None:
+            logger.info(f"\nSaving probability maps to: {save_probabilities}")
+            np.save(save_probabilities, result)
+            logger.info(f"  Saved shape: {result.shape}, dtype: {result.dtype}")
+
+        # Apply threshold if returning binary flags
+        if need_probabilities and not return_probabilities:
+            # We got probabilities but user wants binary flags
+            thresh = result.mean() if threshold is None else threshold
+            logger.info(f"  Applying threshold: {thresh:.4f}")
+            result = result > thresh
+
+        if return_probabilities or save_probabilities is not None:
+            logger.info(f"  Probability range: [{result.min():.3f}, {result.max():.3f}], mean: {result.mean():.3f}")
+        if not return_probabilities:
             flag_percent = np.sum(result) / result.size * 100
             logger.info(f"  Flagged: {flag_percent:.2f}% of data")
 
@@ -454,8 +500,8 @@ class RFIPredictor:
         baselines, pols, channels, times = data_shape
         patcher = AdaptivePatcher(data_shape, patch_size=patch_size)
 
-        # Get magnitude data
-        data = loader.magnitude
+        # Use complex data (Preprocessor will extract 3-channel features)
+        data = loader.data
 
         # Optionally apply existing flags before padding
         if apply_existing_flags:
@@ -484,6 +530,7 @@ class RFIPredictor:
             augmentation_rotations=1,
             normalize_before_stretch=normalize_before_stretch,
             normalize_after_stretch=normalize_after_stretch,
+            inference_mode=True,  # CRITICAL: Preserve patch order for reconstruction
         )
 
         # Predict
@@ -492,15 +539,72 @@ class RFIPredictor:
 
         # Reconstruct full flags from patches
         logger.info("\nReconstructing full flag array...")
+        # DEBUG: Check predicted patches before reconstruction AND save images
+        print(f"\n  [DEBUG] Predicted patches stats:")
+        print(f"    Total patches: {len(predicted_patches)}")
+
+        # Save first 8 patches (baseline 0) for debugging
+        import matplotlib.pyplot as plt
+        from pathlib import Path
+        debug_dir = Path("patch_debug_real")
+        debug_dir.mkdir(exist_ok=True)
+
+        for idx in range(min(8, len(predicted_patches))):
+            flagged_pct = np.sum(predicted_patches[idx]) / predicted_patches[idx].size * 100
+            print(f"    Patch {idx}: {flagged_pct:5.2f}% flagged")
+
+            # Save patch visualization
+            if idx < 8:  # Baseline 0 only
+                fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+                # Get the input image from dataset
+                sample = dataset[idx]
+                img = sample['image']  # (H, W, 3) numpy array already denormalized
+
+                # Left: Input
+                axes[0].imshow(img)
+                axes[0].set_title(f"Input Patch {idx}")
+                axes[0].axis('off')
+
+                # Right: Mask overlay
+                axes[1].imshow(img)
+                axes[1].imshow(predicted_patches[idx], alpha=0.5, cmap='Reds')
+                axes[1].set_title(f"Predicted Mask\n{flagged_pct:.1f}% flagged")
+                axes[1].axis('off')
+
+                plt.tight_layout()
+                plt.savefig(debug_dir / f"patch_{idx:02d}.png", dpi=150, bbox_inches='tight')
+                plt.close()
+
+        print(f"  Saved first 8 patches to {debug_dir}/")
+
         # Extract augmentation state from dataset metadata
         num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
         # Use padded shape for reconstruction if padding was applied
         recon_shape = patcher.get_patch_info()["padded_shape"]
-        predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size, num_rotations)
+        predicted_flags = self._reconstruct_flags(predicted_patches, recon_shape, patch_size, num_rotations, dataset=dataset)
 
         # Crop flags to original dimensions if padding was used
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
             print("  Cropping flags to original dimensions...")
+            # DEBUG: Analyze padding region before cropping
+            print("\n  [DEBUG] Analyzing padding region before crop:")
+            orig_channels, orig_times = patcher.channels, patcher.times
+            pad_channels, pad_times = patcher.pad_channels, patcher.pad_times
+
+            # Check padding in time dimension (most common case)
+            if pad_times > 0:
+                # Real data region: times [0:orig_times]
+                real_region = predicted_flags[:, :, :, :orig_times]
+                real_flagged = np.sum(real_region) / real_region.size * 100
+
+                # Padding region: times [orig_times:]
+                pad_region = predicted_flags[:, :, :, orig_times:]
+                pad_flagged = np.sum(pad_region) / pad_region.size * 100
+
+                print(f"    Real data region (times [0:{orig_times}]):      {real_flagged:5.2f}% flagged")
+                print(f"    Padding region (times [{orig_times}:{orig_times+pad_times}]): {pad_flagged:5.2f}% flagged")
+
             predicted_flags = patcher.crop_flags(predicted_flags)
 
         flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
@@ -606,6 +710,7 @@ class RFIPredictor:
                 augmentation_rotations=1,
                 normalize_before_stretch=normalize_before_stretch,
                 normalize_after_stretch=normalize_after_stretch,
+                inference_mode=True,  # CRITICAL: Preserve patch order for reconstruction
             )
 
             # Predict
@@ -616,7 +721,7 @@ class RFIPredictor:
             print("\n[4/4] Reconstructing flags...")
             # Extract augmentation state from dataset metadata
             num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
-            iteration_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations)
+            iteration_flags = self._reconstruct_flags(predicted_patches, data_shape, patch_size, num_rotations, dataset=dataset)
 
             # Combine with cumulative flags
             new_flags = iteration_flags & ~cumulative_flags  # Only count new flags
@@ -655,8 +760,8 @@ class RFIPredictor:
         Returns:
             List of predicted masks (boolean arrays if return_probabilities=False, float arrays otherwise)
         """
-        # Create SAM dataset wrapper
-        sam_dataset = SAMDataset(dataset, self.processor)
+        # Create SAM dataset wrapper (no bbox perturbation for inference)
+        sam_dataset = SAMDataset(dataset, self.processor, bbox_perturbation=0)
         dataloader = DataLoader(sam_dataset, batch_size=self.batch_size, shuffle=False)
 
         predicted_masks = []
@@ -698,12 +803,16 @@ class RFIPredictor:
                 if return_probabilities:
                     predicted_masks.extend(sigmoid_probs.cpu().numpy())
                 else:
-                    pred_masks = (sigmoid_probs > threshold).cpu().numpy()
+                    # Use mean as threshold if threshold is None
+                    thresh = sigmoid_probs.mean().item() if threshold is None else threshold
+                    if threshold is None:
+                        logger.info(f"  Using mean threshold: {thresh:.4f}")
+                    pred_masks = (sigmoid_probs > thresh).cpu().numpy()
                     predicted_masks.extend(pred_masks)
 
         return predicted_masks
 
-    def _reconstruct_flags(self, predicted_patches, data_shape, patch_size, num_rotations=1):
+    def _reconstruct_flags(self, predicted_patches, data_shape, patch_size, num_rotations=1, dataset=None):
         """
         Reconstruct full flag array from predicted patches.
 
@@ -714,11 +823,22 @@ class RFIPredictor:
             data_shape: Original data shape (baselines, pols, channels, times)
             patch_size: Size of patches
             num_rotations: Number of rotations used during augmentation (default: 1)
+            dataset: Optional dataset object with metadata (for original_shapes)
 
         Returns:
             Reconstructed flags matching data_shape (bool or float matching input)
         """
         baselines, pols, channels, times = data_shape
+
+        logger.debug(f"[Reconstruction] Input: {len(predicted_patches)} patches, data_shape={data_shape}")
+        logger.debug(f"[Reconstruction] num_rotations={num_rotations}, patch_size={patch_size}")
+
+        # Upscale masks from 256x256 to patch_size if needed
+        if len(predicted_patches) > 0 and predicted_patches[0].shape[0] != patch_size:
+            from scipy.ndimage import zoom
+            scale = patch_size / predicted_patches[0].shape[0]
+            logger.debug(f"[Reconstruction] Upscaling masks: {predicted_patches[0].shape[0]}x{predicted_patches[0].shape[0]} → {patch_size}x{patch_size}")
+            predicted_patches = [zoom(p, scale, order=0) for p in predicted_patches]
 
         # Initialize full flag array (dtype matches input patches)
         is_probability = predicted_patches[0].dtype in (np.float32, np.float64)
@@ -726,6 +846,10 @@ class RFIPredictor:
 
         # Track which patches correspond to which baseline/pol
         patch_idx = 0
+
+        # DEBUG: Print reconstruction order for baseline 0
+        print(f"\n  [DEBUG] Reconstruction loop order (baseline 0 only):")
+        print(f"    num_rotations={num_rotations}, num_patches_h={channels // patch_size}, num_patches_w={times // patch_size}")
 
         for baseline in range(baselines):
             for pol in range(pols):
@@ -743,6 +867,13 @@ class RFIPredictor:
                                 continue
 
                             patch_mask = predicted_patches[patch_idx]
+
+                            # DEBUG: Print for baseline 0
+                            if baseline == 0 and patch_idx < 8:
+                                ch_range = f"[{i*patch_size}:{(i+1)*patch_size}]"
+                                t_range = f"[{j*patch_size}:{(j+1)*patch_size}]"
+                                print(f"    patch_idx={patch_idx} → baseline={baseline}, pol={pol}, rot={rotation}, i={i}, j={j}, ch={ch_range}, t={t_range}")
+
                             patch_idx += 1
 
                             # Reverse rotation
@@ -775,4 +906,16 @@ class RFIPredictor:
                                 # For boolean, use bitwise OR
                                 full_flags[baseline, pol, ch_start:ch_end, t_start:t_end] |= reconstructed
 
+        # Crop to original shape if metadata available
+        if dataset is not None:
+            metadata = getattr(dataset, 'metadata', {})
+            original_shapes = metadata.get('original_shapes')
+            if original_shapes is not None and len(original_shapes) > 0:
+                # Assume all baselines/pols had same original shape (first one)
+                orig_channels, orig_times = original_shapes[0]
+                if orig_channels != channels or orig_times != times:
+                    logger.debug(f"[Reconstruction] Cropping: ({channels}, {times}) → ({orig_channels}, {orig_times})")
+                    full_flags = full_flags[:, :, :orig_channels, :orig_times]
+
+        logger.debug(f"[Reconstruction] Final shape: {full_flags.shape}")
         return full_flags

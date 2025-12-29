@@ -10,13 +10,13 @@ Generated datasets have this structure:
 ```
 datasets/train_4000/
 ├── exact_masks/
-│   ├── batch_000.npz      # 100 samples (~1.3 GB)
-│   ├── batch_001.npz
+│   ├── batch_000.pt       # 100 samples (~1.3 GB)
+│   ├── batch_001.pt
 │   ├── ...
-│   ├── batch_039.npz
+│   ├── batch_039.pt
 │   └── metadata.json      # Dataset info
 ├── mad_masks/
-│   ├── batch_000.npz
+│   ├── batch_000.pt
 │   ├── ...
 │   └── metadata.json
 └── generation_metadata.json

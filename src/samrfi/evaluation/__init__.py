@@ -11,6 +11,11 @@ from .metrics import (
     evaluate_segmentation,
 )
 from .ms_injection import inject_synthetic_data
+from .statistics import (
+    compute_statistics,
+    compute_ffi,
+    print_statistics_comparison,
+)
 
 __all__ = [
     "compute_iou",
@@ -20,4 +25,7 @@ __all__ = [
     "compute_dice",
     "evaluate_segmentation",
     "inject_synthetic_data",
+    "compute_statistics",
+    "compute_ffi",
+    "print_statistics_comparison",
 ]
