@@ -8,6 +8,17 @@ including our critical num_rotations fix.
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
+
+# Check if transformers is available
+try:
+    from samrfi.inference import RFIPredictor
+
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(not TRANSFORMERS_AVAILABLE, reason="transformers not available")
 
 
 class TestReconstructionNumRotations:
@@ -24,8 +35,6 @@ class TestReconstructionNumRotations:
 
         This test verifies reconstruction works correctly with num_rotations=1.
         """
-        from samrfi.inference import RFIPredictor
-
         # Mock predictor (we only need _reconstruct_flags method)
         predictor = MagicMock(spec=RFIPredictor)
         predictor._reconstruct_flags = RFIPredictor._reconstruct_flags.__get__(predictor)
