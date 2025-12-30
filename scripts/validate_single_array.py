@@ -162,7 +162,7 @@ def create_plots(waterfall, ground_truth, predicted_mask, probabilities, metrics
     output_dir.mkdir(parents=True, exist_ok=True)
 
     from matplotlib.colors import LogNorm
-    from samrfi.evaluation import compute_statistics, compute_ffi
+    from samrfi.evaluation import compute_statistics, compute_ffi, compute_calcquality
 
     magnitude = np.abs(waterfall)
     vmin, vmax = magnitude[magnitude > 0].min(), magnitude.max()
@@ -289,25 +289,27 @@ def create_plots(waterfall, ground_truth, predicted_mask, probabilities, metrics
         stats_before = compute_statistics(waterfall, flags=None)
         stats_after = compute_statistics(waterfall, flags=predicted_mask)
         ffi_metrics = compute_ffi(waterfall, predicted_mask)
+        cq_metrics = compute_calcquality(waterfall, predicted_mask)
 
         stats_text = (
             f"Statistics\n"
             f"{'='*35}\n"
-            f"Before Flagging:\n"
-            f"  Mean:   {stats_before['mean']:.4e}\n"
-            f"  Median: {stats_before['median']:.4e}\n"
-            f"  Std:    {stats_before['std']:.4e}\n"
-            f"  MAD:    {stats_before['mad']:.4e}\n\n"
-            f"After Flagging ({pred_pct:.2f}%):\n"
-            f"  Mean:   {stats_after['mean']:.4e}\n"
-            f"  Median: {stats_after['median']:.4e}\n"
-            f"  Std:    {stats_after['std']:.4e}\n"
-            f"  MAD:    {stats_after['mad']:.4e}\n\n"
-            f"FFI Metrics\n"
+            f"Before: Mean={stats_before['mean']:.4e}\n"
+            f"        Std={stats_before['std']:.4e}\n"
+            f"After:  Mean={stats_after['mean']:.4e}\n"
+            f"        Std={stats_after['std']:.4e}\n\n"
+            f"FFI (Simple)\n"
             f"{'='*35}\n"
-            f"FFI:           {ffi_metrics['ffi']:.4f}\n"
+            f"Score:         {ffi_metrics['ffi']:.4f}\n"
             f"MAD Reduction: {ffi_metrics['mad_reduction']:.4f}\n"
-            f"STD Reduction: {ffi_metrics['std_reduction']:.4f}\n"
+            f"STD Reduction: {ffi_metrics['std_reduction']:.4f}\n\n"
+            f"calcquality (Paper)\n"
+            f"{'='*35}\n"
+            f"Score:       {cq_metrics['calcquality']:.4f} ↓\n"
+            f"Sensitivity: {cq_metrics['sensitivity']:.4f}\n"
+            f"Mean Shift:  {cq_metrics['mean_shift']:.4f}\n"
+            f"Std Shift:   {cq_metrics['std_shift']:.4f}\n"
+            f"Overflag:    {cq_metrics['overflagging_penalty']:.4f}\n"
         )
         axes[1,0].text(0.05, 0.5, stats_text, fontsize=10, family='monospace',
                        verticalalignment='center')

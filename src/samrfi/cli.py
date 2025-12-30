@@ -303,6 +303,15 @@ def predict_command(args):
     # Convert "None" string to None
     stretch = None if args.stretch == "None" else args.stretch
 
+    # Convert threshold to None if not specified or "None"
+    threshold = None if not hasattr(args, 'threshold') or args.threshold is None or args.threshold == "None" else args.threshold
+
+    # Log threshold setting
+    if threshold is None:
+        print("\nThreshold: Adaptive (will use mean of probabilities)")
+    else:
+        print(f"\nThreshold: {threshold:.3f} (fixed)")
+
     # Determine if iterative
     num_iterations = args.iterations if args.iterations else 1
     is_iterative = num_iterations > 1
@@ -317,6 +326,7 @@ def predict_command(args):
             stretch=stretch,
             save_flags=not args.no_save,
             apply_existing_flags=args.apply_existing,
+            threshold=threshold,
         )
     else:
         print("\nMode: Single-pass flagging")
@@ -327,6 +337,7 @@ def predict_command(args):
             stretch=stretch,
             apply_existing_flags=args.apply_existing,
             save_flags=not args.no_save,
+            threshold=threshold,
         )
 
     print("\n" + "=" * 60)
@@ -512,6 +523,12 @@ Examples:
         default="SQRT",
         choices=["SQRT", "LOG10", "None"],
         help="Stretch function (default: SQRT, use None for synthetic data)",
+    )
+    predict_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="RFI probability threshold (default: None = adaptive/mean, range: 0.0-1.0)",
     )
     predict_parser.add_argument(
         "--device", default="cuda", choices=["cuda", "cpu"], help="Compute device (default: cuda)"

@@ -327,6 +327,43 @@ class RFIPredictor:
                 f"(training={checkpoint_norm_after}, inference={normalize_after_stretch})"
             )
 
+    def _preprocess_data(
+        self,
+        data,
+        patch_size,
+        stretch,
+        enable_augmentation,
+        normalize_before_stretch,
+        normalize_after_stretch,
+    ):
+        """
+        Create preprocessed dataset from data array.
+
+        Args:
+            data: Complex visibility data (baselines, pols, channels, times)
+            patch_size: Patch size for prediction
+            stretch: Stretch function ('SQRT' or 'LOG10' or None)
+            enable_augmentation: Enable rotation augmentation
+            normalize_before_stretch: Normalize before stretch
+            normalize_after_stretch: Normalize after stretch
+
+        Returns:
+            Dataset ready for prediction
+        """
+        preprocessor = Preprocessor(data, flags=None)
+        dataset = preprocessor.create_dataset(
+            patch_size=patch_size,
+            stretch=stretch,
+            flag_sigma=5,
+            use_custom_flags=False,
+            enable_augmentation=enable_augmentation,
+            augmentation_rotations=1,
+            normalize_before_stretch=normalize_before_stretch,
+            normalize_after_stretch=normalize_after_stretch,
+            inference_mode=True,  # CRITICAL: Preserve patch order for reconstruction
+        )
+        return dataset
+
     def predict_array(
         self,
         data,
@@ -336,7 +373,7 @@ class RFIPredictor:
         normalize_before_stretch=False,
         normalize_after_stretch=False,
         return_probabilities=False,
-        threshold=0.5,
+        threshold=None,
         save_probabilities=None,
     ):
         """
@@ -350,7 +387,7 @@ class RFIPredictor:
             normalize_before_stretch: Normalize before stretch (default False)
             normalize_after_stretch: Normalize after stretch (default False)
             return_probabilities: Return continuous probabilities [0,1] instead of binary flags (default False)
-            threshold: Probability threshold for RFI detection (default: 0.5, None=use mean)
+            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
             save_probabilities: Path to save probability maps (.npy file, optional)
 
         Returns:
@@ -369,17 +406,9 @@ class RFIPredictor:
 
         # Preprocess (pass complex data directly - Preprocessor will extract features)
         logger.info("\nPreprocessing data...")
-        preprocessor = Preprocessor(data, flags=None)
-        dataset = preprocessor.create_dataset(
-            patch_size=patch_size,
-            stretch=stretch,
-            flag_sigma=5,
-            use_custom_flags=False,
-            enable_augmentation=enable_augmentation,
-            augmentation_rotations=1,
-            normalize_before_stretch=normalize_before_stretch,
-            normalize_after_stretch=normalize_after_stretch,
-            inference_mode=True,
+        dataset = self._preprocess_data(
+            data, patch_size, stretch, enable_augmentation,
+            normalize_before_stretch, normalize_after_stretch
         )
 
         # Predict - always get probabilities if we need to save them
@@ -461,7 +490,7 @@ class RFIPredictor:
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
-        threshold=0.5,
+        threshold=None,
     ):
         """
         Single-pass prediction on measurement set.
@@ -471,7 +500,7 @@ class RFIPredictor:
             num_antennas: Number of antennas to load (None = all)
             patch_size: Patch size for prediction
             stretch: Stretch function ('SQRT' or 'LOG10' or None)
-            threshold: Probability threshold for RFI detection (default: 0.5)
+            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
             apply_existing_flags: If True, mask existing flags before prediction
             save_flags: If True, save flags back to MS
             enable_augmentation: Enable rotation augmentation (default False for inference)
@@ -520,17 +549,9 @@ class RFIPredictor:
 
         # Preprocess
         logger.info("\n[3/4] Preprocessing data...")
-        preprocessor = Preprocessor(data, flags=None)
-        dataset = preprocessor.create_dataset(
-            patch_size=patch_size,
-            stretch=stretch,
-            flag_sigma=5,
-            use_custom_flags=False,
-            enable_augmentation=enable_augmentation,
-            augmentation_rotations=1,
-            normalize_before_stretch=normalize_before_stretch,
-            normalize_after_stretch=normalize_after_stretch,
-            inference_mode=True,  # CRITICAL: Preserve patch order for reconstruction
+        dataset = self._preprocess_data(
+            data, patch_size, stretch, enable_augmentation,
+            normalize_before_stretch, normalize_after_stretch
         )
 
         # Predict
@@ -539,45 +560,6 @@ class RFIPredictor:
 
         # Reconstruct full flags from patches
         logger.info("\nReconstructing full flag array...")
-        # DEBUG: Check predicted patches before reconstruction AND save images
-        print(f"\n  [DEBUG] Predicted patches stats:")
-        print(f"    Total patches: {len(predicted_patches)}")
-
-        # Save first 8 patches (baseline 0) for debugging
-        import matplotlib.pyplot as plt
-        from pathlib import Path
-        debug_dir = Path("patch_debug_real")
-        debug_dir.mkdir(exist_ok=True)
-
-        for idx in range(min(8, len(predicted_patches))):
-            flagged_pct = np.sum(predicted_patches[idx]) / predicted_patches[idx].size * 100
-            print(f"    Patch {idx}: {flagged_pct:5.2f}% flagged")
-
-            # Save patch visualization
-            if idx < 8:  # Baseline 0 only
-                fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-
-                # Get the input image from dataset
-                sample = dataset[idx]
-                img = sample['image']  # (H, W, 3) numpy array already denormalized
-
-                # Left: Input
-                axes[0].imshow(img)
-                axes[0].set_title(f"Input Patch {idx}")
-                axes[0].axis('off')
-
-                # Right: Mask overlay
-                axes[1].imshow(img)
-                axes[1].imshow(predicted_patches[idx], alpha=0.5, cmap='Reds')
-                axes[1].set_title(f"Predicted Mask\n{flagged_pct:.1f}% flagged")
-                axes[1].axis('off')
-
-                plt.tight_layout()
-                plt.savefig(debug_dir / f"patch_{idx:02d}.png", dpi=150, bbox_inches='tight')
-                plt.close()
-
-        print(f"  Saved first 8 patches to {debug_dir}/")
-
         # Extract augmentation state from dataset metadata
         num_rotations = getattr(dataset, 'metadata', {}).get('augmentation_rotations', 1)
         # Use padded shape for reconstruction if padding was applied
@@ -586,25 +568,7 @@ class RFIPredictor:
 
         # Crop flags to original dimensions if padding was used
         if patcher.pad_channels > 0 or patcher.pad_times > 0:
-            print("  Cropping flags to original dimensions...")
-            # DEBUG: Analyze padding region before cropping
-            print("\n  [DEBUG] Analyzing padding region before crop:")
-            orig_channels, orig_times = patcher.channels, patcher.times
-            pad_channels, pad_times = patcher.pad_channels, patcher.pad_times
-
-            # Check padding in time dimension (most common case)
-            if pad_times > 0:
-                # Real data region: times [0:orig_times]
-                real_region = predicted_flags[:, :, :, :orig_times]
-                real_flagged = np.sum(real_region) / real_region.size * 100
-
-                # Padding region: times [orig_times:]
-                pad_region = predicted_flags[:, :, :, orig_times:]
-                pad_flagged = np.sum(pad_region) / pad_region.size * 100
-
-                print(f"    Real data region (times [0:{orig_times}]):      {real_flagged:5.2f}% flagged")
-                print(f"    Padding region (times [{orig_times}:{orig_times+pad_times}]): {pad_flagged:5.2f}% flagged")
-
+            logger.info("  Cropping flags to original dimensions...")
             predicted_flags = patcher.crop_flags(predicted_flags)
 
         flag_percent = np.sum(predicted_flags) / predicted_flags.size * 100
@@ -634,7 +598,7 @@ class RFIPredictor:
         enable_augmentation=False,
         normalize_before_stretch=False,
         normalize_after_stretch=False,
-        threshold=0.5,
+        threshold=None,
     ):
         """
         Iterative prediction with progressive cleaning.
@@ -652,7 +616,7 @@ class RFIPredictor:
             stretch: Stretch function ('SQRT', 'LOG10', or None)
             save_flags: If True, save final flags to MS
             apply_existing_flags: If True, load and preserve existing MS flags
-            threshold: Probability threshold for RFI detection (default: 0.5)
+            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
 
         Returns:
             Cumulative flags from all iterations
@@ -700,17 +664,9 @@ class RFIPredictor:
 
             # Preprocess
             print("\n[2/4] Preprocessing data...")
-            preprocessor = Preprocessor(masked_data, flags=None)
-            dataset = preprocessor.create_dataset(
-                patch_size=patch_size,
-                stretch=stretch,
-                flag_sigma=5,
-                use_custom_flags=False,
-                enable_augmentation=enable_augmentation,
-                augmentation_rotations=1,
-                normalize_before_stretch=normalize_before_stretch,
-                normalize_after_stretch=normalize_after_stretch,
-                inference_mode=True,  # CRITICAL: Preserve patch order for reconstruction
+            dataset = self._preprocess_data(
+                masked_data, patch_size, stretch, enable_augmentation,
+                normalize_before_stretch, normalize_after_stretch
             )
 
             # Predict
@@ -747,7 +703,7 @@ class RFIPredictor:
 
         return cumulative_flags
 
-    def _predict_dataset(self, dataset, target_size=None, return_probabilities=False, threshold=0.5):
+    def _predict_dataset(self, dataset, target_size=None, return_probabilities=False, threshold=None):
         """
         Run model prediction on dataset.
 
@@ -755,7 +711,7 @@ class RFIPredictor:
             dataset: HuggingFace Dataset with patches
             target_size: Target size for output masks (H, W). If None, uses model output size (256x256)
             return_probabilities: Return continuous probabilities [0,1] instead of binary masks
-            threshold: Probability threshold for binary classification (default: 0.5)
+            threshold: Probability threshold for binary classification (default: None = adaptive/mean)
 
         Returns:
             List of predicted masks (boolean arrays if return_probabilities=False, float arrays otherwise)

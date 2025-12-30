@@ -73,6 +73,15 @@ def compute_ffi(data, flags):
     stats_before = compute_statistics(data, flags=None)
     stats_after = compute_statistics(data, flags=flags)
 
+    # Handle edge case: all flagged
+    if np.isnan(stats_after['mad']) or np.isnan(stats_after['std']):
+        return {
+            'ffi': 0.0,
+            'mad_reduction': 0.0,
+            'std_reduction': 0.0,
+            'flagged_fraction': 1.0
+        }
+
     # MAD reduction (should decrease if RFI removed)
     mad_reduction = 1.0 - (stats_after['mad'] / stats_before['mad'])
 
@@ -90,6 +99,102 @@ def compute_ffi(data, flags):
         'mad_reduction': float(mad_reduction),
         'std_reduction': float(std_reduction),
         'flagged_fraction': float(flagged_penalty)
+    }
+
+
+def compute_calcquality(data, flags, reference_data=None):
+    """
+    Compute calcquality metric from paper (lower is better).
+
+    Components:
+    - a: Sensitivity (max deviation ~3σ for Gaussian)
+    - b: Mean shift (normalized mean difference)
+    - c: Std shift (normalized std difference)
+    - d: Overflagging penalty (>70% only)
+
+    Args:
+        data: Complex or real array
+        flags: Boolean mask (True = flagged)
+        reference_data: Optional baseline (if None, uses pre-flag stats)
+
+    Returns:
+        dict: {
+            'calcquality': float (combined score),
+            'sensitivity': float (component a),
+            'mean_shift': float (component b),
+            'std_shift': float (component c),
+            'overflagging_penalty': float (component d),
+            'flagged_pct': float,
+            'components': dict (debug values)
+        }
+    """
+    # Convert complex → magnitude
+    if np.iscomplexobj(data):
+        data = np.abs(data)
+
+    # Reference statistics
+    if reference_data is not None:
+        if np.iscomplexobj(reference_data):
+            reference_data = np.abs(reference_data)
+        ref_stats = compute_statistics(reference_data, flags=None)
+        ref_data = reference_data.ravel()
+    else:
+        ref_stats = compute_statistics(data, flags=None)
+        ref_data = data.ravel()
+
+    # Flagged statistics
+    flag_stats = compute_statistics(data, flags=flags)
+
+    rmean = ref_stats['mean']
+    rstd = ref_stats['std']
+    fmean = flag_stats['mean']
+    fstd = flag_stats['std']
+    pflag = flag_stats['flagged_fraction'] * 100
+
+    # Edge case: all flagged or invalid
+    if np.isnan(fmean) or np.isnan(fstd) or rstd < 1e-10:
+        return {
+            'calcquality': np.inf,
+            'sensitivity': np.inf,
+            'mean_shift': np.inf,
+            'std_shift': np.inf,
+            'overflagging_penalty': np.inf,
+            'flagged_pct': float(pflag),
+            'components': {}
+        }
+
+    # Max deviation
+    rmax = np.max(ref_data)
+    maxdev = (rmax - rmean) / rstd
+    fdiff = fmean - rmean
+    sdiff = fstd - rstd
+
+    # Four components
+    a = abs(abs(maxdev) - 3)      # Sensitivity
+    b = abs(fdiff) / rstd - 1     # Mean shift
+    c = abs(sdiff) / rstd         # Std shift
+    d = max(0, (pflag - 70) / 10) # Overflagging
+
+    # Euclidean norm
+    calcquality = np.sqrt(a**2 + b**2 + c**2 + d**2)
+
+    return {
+        'calcquality': float(calcquality),
+        'sensitivity': float(a),
+        'mean_shift': float(b),
+        'std_shift': float(c),
+        'overflagging_penalty': float(d),
+        'flagged_pct': float(pflag),
+        'components': {
+            'rmean': float(rmean),
+            'rstd': float(rstd),
+            'fmean': float(fmean),
+            'fstd': float(fstd),
+            'rmax': float(rmax),
+            'maxdev': float(maxdev),
+            'fdiff': float(fdiff),
+            'sdiff': float(sdiff),
+        }
     }
 
 
