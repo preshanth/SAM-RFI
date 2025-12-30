@@ -9,10 +9,13 @@ from tqdm import tqdm
 
 try:
     from casatools import table
-
-    CASA_AVAILABLE = True
-except ImportError:
-    CASA_AVAILABLE = False
+except Exception as e:
+    raise ImportError(
+        "MSLoader requires CASA to be properly installed and configured.\n"
+        "Install with: pip install samrfi[casa]\n"
+        "See: https://casadocs.readthedocs.io/\n"
+        f"Original error: {e}"
+    ) from e
 
 
 class MSLoader:
@@ -33,10 +36,6 @@ class MSLoader:
         Args:
             ms_path: Path to measurement set
         """
-        if not CASA_AVAILABLE:
-            raise ImportError(
-                "casatools is required for MSLoader. " "Install with: pip install samrfi[casa]"
-            )
         self.ms_path = str(ms_path)
 
         # Open MS and read metadata

@@ -28,10 +28,5 @@ __all__ = [
     "RAMCachedDataset",
 ]
 
-# Optional CASA dependency
-try:
-    from .ms_loader import MSLoader
-
-    __all__.append("MSLoader")
-except ImportError:
-    pass  # CASA not available
+# Note: MSLoader requires CASA and is not imported by default
+# Use: from samrfi.data.ms_loader import MSLoader

@@ -5,7 +5,8 @@ MS Data Generator - Generate training data from measurement sets
 import json
 from pathlib import Path
 
-from samrfi.data import MSLoader, Preprocessor
+from samrfi.data import Preprocessor
+from samrfi.data.ms_loader import MSLoader
 
 
 class MSDataGenerator:

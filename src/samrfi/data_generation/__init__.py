@@ -1,6 +1,8 @@
 """Data generation modules for SAM-RFI"""
 
-from .ms_generator import MSDataGenerator
 from .synthetic_generator import SyntheticDataGenerator
 
-__all__ = ["MSDataGenerator", "SyntheticDataGenerator"]
+__all__ = ["SyntheticDataGenerator"]
+
+# Note: MSDataGenerator requires CASA and is not imported by default
+# Use: from samrfi.data_generation.ms_generator import MSDataGenerator

@@ -35,7 +35,8 @@ config : Configuration management
 
 Usage:
 ------
->>> from samrfi.data import MSLoader, Preprocessor
+>>> from samrfi.data.ms_loader import MSLoader
+>>> from samrfi.data import Preprocessor
 >>> from samrfi.training import SAM2Trainer
 >>> from samrfi.inference import RFIPredictor
 >>>
@@ -69,13 +70,6 @@ from .data import (
     TorchDataset,
 )
 
-# Optional CASA-dependent imports
-try:
-    from .data import MSLoader
-    from .data_generation import MSDataGenerator
-except ImportError:
-    pass  # MSLoader and MSDataGenerator require CASA
-
 # Data generation module
 from .data_generation import SyntheticDataGenerator
 
@@ -88,9 +82,13 @@ from .training import SAM2Trainer
 # Utilities
 from .utils import ModelCache
 
+# Note: MSLoader and MSDataGenerator require CASA and are not imported by default
+# Use: from samrfi.data.ms_loader import MSLoader
+# Use: from samrfi.data_generation.ms_generator import MSDataGenerator
+
+
 __all__ = [
     # Data
-    "MSLoader",
     "Preprocessor",
     "SAMDataset",
     "BatchedDataset",
@@ -99,7 +97,6 @@ __all__ = [
     "HFDatasetWrapper",
     # Data generation
     "SyntheticDataGenerator",
-    "MSDataGenerator",
     # Training
     "SAM2Trainer",
     # Inference

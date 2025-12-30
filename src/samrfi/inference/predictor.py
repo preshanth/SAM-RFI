@@ -12,7 +12,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import Sam2Model, Sam2Processor
 
-from samrfi.data import AdaptivePatcher, MSLoader, Preprocessor, SAMDataset
+from samrfi.data import AdaptivePatcher, Preprocessor, SAMDataset
+from samrfi.data.ms_loader import MSLoader
 from samrfi.utils import logger
 from samrfi.utils.errors import CheckpointMismatchError
 
