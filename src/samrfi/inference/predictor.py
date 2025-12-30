@@ -13,7 +13,6 @@ from tqdm import tqdm
 from transformers import Sam2Model, Sam2Processor
 
 from samrfi.data import AdaptivePatcher, Preprocessor, SAMDataset
-from samrfi.data.ms_loader import MSLoader
 from samrfi.utils import logger
 from samrfi.utils.errors import CheckpointMismatchError
 
@@ -537,6 +536,8 @@ class RFIPredictor:
         Returns:
             Predicted flags array (baselines, pols, channels, times)
         """
+        from samrfi.data.ms_loader import MSLoader
+
         logger.info(f"\n{'='*60}")
         logger.info("RFI Prediction - Single Pass")
         logger.info(f"{'='*60}")
@@ -658,6 +659,8 @@ class RFIPredictor:
         Returns:
             Cumulative flags from all iterations
         """
+        from samrfi.data.ms_loader import MSLoader
+
         logger.info(f"\n{'='*60}")
         logger.info(f"RFI Prediction - Iterative ({num_iterations} passes)")
         logger.info(f"{'='*60}")
