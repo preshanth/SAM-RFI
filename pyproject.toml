@@ -87,10 +87,11 @@ viz = [
     "colorcet>=3.0.0",  # Perceptually uniform colormaps
 ]
 
-# CI dependencies (minimal for testing - no GPU, no CASA)
+# CI dependencies (minimal for testing - CPU torch, no CUDA, no CASA)
 ci = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "torch>=2.0.0",  # CPU-only for testing (pip installs CPU by default)
 ]
 
 # Development dependencies (includes GPU + CASA + testing tools)

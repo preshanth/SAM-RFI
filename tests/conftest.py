@@ -6,7 +6,14 @@ Fixtures are used across unit, integration, and extended tests.
 
 import numpy as np
 import pytest
-import torch
+
+# Optional torch import (only needed for some fixtures)
+try:
+    import torch
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 # ============================================================================
 # Data Fixtures
@@ -148,6 +155,9 @@ def mock_checkpoint(tmp_path):
     Returns:
         Path to checkpoint file
     """
+    if not TORCH_AVAILABLE:
+        pytest.skip("torch not available")
+
     checkpoint = {
         "model_state_dict": {},  # Empty for mock
         "optimizer_state_dict": {},
@@ -183,6 +193,9 @@ def mock_checkpoint_mismatch(tmp_path):
 
     Used to test validation errors.
     """
+    if not TORCH_AVAILABLE:
+        pytest.skip("torch not available")
+
     checkpoint = {
         "model_state_dict": {},
         "patch_size": 128,  # Mismatch!
@@ -217,6 +230,9 @@ def mock_torch_dataset():
     Returns:
         TorchDataset with 10 samples
     """
+    if not TORCH_AVAILABLE:
+        pytest.skip("torch not available")
+
     from samrfi.data import TorchDataset
 
     # Create mock images (10 samples, 256×256×3)
