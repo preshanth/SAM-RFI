@@ -11,6 +11,13 @@ repos:
         language_version: python3.12
         args: [--line-length=100]
 
+  # isort - Import sorting
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--profile=black, --line-length=100]
+
   # Ruff - Fast Python linter
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.1.15

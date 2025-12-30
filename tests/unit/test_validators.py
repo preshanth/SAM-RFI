@@ -5,12 +5,12 @@ Tests that validators catch invalid configs and provide helpful messages.
 """
 
 import pytest
-from pathlib import Path
+
 from samrfi.config.validators import (
+    validate_all,
+    validate_paths_exist,
     validate_preprocessing_config,
     validate_training_config,
-    validate_paths_exist,
-    validate_all,
 )
 from samrfi.utils.errors import ConfigValidationError
 
@@ -222,6 +222,7 @@ class TestValidateAll:
 
     def test_validate_all_with_config_object(self, tmp_path):
         """Test validate_all with config object (has attributes)."""
+
         # Create mock config object
         class MockConfig:
             def __init__(self):
@@ -241,6 +242,7 @@ class TestValidateAll:
 
     def test_validate_all_catches_preprocessing_error(self):
         """Test that validate_all catches preprocessing errors."""
+
         class MockConfig:
             def __init__(self):
                 self.processing = {"patch_size": 333}  # Invalid
@@ -251,6 +253,7 @@ class TestValidateAll:
 
     def test_validate_all_catches_training_error(self):
         """Test that validate_all catches training errors."""
+
         class MockConfig:
             def __init__(self):
                 self.processing = {"patch_size": 1024}

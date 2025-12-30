@@ -153,7 +153,7 @@ def inject_synthetic_data(
                 raise RuntimeError(
                     "Unable to read DATA column with getcol; MS may have non-uniform row shapes. "
                     "Aborting injection." + f" (error: {e})"
-                )
+                ) from e
 
             # existing typical shape: (npol, nchan, nrows) or (npol, nchan, nrows, extra)
             # Find which axis corresponds to rows (should equal nrows)
@@ -191,7 +191,6 @@ def inject_synthetic_data(
             chan_size = existing.shape[ax_chan]
 
             transpose = False
-            add_axis = False
 
             if pol_size == npols and chan_size == nchan:
                 transpose = False
@@ -241,7 +240,7 @@ def inject_synthetic_data(
                         subtable.putcell("DATA", row_idx, cell_val)
                     except Exception as e:
                         subtable.close()
-                        raise RuntimeError(f"Failed to write DATA row {row_idx}: {e}")
+                        raise RuntimeError(f"Failed to write DATA row {row_idx}: {e}") from e
 
             subtable.close()
 

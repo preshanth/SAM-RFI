@@ -176,9 +176,7 @@ class MSLoader:
 
         # Load all SPWs for this baseline
         for spw_idx, spw in enumerate(same_spw_list):
-            subtable = self.tb.query(
-                f"DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}"
-            )
+            subtable = self.tb.query(f"DATA_DESC_ID=={spw} && ANTENNA1=={ant1} && ANTENNA2=={ant2}")
 
             if subtable.nrows() == 0:
                 subtable.close()

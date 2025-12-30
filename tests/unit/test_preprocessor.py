@@ -4,9 +4,9 @@ Unit tests for Preprocessor (patchification, feature extraction, normalization).
 Tests the preprocessing pipeline including our critical patchification fix.
 """
 
-import pytest
 import numpy as np
 import torch
+
 from samrfi.data import Preprocessor
 
 
@@ -100,8 +100,9 @@ class TestPatchification:
         )
 
         # Expected: 4× more patches with 4-way augmentation
-        assert len(dataset_aug) == 4 * len(dataset_no_aug), \
-            f"Augmented dataset should be 4× larger. Got {len(dataset_aug)} vs {len(dataset_no_aug)}"
+        assert len(dataset_aug) == 4 * len(
+            dataset_no_aug
+        ), f"Augmented dataset should be 4× larger. Got {len(dataset_aug)} vs {len(dataset_no_aug)}"
 
 
 class TestFeatureExtraction:
@@ -146,8 +147,11 @@ class TestFeatureExtraction:
         # All patches should have same shape
         for i in range(min(5, len(dataset))):
             sample = dataset[i]
-            assert sample["image"].shape == (128, 128, 3), \
-                f"Patch {i} has incorrect shape: {sample['image'].shape}"
+            assert sample["image"].shape == (
+                128,
+                128,
+                3,
+            ), f"Patch {i} has incorrect shape: {sample['image'].shape}"
 
 
 class TestNormalization:
@@ -217,8 +221,9 @@ class TestMetadata:
         )
 
         # Critical: augmentation_rotations must be in metadata
-        assert "augmentation_rotations" in dataset.metadata, \
-            "augmentation_rotations missing from metadata (needed for reconstruction)"
+        assert (
+            "augmentation_rotations" in dataset.metadata
+        ), "augmentation_rotations missing from metadata (needed for reconstruction)"
 
         assert dataset.metadata["augmentation_rotations"] == 4
 

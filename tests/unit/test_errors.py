@@ -5,12 +5,13 @@ Tests that error messages are informative and include helpful context.
 """
 
 import pytest
+
 from samrfi.utils.errors import (
-    SAMRFIError,
-    DataShapeError,
     CheckpointMismatchError,
-    ModelLoadError,
     ConfigValidationError,
+    DataShapeError,
+    ModelLoadError,
+    SAMRFIError,
 )
 
 
@@ -40,9 +41,7 @@ class TestDataShapeError:
     def test_data_shape_error_with_context(self):
         """Test DataShapeError includes context."""
         error = DataShapeError(
-            expected="(4, 1024, 1024)",
-            got="(2, 1024, 1024)",
-            context="Input to Preprocessor"
+            expected="(4, 1024, 1024)", got="(2, 1024, 1024)", context="Input to Preprocessor"
         )
 
         message = str(error)
@@ -61,9 +60,7 @@ class TestCheckpointMismatchError:
     def test_checkpoint_mismatch_patch_size(self):
         """Test CheckpointMismatchError for patch_size mismatch."""
         error = CheckpointMismatchError(
-            param_name="patch_size",
-            checkpoint_value=1024,
-            inference_value=128
+            param_name="patch_size", checkpoint_value=1024, inference_value=128
         )
 
         message = str(error)
@@ -77,9 +74,7 @@ class TestCheckpointMismatchError:
     def test_checkpoint_mismatch_stretch(self):
         """Test CheckpointMismatchError for stretch mismatch."""
         error = CheckpointMismatchError(
-            param_name="stretch",
-            checkpoint_value="SQRT",
-            inference_value=None
+            param_name="stretch", checkpoint_value="SQRT", inference_value=None
         )
 
         message = str(error)
@@ -91,9 +86,7 @@ class TestCheckpointMismatchError:
     def test_checkpoint_mismatch_converts_underscores(self):
         """Test that parameter names convert underscores to hyphens in CLI suggestion."""
         error = CheckpointMismatchError(
-            param_name="normalize_before_stretch",
-            checkpoint_value=True,
-            inference_value=False
+            param_name="normalize_before_stretch", checkpoint_value=True, inference_value=False
         )
 
         message = str(error)
@@ -110,10 +103,7 @@ class TestModelLoadError:
 
     def test_model_load_error_basic(self):
         """Test ModelLoadError with path and reason."""
-        error = ModelLoadError(
-            model_path="/path/to/model.pth",
-            reason="File not found"
-        )
+        error = ModelLoadError(model_path="/path/to/model.pth", reason="File not found")
 
         message = str(error)
         assert "/path/to/model.pth" in message
@@ -122,10 +112,7 @@ class TestModelLoadError:
 
     def test_model_load_error_includes_suggestions(self):
         """Test that ModelLoadError includes helpful troubleshooting steps."""
-        error = ModelLoadError(
-            model_path="model.pth",
-            reason="Invalid checkpoint format"
-        )
+        error = ModelLoadError(model_path="model.pth", reason="Invalid checkpoint format")
 
         message = str(error)
         assert "1." in message  # Numbered troubleshooting steps
@@ -164,8 +151,9 @@ class TestErrorInheritance:
         ]
 
         for error_class in custom_errors:
-            assert issubclass(error_class, SAMRFIError), \
-                f"{error_class.__name__} should inherit from SAMRFIError"
+            assert issubclass(
+                error_class, SAMRFIError
+            ), f"{error_class.__name__} should inherit from SAMRFIError"
 
     def test_all_errors_inherit_from_exception(self):
         """Test that all custom errors inherit from Exception."""
@@ -178,8 +166,9 @@ class TestErrorInheritance:
         ]
 
         for error_class in custom_errors:
-            assert issubclass(error_class, Exception), \
-                f"{error_class.__name__} should inherit from Exception"
+            assert issubclass(
+                error_class, Exception
+            ), f"{error_class.__name__} should inherit from Exception"
 
     def test_catch_specific_error(self):
         """Test that specific errors can be caught independently."""

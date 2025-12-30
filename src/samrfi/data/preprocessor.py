@@ -12,8 +12,9 @@ import torch
 from patchify import patchify
 from scipy import stats
 
-from .torch_dataset import TorchDataset
 from samrfi.utils import logger
+
+from .torch_dataset import TorchDataset
 
 
 # Standalone functions for multiprocessing (must be picklable)
@@ -32,9 +33,15 @@ def _patchify_single_waterfall(waterfall, patch_size):
     original_shape = (channels, times)
 
     # Quick check: skip padding if already compatible
-    if (channels % patch_size == 0 and times % patch_size == 0 and
-        channels >= patch_size and times >= patch_size):
-        logger.debug(f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed")
+    if (
+        channels % patch_size == 0
+        and times % patch_size == 0
+        and channels >= patch_size
+        and times >= patch_size
+    ):
+        logger.debug(
+            f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed"
+        )
         patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
 
         # Extract patches
@@ -61,12 +68,11 @@ def _patchify_single_waterfall(waterfall, patch_size):
 
     # Apply padding if needed
     if pad_channels > 0 or pad_times > 0:
-        logger.debug(f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})")
+        logger.debug(
+            f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})"
+        )
         waterfall = np.pad(
-            waterfall,
-            ((0, pad_channels), (0, pad_times)),
-            mode='constant',
-            constant_values=0
+            waterfall, ((0, pad_channels), (0, pad_times)), mode="constant", constant_values=0
         )
 
     patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
@@ -239,7 +245,9 @@ class Preprocessor:
         else:
             # Apply patching
             logger.info(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
-            self.patches, original_shapes = self._create_patches(augmented_data, patch_size, num_workers=num_workers)
+            self.patches, original_shapes = self._create_patches(
+                augmented_data, patch_size, num_workers=num_workers
+            )
             if augmented_flags is not None:
                 augmented_flags, _ = self._create_patches(
                     augmented_flags, patch_size, num_workers=num_workers
@@ -252,7 +260,9 @@ class Preprocessor:
         is_complex = np.iscomplexobj(self.patches[0]) if len(self.patches) > 0 else False
 
         if is_complex:
-            logger.info("  [3/7] Complex data detected - skipping normalization (will extract channels)")
+            logger.info(
+                "  [3/7] Complex data detected - skipping normalization (will extract channels)"
+            )
             logger.info("  [4/7] Skipping stretch (using gradient/log_amp/phase channels)")
             logger.info("  [5/7] Skipping normalization (channels normalized independently)")
         else:
@@ -291,7 +301,9 @@ class Preprocessor:
             # Flags already patchified (or converted to array) in Step 2
             self.patch_flags = augmented_flags
         else:
-            logger.info(f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})...")
+            logger.info(
+                f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})..."
+            )
             self.patch_flags = self._generate_mad_flags(
                 self.patches, flag_sigma, num_workers=num_workers
             )
@@ -361,12 +373,14 @@ class Preprocessor:
             "normalize_before_stretch": normalize_before_stretch,
             "normalize_after_stretch": normalize_after_stretch,
             "augmentation_rotations": augmentation_rotations,
-            "original_shapes": getattr(self, 'original_shapes', None),
+            "original_shapes": getattr(self, "original_shapes", None),
         }
 
         self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
         logger.info(f"  ✓ Dataset ready: {len(self.dataset)} samples")
-        logger.info("    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]")
+        logger.info(
+            "    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]"
+        )
         logger.info(f"    {self.dataset}")
 
         return self.dataset
@@ -472,9 +486,15 @@ class Preprocessor:
                 original_shapes.append((channels, times))
 
                 # Quick check: skip padding if already compatible
-                if (channels % patch_size == 0 and times % patch_size == 0 and
-                    channels >= patch_size and times >= patch_size):
-                    logger.debug(f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed")
+                if (
+                    channels % patch_size == 0
+                    and times % patch_size == 0
+                    and channels >= patch_size
+                    and times >= patch_size
+                ):
+                    logger.debug(
+                        f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed"
+                    )
                 else:
                     # Apply padding
                     pad_channels = 0
@@ -491,12 +511,14 @@ class Preprocessor:
                         pad_times = patch_size - (times % patch_size)
 
                     if pad_channels > 0 or pad_times > 0:
-                        logger.debug(f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})")
+                        logger.debug(
+                            f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})"
+                        )
                         waterfall = np.pad(
                             waterfall,
                             ((0, pad_channels), (0, pad_times)),
-                            mode='constant',
-                            constant_values=0
+                            mode="constant",
+                            constant_values=0,
                         )
 
                 # Patchify this waterfall

@@ -4,15 +4,14 @@ Shared pytest fixtures for SAM-RFI tests.
 Fixtures are used across unit, integration, and extended tests.
 """
 
-import pytest
 import numpy as np
+import pytest
 import torch
-from pathlib import Path
-
 
 # ============================================================================
 # Data Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def synthetic_waterfall_small():
@@ -137,6 +136,7 @@ def synthetic_data_with_rfi():
 # Model Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def mock_checkpoint(tmp_path):
     """
@@ -208,6 +208,7 @@ def mock_checkpoint_mismatch(tmp_path):
 # Dataset Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def mock_torch_dataset():
     """
@@ -241,6 +242,7 @@ def mock_torch_dataset():
 # pytest Configuration Helpers
 # ============================================================================
 
+
 def pytest_configure(config):
     """
     Configure pytest markers for test categories.
@@ -248,17 +250,14 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    config.addinivalue_line(
-        "markers", "requires_gpu: requires CUDA GPU"
-    )
-    config.addinivalue_line(
-        "markers", "requires_casa: requires CASA installation"
-    )
+    config.addinivalue_line("markers", "requires_gpu: requires CUDA GPU")
+    config.addinivalue_line("markers", "requires_casa: requires CASA installation")
 
 
 # ============================================================================
 # Utility Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def temp_output_dir(tmp_path):

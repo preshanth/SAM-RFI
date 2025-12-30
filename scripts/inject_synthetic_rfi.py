@@ -49,7 +49,7 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
     print(f"Input MS: {input_ms}")
 
     # Load MS to get dimensions
-    print(f"\n[1/4] Loading MS structure...")
+    print("\n[1/4] Loading MS structure...")
     loader = MSLoader(input_ms)
     loader.load(mode="DATA")
 
@@ -87,7 +87,7 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
     all_waterfalls = []
     all_ground_truth = []
 
-    for baseline_idx in tqdm(range(baselines), desc="Generating"):
+    for _baseline_idx in tqdm(range(baselines), desc="Generating"):
         waterfall, ground_truth, _ = generator._generate_single_sample(**gen_kwargs)
         all_waterfalls.append(waterfall[0])
         all_ground_truth.append(ground_truth[0])
@@ -105,7 +105,7 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
     print(f"  ✓ Saved ground truth: {gt_path}")
 
     # Create working MS with injection
-    print(f"\n[3/4] Creating working MS with synthetic RFI...")
+    print("\n[3/4] Creating working MS with synthetic RFI...")
     work_ms = output_dir / "synthetic_rfi.ms"
 
     if work_ms.exists():
@@ -115,7 +115,7 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
     print(f"  Copied: {input_ms} → {work_ms}")
 
     # Inject synthetic data
-    print(f"\n[4/4] Injecting synthetic RFI into MS...")
+    print("\n[4/4] Injecting synthetic RFI into MS...")
     inject_synthetic_data(
         template_ms_path=work_ms,
         synthetic_data=full_waterfall,
@@ -159,9 +159,7 @@ def main():
 
     parser.add_argument("--input-ms", required=True, help="Path to input MS")
     parser.add_argument("--config", required=True, help="Path to validation config")
-    parser.add_argument(
-        "--output-dir", default="./synthetic_injection", help="Output directory"
-    )
+    parser.add_argument("--output-dir", default="./synthetic_injection", help="Output directory")
 
     args = parser.parse_args()
 
@@ -169,7 +167,7 @@ def main():
     config = ConfigLoader.load_data(args.config)
 
     # Inject RFI
-    metadata = inject_rfi_into_ms(
+    inject_rfi_into_ms(
         input_ms=args.input_ms,
         config=config,
         output_dir=args.output_dir,

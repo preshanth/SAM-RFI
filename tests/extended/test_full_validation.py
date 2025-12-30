@@ -11,9 +11,7 @@ Usage:
 """
 
 import pytest
-import numpy as np
 import torch
-from pathlib import Path
 
 
 @pytest.mark.slow
@@ -27,9 +25,8 @@ class TestFullPipelineWithTinyModel:
         This is a smoke test to ensure the full pipeline works end-to-end.
         Does not train the model (too slow), just tests inference with pretrained weights.
         """
-        from samrfi.data import Preprocessor
-        from samrfi.inference import RFIPredictor
         from samrfi.evaluation import evaluate_segmentation
+        from samrfi.inference import RFIPredictor
 
         # Get synthetic data
         data = synthetic_data_with_rfi["data"]
@@ -97,11 +94,11 @@ class TestFullPipelineWithTinyModel:
         # Step 4: Verify results
         print("  [4/5] Validating results...")
 
-        assert predicted_flags.shape == ground_truth.shape, \
-            f"Shape mismatch: predicted {predicted_flags.shape} vs GT {ground_truth.shape}"
+        assert (
+            predicted_flags.shape == ground_truth.shape
+        ), f"Shape mismatch: predicted {predicted_flags.shape} vs GT {ground_truth.shape}"
 
-        assert predicted_flags.dtype == bool, \
-            f"Expected bool dtype, got {predicted_flags.dtype}"
+        assert predicted_flags.dtype == bool, f"Expected bool dtype, got {predicted_flags.dtype}"
 
         print("  ✓ Shape and dtype validated")
 
@@ -110,7 +107,7 @@ class TestFullPipelineWithTinyModel:
 
         metrics = evaluate_segmentation(predicted_flags, ground_truth)
 
-        print(f"  Metrics:")
+        print("  Metrics:")
         for key, value in metrics.items():
             print(f"    {key}: {value:.4f}")
 
@@ -161,14 +158,13 @@ class TestFullPipelineWithTinyModel:
         )
 
         # Verify model is on GPU
-        assert next(predictor.model.parameters()).is_cuda, \
-            "Model should be on CUDA device"
+        assert next(predictor.model.parameters()).is_cuda, "Model should be on CUDA device"
 
         print("✓ GPU inference test passed")
 
 
 @pytest.mark.slow
-class TestCheckpointMetadataValidation Extended:
+class TestCheckpointMetadataValidationExtended:
     """Extended tests for checkpoint validation with real model."""
 
     def test_trained_checkpoint_has_metadata(self, tmp_path):
@@ -204,6 +200,7 @@ class TestIterativeInferenceExtended:
 # ============================================================================
 # Utility Functions for Extended Tests
 # ============================================================================
+
 
 def download_sam2_tiny_if_needed():
     """

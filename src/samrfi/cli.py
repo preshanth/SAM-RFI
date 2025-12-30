@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config.config_loader import ConfigLoader
 from .config import validate_all
+from .config.config_loader import ConfigLoader
 from .data import MSLoader
 from .data_generation.ms_generator import MSDataGenerator
 from .data_generation.synthetic_generator import SyntheticDataGenerator
@@ -304,7 +304,11 @@ def predict_command(args):
     stretch = None if args.stretch == "None" else args.stretch
 
     # Convert threshold to None if not specified or "None"
-    threshold = None if not hasattr(args, 'threshold') or args.threshold is None or args.threshold == "None" else args.threshold
+    threshold = (
+        None
+        if not hasattr(args, "threshold") or args.threshold is None or args.threshold == "None"
+        else args.threshold
+    )
 
     # Log threshold setting
     if threshold is None:
@@ -372,13 +376,13 @@ def evaluate_command(args):
 
     # Check shape compatibility
     if ground_truth.shape != predicted_flags.shape:
-        print(f"\n✗ Error: Shape mismatch!")
+        print("\n✗ Error: Shape mismatch!")
         print(f"  Ground truth: {ground_truth.shape}")
         print(f"  Predicted: {predicted_flags.shape}")
         return 1
 
     # Compute metrics
-    print(f"\n[3/3] Computing metrics...")
+    print("\n[3/3] Computing metrics...")
     metrics = evaluate_segmentation(predicted_flags, ground_truth)
 
     # Display metrics
@@ -393,8 +397,8 @@ def evaluate_command(args):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     df = pd.DataFrame([metrics])
-    df.insert(0, 'ms_path', args.input)
-    df.insert(1, 'ground_truth_path', args.ground_truth)
+    df.insert(0, "ms_path", args.input)
+    df.insert(1, "ground_truth_path", args.ground_truth)
     df.to_csv(output_path, index=False)
 
     print(f"\n✓ Metrics saved to: {output_path}")
@@ -544,9 +548,15 @@ Examples:
     )
 
     # Evaluate parser
-    evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate predictions against ground truth")
-    evaluate_parser.add_argument("--input", required=True, help="Path to measurement set with predicted flags")
-    evaluate_parser.add_argument("--ground-truth", required=True, help="Path to ground truth .npy file")
+    evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Evaluate predictions against ground truth"
+    )
+    evaluate_parser.add_argument(
+        "--input", required=True, help="Path to measurement set with predicted flags"
+    )
+    evaluate_parser.add_argument(
+        "--ground-truth", required=True, help="Path to ground truth .npy file"
+    )
     evaluate_parser.add_argument(
         "--output", default="metrics.csv", help="Output CSV file path (default: metrics.csv)"
     )

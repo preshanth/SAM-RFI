@@ -12,9 +12,9 @@ from .metrics import (
 )
 from .ms_injection import inject_synthetic_data
 from .statistics import (
-    compute_statistics,
-    compute_ffi,
     compute_calcquality,
+    compute_ffi,
+    compute_statistics,
     print_statistics_comparison,
 )
 

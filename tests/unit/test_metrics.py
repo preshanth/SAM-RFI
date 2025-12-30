@@ -4,18 +4,18 @@ Unit tests for evaluation metrics (IoU, Precision, Recall, F1, Dice).
 Tests the metrics module used for validation and comparison.
 """
 
-import pytest
 import numpy as np
 import torch
+
 from samrfi.evaluation import (
+    compute_calcquality,
+    compute_dice,
+    compute_f1,
+    compute_ffi,
     compute_iou,
     compute_precision,
     compute_recall,
-    compute_f1,
-    compute_dice,
     evaluate_segmentation,
-    compute_calcquality,
-    compute_ffi,
 )
 
 
@@ -59,7 +59,7 @@ class TestMetricsBasic:
         recall = compute_recall(pred, gt)
 
         # IoU = TP / (TP + FP + FN) = 1 / (1+1+1) = 1/3
-        assert np.isclose(iou, 1/3), f"Expected IoU=1/3, got {iou}"
+        assert np.isclose(iou, 1 / 3), f"Expected IoU=1/3, got {iou}"
 
         # Precision = TP / (TP + FP) = 1 / (1+1) = 0.5
         assert np.isclose(precision, 0.5), f"Expected Precision=0.5, got {precision}"
@@ -173,8 +173,7 @@ class TestF1DiceEquivalence:
         f1 = compute_f1(pred, gt)
         dice = compute_dice(pred, gt)
 
-        np.testing.assert_allclose(f1, dice, atol=1e-10,
-                                   err_msg="F1 and Dice should be equivalent")
+        np.testing.assert_allclose(f1, dice, atol=1e-10, err_msg="F1 and Dice should be equivalent")
 
 
 class TestMetricsRealWorldScenarios:
@@ -259,13 +258,17 @@ class TestCalcqualityBasic:
         cq = compute_calcquality(data, flags)
 
         # Should have low score (good)
-        assert cq['calcquality'] < 5.0, f"Clean data should have low calcquality, got {cq['calcquality']}"
+        assert (
+            cq["calcquality"] < 5.0
+        ), f"Clean data should have low calcquality, got {cq['calcquality']}"
 
         # maxdev should be close to 3 for Gaussian (but can go up to 5 for large samples)
-        assert 2.0 < cq['components']['maxdev'] < 5.5, "Gaussian maxdev should be ~3σ (up to 5σ for large N)"
+        assert (
+            2.0 < cq["components"]["maxdev"] < 5.5
+        ), "Gaussian maxdev should be ~3σ (up to 5σ for large N)"
 
         # No overflagging (0% < 70%)
-        assert cq['overflagging_penalty'] == 0.0, "No flags should have no overflag penalty"
+        assert cq["overflagging_penalty"] == 0.0, "No flags should have no overflag penalty"
 
     def test_perfect_rfi_flagging(self):
         """Perfect RFI flagging (30%) should have very low calcquality."""
@@ -281,10 +284,12 @@ class TestCalcqualityBasic:
         cq = compute_calcquality(data, flags)
 
         # Should have low score (residuals are clean)
-        assert cq['calcquality'] < 3.0, f"Perfect flagging should have low calcquality, got {cq['calcquality']}"
+        assert (
+            cq["calcquality"] < 3.0
+        ), f"Perfect flagging should have low calcquality, got {cq['calcquality']}"
 
         # No overflagging (30% < 70%)
-        assert cq['overflagging_penalty'] == 0.0
+        assert cq["overflagging_penalty"] == 0.0
 
     def test_overflagging_penalty(self):
         """Flagging >70% should trigger overflagging penalty."""
@@ -296,11 +301,12 @@ class TestCalcqualityBasic:
 
         # Should have overflagging penalty: (80 - 70) / 10 = 1.0
         expected_penalty = (80 - 70) / 10
-        assert np.isclose(cq['overflagging_penalty'], expected_penalty, atol=0.05), \
-            f"Expected penalty {expected_penalty}, got {cq['overflagging_penalty']}"
+        assert np.isclose(
+            cq["overflagging_penalty"], expected_penalty, atol=0.05
+        ), f"Expected penalty {expected_penalty}, got {cq['overflagging_penalty']}"
 
         # Score should be worse due to penalty
-        assert cq['calcquality'] > 1.0
+        assert cq["calcquality"] > 1.0
 
 
 class TestCalcqualityEdgeCases:
@@ -313,10 +319,10 @@ class TestCalcqualityEdgeCases:
 
         cq = compute_calcquality(data, flags)
 
-        assert cq['calcquality'] == np.inf, "All flagged should have inf calcquality"
-        assert cq['sensitivity'] == np.inf
-        assert cq['mean_shift'] == np.inf
-        assert cq['std_shift'] == np.inf
+        assert cq["calcquality"] == np.inf, "All flagged should have inf calcquality"
+        assert cq["sensitivity"] == np.inf
+        assert cq["mean_shift"] == np.inf
+        assert cq["std_shift"] == np.inf
 
     def test_zero_std_data(self):
         """Zero std data should return infinity."""
@@ -325,7 +331,7 @@ class TestCalcqualityEdgeCases:
 
         cq = compute_calcquality(data, flags)
 
-        assert cq['calcquality'] == np.inf, "Zero std should have inf calcquality"
+        assert cq["calcquality"] == np.inf, "Zero std should have inf calcquality"
 
     def test_complex_data_conversion(self):
         """Complex data should be converted to magnitude."""
@@ -338,8 +344,8 @@ class TestCalcqualityEdgeCases:
         cq = compute_calcquality(complex_data, flags)
 
         # Should not error, and should have valid score
-        assert np.isfinite(cq['calcquality']), "Complex data should produce finite calcquality"
-        assert cq['calcquality'] >= 0, "calcquality should be non-negative"
+        assert np.isfinite(cq["calcquality"]), "Complex data should produce finite calcquality"
+        assert cq["calcquality"] >= 0, "calcquality should be non-negative"
 
     def test_exactly_70_percent_flagged(self):
         """Exactly 70% flagged should have zero overflag penalty (boundary)."""
@@ -352,7 +358,7 @@ class TestCalcqualityEdgeCases:
         cq = compute_calcquality(data, flags)
 
         # Should be exactly at boundary: max(0, (70 - 70) / 10) = 0
-        assert cq['overflagging_penalty'] == 0.0, "70% should be at threshold (no penalty)"
+        assert cq["overflagging_penalty"] == 0.0, "70% should be at threshold (no penalty)"
 
 
 class TestCalcqualityComponents:
@@ -368,7 +374,7 @@ class TestCalcqualityComponents:
 
         # Sensitivity = ||maxdev| - 3|
         # For Gaussian, maxdev should be ~3, so sensitivity ~0
-        assert cq['sensitivity'] < 2.0, "Clean Gaussian should have low sensitivity"
+        assert cq["sensitivity"] < 2.0, "Clean Gaussian should have low sensitivity"
 
     def test_mean_shift_component(self):
         """Test mean shift component."""
@@ -376,7 +382,7 @@ class TestCalcqualityComponents:
         data = np.random.randn(1000, 500) * 10.0 + 100.0
         flags = np.zeros((1000, 500), dtype=bool)
 
-        cq = compute_calcquality(data, flags)
+        _cq = compute_calcquality(data, flags)
 
         # No flagging → fmean = rmean → fdiff = 0 → |0|/rstd - 1 = -1, but abs() → 1
         # Actually with no flags, mean_shift should be close to 0
@@ -426,7 +432,7 @@ class TestCalcqualityComponents:
         # c = |sdiff|/rstd where sdiff = fstd - rstd
         # If flagging removes high-variance RFI, fstd < rstd, so sdiff < 0
         # Then |sdiff|/rstd > 0
-        assert cq['std_shift'] >= 0, "Std shift should be non-negative"
+        assert cq["std_shift"] >= 0, "Std shift should be non-negative"
 
 
 class TestCalcqualityVsFFI:
@@ -447,10 +453,10 @@ class TestCalcqualityVsFFI:
         ffi = compute_ffi(data, flags)
 
         # calcquality should be low (good)
-        assert cq['calcquality'] < 5.0, "Good flagging should have low calcquality"
+        assert cq["calcquality"] < 5.0, "Good flagging should have low calcquality"
 
         # FFI should be high (good)
-        assert ffi['ffi'] > 0.2, "Good flagging should have high FFI"
+        assert ffi["ffi"] > 0.2, "Good flagging should have high FFI"
 
     def test_both_metrics_penalize_overflagging(self):
         """Both metrics should penalize overflagging."""
@@ -462,10 +468,10 @@ class TestCalcqualityVsFFI:
         ffi = compute_ffi(data, over_flags)
 
         # calcquality should be high (bad) due to overflag penalty
-        assert cq['overflagging_penalty'] > 0, "Should penalize overflagging"
+        assert cq["overflagging_penalty"] > 0, "Should penalize overflagging"
 
         # FFI should be low (bad) due to flagged_fraction penalty
-        assert ffi['ffi'] < 0.1, "FFI should penalize overflagging"
+        assert ffi["ffi"] < 0.1, "FFI should penalize overflagging"
 
 
 class TestFFIMetric:
@@ -485,11 +491,11 @@ class TestFFIMetric:
         ffi = compute_ffi(data, flags)
 
         # Should have high MAD/STD reduction
-        assert ffi['mad_reduction'] > 0.4, "Should reduce MAD significantly"
-        assert ffi['std_reduction'] > 0.4, "Should reduce STD significantly"
+        assert ffi["mad_reduction"] > 0.4, "Should reduce MAD significantly"
+        assert ffi["std_reduction"] > 0.4, "Should reduce STD significantly"
 
         # Overall FFI should be positive and reasonably high
-        assert ffi['ffi'] > 0, "FFI should be positive for good flagging"
+        assert ffi["ffi"] > 0, "FFI should be positive for good flagging"
 
     def test_ffi_no_rfi_no_flags(self):
         """FFI on clean data with no flags should be ~0."""
@@ -500,9 +506,9 @@ class TestFFIMetric:
         ffi = compute_ffi(data, flags)
 
         # No change in statistics → reductions ~0
-        assert abs(ffi['mad_reduction']) < 0.1, "Clean data should have ~0 MAD reduction"
-        assert abs(ffi['std_reduction']) < 0.1, "Clean data should have ~0 STD reduction"
-        assert abs(ffi['ffi']) < 0.1, "FFI should be ~0 for no change"
+        assert abs(ffi["mad_reduction"]) < 0.1, "Clean data should have ~0 MAD reduction"
+        assert abs(ffi["std_reduction"]) < 0.1, "Clean data should have ~0 STD reduction"
+        assert abs(ffi["ffi"]) < 0.1, "FFI should be ~0 for no change"
 
     def test_ffi_all_flagged(self):
         """FFI should handle all-flagged gracefully."""
@@ -512,4 +518,4 @@ class TestFFIMetric:
         ffi = compute_ffi(data, flags)
 
         # Should handle NaN gracefully (defined as 0)
-        assert ffi['ffi'] == 0.0, "All flagged should have FFI=0"
+        assert ffi["ffi"] == 0.0, "All flagged should have FFI=0"

@@ -185,7 +185,7 @@ def main():
     all_waterfalls = []
     all_ground_truth = []
 
-    for baseline_idx in tqdm(range(num_baselines_total), desc="Generating"):
+    for baseline_idx in tqdm(range(num_baselines_total), desc="Generating"):  # noqa: B007
         waterfall, ground_truth, rfi_params = generator._generate_single_sample(**gen_kwargs)
         all_waterfalls.append(waterfall[0])  # Remove extra baseline dimension
         all_ground_truth.append(ground_truth[0])

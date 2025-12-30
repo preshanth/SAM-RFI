@@ -142,7 +142,7 @@ class SAM2Trainer:
 
         # Fix multiprocessing for CUDA in workers (required for GPU transforms)
         try:
-            multiprocessing.set_start_method('spawn', force=True)
+            multiprocessing.set_start_method("spawn", force=True)
         except RuntimeError:
             pass  # Already set
 
@@ -619,6 +619,24 @@ class SAM2Trainer:
         method_dir = os.path.join(self.directory, "models")
         if not os.path.exists(method_dir):
             os.makedirs(method_dir)
+
+        # Extract preprocessing metadata for checkpoint
+        if params:
+            preprocessing_metadata = {
+                "patch_size": params.get("patch_size", patch_size),
+                "augmentation_rotations": params.get("augmentation_rotations", 4),
+                "stretch": params.get("stretch", stretch),
+                "normalize_before_stretch": params.get("normalize_before_stretch", True),
+                "normalize_after_stretch": params.get("normalize_after_stretch", False),
+            }
+        else:
+            preprocessing_metadata = {
+                "patch_size": metadata.get("patch_size", patch_size),
+                "augmentation_rotations": metadata.get("augmentation_rotations", 4),
+                "stretch": metadata.get("stretch", stretch),
+                "normalize_before_stretch": metadata.get("normalize_before_stretch", True),
+                "normalize_after_stretch": metadata.get("normalize_after_stretch", False),
+            }
 
         # Create full checkpoint
         checkpoint = {

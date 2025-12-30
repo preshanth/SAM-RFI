@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+
 from samrfi.config.config_loader import ConfigLoader, TrainingConfig
 
 

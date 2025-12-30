@@ -176,13 +176,19 @@ class SyntheticDataGenerator:
         print(f"  RFI power range: {rfi_power_min}-{rfi_power_max} Jy")
 
         # Compute dynamic range (handle both scalar and range values)
-        is_range = isinstance(noise_level, (list, tuple)) or isinstance(rfi_power_max, (list, tuple))
+        is_range = isinstance(noise_level, (list | tuple)) or isinstance(
+            rfi_power_max, (list | tuple)
+        )
         if is_range:
             # Ranges provided - show min/max dynamic range
-            noise_min = noise_level[0] if isinstance(noise_level, (list, tuple)) else noise_level
-            noise_max = noise_level[1] if isinstance(noise_level, (list, tuple)) else noise_level
-            rfi_min = rfi_power_min[0] if isinstance(rfi_power_min, (list, tuple)) else rfi_power_min
-            rfi_max = rfi_power_max[1] if isinstance(rfi_power_max, (list, tuple)) else rfi_power_max
+            noise_min = noise_level[0] if isinstance(noise_level, (list | tuple)) else noise_level
+            noise_max = noise_level[1] if isinstance(noise_level, (list | tuple)) else noise_level
+            rfi_min = (
+                rfi_power_min[0] if isinstance(rfi_power_min, (list | tuple)) else rfi_power_min
+            )
+            rfi_max = (
+                rfi_power_max[1] if isinstance(rfi_power_max, (list | tuple)) else rfi_power_max
+            )
             dr_min = rfi_min * 1000 / noise_max  # Weakest RFI / highest noise
             dr_max = rfi_max * 1000 / noise_min  # Strongest RFI / lowest noise
             print(f"  Dynamic range: {dr_min:.1e} to {dr_max:.1e} (randomized per sample)")
@@ -534,13 +540,13 @@ class SyntheticDataGenerator:
             rfi_params: dict of RFI parameters for this sample
         """
         # Sample noise level if range provided
-        if isinstance(noise_level, (list, tuple)):
+        if isinstance(noise_level, (list | tuple)):
             noise_level = np.random.uniform(noise_level[0], noise_level[1])
 
         # Sample RFI power ranges if provided
-        if isinstance(rfi_power_min, (list, tuple)):
+        if isinstance(rfi_power_min, (list | tuple)):
             rfi_power_min = np.random.uniform(rfi_power_min[0], rfi_power_min[1])
-        if isinstance(rfi_power_max, (list, tuple)):
+        if isinstance(rfi_power_max, (list | tuple)):
             rfi_power_max = np.random.uniform(rfi_power_max[0], rfi_power_max[1])
 
         # Create base spectrograph (clean Gaussian noise at mJy scale)
@@ -674,8 +680,10 @@ class SyntheticDataGenerator:
         signal = np.zeros((nc, nt))
         mask = np.zeros((nc, nt), dtype=bool)
 
+        # Ensure at least 1 channel is selected (bandwidth // 2 can be 0 for bandwidth=1)
         freq_slice = slice(
-            max(0, center_freq - bandwidth // 2), min(nc, center_freq + bandwidth // 2)
+            max(0, center_freq - bandwidth // 2),
+            min(nc, center_freq + (bandwidth // 2) + 1),
         )
         signal[freq_slice, :] = amp
         mask[freq_slice, :] = True

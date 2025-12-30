@@ -5,13 +5,13 @@ Tests that preprocessing config is correctly saved during training
 and validated during inference.
 """
 
+import numpy as np
 import pytest
 import torch
-import numpy as np
-from pathlib import Path
 import torch.nn as nn
+
 from samrfi.inference import RFIPredictor
-import logging
+
 
 # Module-level mock fixture - applies to ALL tests in this file
 @pytest.fixture(autouse=True)
@@ -62,8 +62,9 @@ class TestCheckpointMetadataSave:
         ]
 
         for field in required_fields:
-            assert field in checkpoint["preprocessing"], \
-                f"Preprocessing metadata missing field: {field}"
+            assert (
+                field in checkpoint["preprocessing"]
+            ), f"Preprocessing metadata missing field: {field}"
 
     def test_checkpoint_backward_compatible(self, mock_checkpoint):
         """Test that checkpoint maintains backward compatibility (patch_size at top level)."""
@@ -119,7 +120,7 @@ class TestCheckpointMetadataValidation:
     #     "Stretch function mismatch" in rec.message
     #     for rec in caplog.records
     #     ), f"Should log a warning about stretch mismatch. Got records: {[(r.levelname, r.message) for r in caplog.records]}"
-    
+
     def test_validation_succeeds_on_match(self, mock_checkpoint):
         """Test that matching parameters pass validation."""
 
@@ -191,7 +192,9 @@ class TestCheckpointMetadataInference:
         # Mock MSLoader to avoid needing real MS file
         class MockMSLoader:
             def __init__(self, *args):
-                self.data = np.random.randn(1, 4, 1024, 1024) + 1j * np.random.randn(1, 4, 1024, 1024)
+                self.data = np.random.randn(1, 4, 1024, 1024) + 1j * np.random.randn(
+                    1, 4, 1024, 1024
+                )
                 self.magnitude = np.abs(self.data)
 
             def load(self, *args, **kwargs):
@@ -222,7 +225,7 @@ class TestCheckpointMetadataDisplay:
     def test_checkpoint_info_displayed(self, mock_checkpoint, capsys):
         """Test that loading checkpoint prints preprocessing info."""
 
-        predictor = RFIPredictor(
+        _predictor = RFIPredictor(
             model_path=mock_checkpoint,
             sam_checkpoint="tiny",
             device="cpu",

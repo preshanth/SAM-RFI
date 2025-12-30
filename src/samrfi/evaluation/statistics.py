@@ -38,21 +38,21 @@ def compute_statistics(data, flags=None):
 
     if len(clean_data) == 0:
         return {
-            'mean': np.nan,
-            'median': np.nan,
-            'std': np.nan,
-            'mad': np.nan,
-            'count': 0,
-            'flagged_fraction': 1.0
+            "mean": np.nan,
+            "median": np.nan,
+            "std": np.nan,
+            "mad": np.nan,
+            "count": 0,
+            "flagged_fraction": 1.0,
         }
 
     return {
-        'mean': float(np.mean(clean_data)),
-        'median': float(np.median(clean_data)),
-        'std': float(np.std(clean_data)),
-        'mad': float(compute_mad(clean_data)),
-        'count': len(clean_data),
-        'flagged_fraction': float(flagged_fraction)
+        "mean": float(np.mean(clean_data)),
+        "median": float(np.median(clean_data)),
+        "std": float(np.std(clean_data)),
+        "mad": float(compute_mad(clean_data)),
+        "count": len(clean_data),
+        "flagged_fraction": float(flagged_fraction),
     }
 
 
@@ -74,31 +74,26 @@ def compute_ffi(data, flags):
     stats_after = compute_statistics(data, flags=flags)
 
     # Handle edge case: all flagged
-    if np.isnan(stats_after['mad']) or np.isnan(stats_after['std']):
-        return {
-            'ffi': 0.0,
-            'mad_reduction': 0.0,
-            'std_reduction': 0.0,
-            'flagged_fraction': 1.0
-        }
+    if np.isnan(stats_after["mad"]) or np.isnan(stats_after["std"]):
+        return {"ffi": 0.0, "mad_reduction": 0.0, "std_reduction": 0.0, "flagged_fraction": 1.0}
 
     # MAD reduction (should decrease if RFI removed)
-    mad_reduction = 1.0 - (stats_after['mad'] / stats_before['mad'])
+    mad_reduction = 1.0 - (stats_after["mad"] / stats_before["mad"])
 
     # STD reduction
-    std_reduction = 1.0 - (stats_after['std'] / stats_before['std'])
+    std_reduction = 1.0 - (stats_after["std"] / stats_before["std"])
 
     # FFI: Combined metric (weighted average)
     # Penalize over-flagging (flagged_fraction)
     # Reward noise reduction (mad_reduction, std_reduction)
-    flagged_penalty = stats_after['flagged_fraction']
+    flagged_penalty = stats_after["flagged_fraction"]
     ffi = (0.5 * mad_reduction + 0.5 * std_reduction) * (1.0 - 0.5 * flagged_penalty)
 
     return {
-        'ffi': float(ffi),
-        'mad_reduction': float(mad_reduction),
-        'std_reduction': float(std_reduction),
-        'flagged_fraction': float(flagged_penalty)
+        "ffi": float(ffi),
+        "mad_reduction": float(mad_reduction),
+        "std_reduction": float(std_reduction),
+        "flagged_fraction": float(flagged_penalty),
     }
 
 
@@ -145,22 +140,22 @@ def compute_calcquality(data, flags, reference_data=None):
     # Flagged statistics
     flag_stats = compute_statistics(data, flags=flags)
 
-    rmean = ref_stats['mean']
-    rstd = ref_stats['std']
-    fmean = flag_stats['mean']
-    fstd = flag_stats['std']
-    pflag = flag_stats['flagged_fraction'] * 100
+    rmean = ref_stats["mean"]
+    rstd = ref_stats["std"]
+    fmean = flag_stats["mean"]
+    fstd = flag_stats["std"]
+    pflag = flag_stats["flagged_fraction"] * 100
 
     # Edge case: all flagged or invalid
     if np.isnan(fmean) or np.isnan(fstd) or rstd < 1e-10:
         return {
-            'calcquality': np.inf,
-            'sensitivity': np.inf,
-            'mean_shift': np.inf,
-            'std_shift': np.inf,
-            'overflagging_penalty': np.inf,
-            'flagged_pct': float(pflag),
-            'components': {}
+            "calcquality": np.inf,
+            "sensitivity": np.inf,
+            "mean_shift": np.inf,
+            "std_shift": np.inf,
+            "overflagging_penalty": np.inf,
+            "flagged_pct": float(pflag),
+            "components": {},
         }
 
     # Max deviation
@@ -170,31 +165,31 @@ def compute_calcquality(data, flags, reference_data=None):
     sdiff = fstd - rstd
 
     # Four components
-    a = abs(abs(maxdev) - 3)      # Sensitivity
-    b = abs(fdiff) / rstd - 1     # Mean shift
-    c = abs(sdiff) / rstd         # Std shift
-    d = max(0, (pflag - 70) / 10) # Overflagging
+    a = abs(abs(maxdev) - 3)  # Sensitivity
+    b = abs(fdiff) / rstd - 1  # Mean shift
+    c = abs(sdiff) / rstd  # Std shift
+    d = max(0, (pflag - 70) / 10)  # Overflagging
 
     # Euclidean norm
     calcquality = np.sqrt(a**2 + b**2 + c**2 + d**2)
 
     return {
-        'calcquality': float(calcquality),
-        'sensitivity': float(a),
-        'mean_shift': float(b),
-        'std_shift': float(c),
-        'overflagging_penalty': float(d),
-        'flagged_pct': float(pflag),
-        'components': {
-            'rmean': float(rmean),
-            'rstd': float(rstd),
-            'fmean': float(fmean),
-            'fstd': float(fstd),
-            'rmax': float(rmax),
-            'maxdev': float(maxdev),
-            'fdiff': float(fdiff),
-            'sdiff': float(sdiff),
-        }
+        "calcquality": float(calcquality),
+        "sensitivity": float(a),
+        "mean_shift": float(b),
+        "std_shift": float(c),
+        "overflagging_penalty": float(d),
+        "flagged_pct": float(pflag),
+        "components": {
+            "rmean": float(rmean),
+            "rstd": float(rstd),
+            "fmean": float(fmean),
+            "fstd": float(fstd),
+            "rmax": float(rmax),
+            "maxdev": float(maxdev),
+            "fdiff": float(fdiff),
+            "sdiff": float(sdiff),
+        },
     }
 
 
@@ -210,11 +205,11 @@ def print_statistics_comparison(data, flags):
     stats_after = compute_statistics(data, flags=flags)
     ffi_metrics = compute_ffi(data, flags)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Statistics Comparison (Before/After Flagging)")
-    print("="*60)
+    print("=" * 60)
 
-    print(f"\nBefore Flagging:")
+    print("\nBefore Flagging:")
     print(f"  Mean:   {stats_before['mean']:.4e}")
     print(f"  Median: {stats_before['median']:.4e}")
     print(f"  Std:    {stats_before['std']:.4e}")
@@ -228,7 +223,7 @@ def print_statistics_comparison(data, flags):
     print(f"  MAD:    {stats_after['mad']:.4e}")
     print(f"  Count:  {stats_after['count']}")
 
-    print(f"\nFlagging Fidelity Index (FFI):")
+    print("\nFlagging Fidelity Index (FFI):")
     print(f"  FFI:            {ffi_metrics['ffi']:.4f}")
     print(f"  MAD Reduction:  {ffi_metrics['mad_reduction']:.4f}")
     print(f"  STD Reduction:  {ffi_metrics['std_reduction']:.4f}")

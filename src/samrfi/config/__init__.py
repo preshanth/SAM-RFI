@@ -2,10 +2,10 @@
 
 from .config_loader import ConfigLoader, TrainingConfig
 from .validators import (
+    validate_all,
+    validate_paths_exist,
     validate_preprocessing_config,
     validate_training_config,
-    validate_paths_exist,
-    validate_all,
 )
 
 __all__ = [

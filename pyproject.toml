@@ -139,6 +139,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+# Exclude scripts directory (contains manual testing scripts, not unit tests)
+norecursedirs = ["scripts", "deprecated", ".git", ".github", "*.egg"]
 
 [tool.black]
 line-length = 100
@@ -167,7 +169,7 @@ select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
     "F",   # pyflakes
-    "I",   # isort
+    # "I",   # isort - DISABLED: using standalone isort tool instead
     "B",   # flake8-bugbear
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade

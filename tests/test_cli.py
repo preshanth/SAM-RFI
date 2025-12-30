@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 import yaml
+
 from samrfi.config.config_loader import ConfigLoader
 
 

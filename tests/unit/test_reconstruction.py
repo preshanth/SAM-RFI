@@ -5,10 +5,9 @@ Tests the reconstruction of full flag arrays from predicted patches,
 including our critical num_rotations fix.
 """
 
-import pytest
-import numpy as np
-import torch
 from unittest.mock import MagicMock
+
+import numpy as np
 
 
 class TestReconstructionNumRotations:
@@ -214,15 +213,15 @@ class TestReconstructionMultipleBaselines:
         # 3 baselines, 4 pols, 256×256, 1 rotation
         # Expected patches: 3×4×1×1 = 12
         data_shape = (3, 4, 256, 256)
-        num_patches = 12
+        _num_patches = 12
 
         # Create distinct patterns for each baseline
         predicted_patches = []
         for baseline in range(3):
-            for pol in range(4):
+            for _pol in range(4):
                 patch = np.zeros((256, 256), dtype=bool)
                 # Unique pattern for each baseline
-                patch[baseline * 50:(baseline + 1) * 50, :] = True
+                patch[baseline * 50 : (baseline + 1) * 50, :] = True
                 predicted_patches.append(patch)
 
         flags = predictor._reconstruct_flags(
@@ -231,8 +230,9 @@ class TestReconstructionMultipleBaselines:
 
         # Verify each baseline has its unique pattern
         for baseline in range(3):
-            assert flags[baseline, 0, baseline * 50:(baseline + 1) * 50, :].any(), \
-                f"Baseline {baseline} pattern missing"
+            assert flags[
+                baseline, 0, baseline * 50 : (baseline + 1) * 50, :
+            ].any(), f"Baseline {baseline} pattern missing"
 
 
 class TestReconstructionEdgeCases:
@@ -250,7 +250,9 @@ class TestReconstructionEdgeCases:
 
         # Call without num_rotations parameter (should default to 1)
         flags = predictor._reconstruct_flags(
-            predicted_patches, data_shape, patch_size=256
+            predicted_patches,
+            data_shape,
+            patch_size=256,
             # Note: num_rotations omitted, should default to 1
         )
 

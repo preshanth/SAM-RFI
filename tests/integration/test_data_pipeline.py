@@ -4,7 +4,6 @@ Integration tests for data pipeline (end-to-end preprocessing).
 Tests the full pipeline: data → preprocessor → dataset → predictions.
 """
 
-import pytest
 import numpy as np
 import torch
 
@@ -75,8 +74,9 @@ class TestPreprocessingPipeline:
             "normalize_after_stretch": False,
         }
         for key, value in expected_metadata.items():
-            assert dataset.metadata[key] == value, \
-                f"Metadata mismatch: {key} = {dataset.metadata[key]}, expected {value}"
+            assert (
+                dataset.metadata[key] == value
+            ), f"Metadata mismatch: {key} = {dataset.metadata[key]}, expected {value}"
 
 
 class TestInferencePipelineIntegration:
@@ -98,15 +98,15 @@ class TestInferencePipelineIntegration:
         )
 
         # Verify metadata has correct value
-        assert dataset.metadata["augmentation_rotations"] == 2, \
-            "Augmentation rotations should be stored in metadata"
+        assert (
+            dataset.metadata["augmentation_rotations"] == 2
+        ), "Augmentation rotations should be stored in metadata"
 
         # This metadata should be used during reconstruction
         # (tested separately in unit tests)
 
     def test_end_to_end_inference_metadata(self, mock_torch_dataset, tmp_path):
         """Test that metadata is preserved end-to-end in inference."""
-        from samrfi.data import TorchDataset
 
         # Dataset has metadata
         assert hasattr(mock_torch_dataset, "metadata")
@@ -165,15 +165,16 @@ class TestPipelineRobustness:
         original_data = data.copy()
 
         preprocessor = Preprocessor(data, flags=None)
-        dataset = preprocessor.create_dataset(
+        _dataset = preprocessor.create_dataset(
             patch_size=256,
             enable_augmentation=False,
             inference_mode=True,
         )
 
         # Original data should be unchanged
-        np.testing.assert_array_equal(data, original_data,
-                                     err_msg="Preprocessing should not modify input data")
+        np.testing.assert_array_equal(
+            data, original_data, err_msg="Preprocessing should not modify input data"
+        )
 
 
 class TestAugmentationConsistency:
@@ -199,8 +200,9 @@ class TestAugmentationConsistency:
             expected_patches = 4 * num_rotations
 
             # Note: blank removal might reduce count, but with synthetic data should be minimal
-            assert len(dataset) >= expected_patches * 0.9, \
-                f"With {num_rotations} rotations, expected ~{expected_patches} patches, got {len(dataset)}"
+            assert (
+                len(dataset) >= expected_patches * 0.9
+            ), f"With {num_rotations} rotations, expected ~{expected_patches} patches, got {len(dataset)}"
 
     def test_inference_mode_disables_blank_removal(self, synthetic_waterfall_small):
         """Test that inference mode preserves all patches (no blank removal)."""
@@ -225,5 +227,6 @@ class TestAugmentationConsistency:
         )
 
         # Inference mode should have same or more patches (no removal)
-        assert len(dataset_infer) >= len(dataset_train), \
-            "Inference mode should preserve all patches"
+        assert len(dataset_infer) >= len(
+            dataset_train
+        ), "Inference mode should preserve all patches"

@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from datasets import Dataset
 from PIL import Image
+
+from datasets import Dataset
 
 
 @pytest.fixture
@@ -119,56 +120,6 @@ class TestSAM2TrainerCheckpoint:
                         pass  # Checkpoint name should be valid
             except ValueError:
                 pytest.fail(f"Valid checkpoint '{checkpoint}' was rejected")
-
-
-class TestSAM2TrainerSaveModel:
-    """Test model saving functionality"""
-
-    def test_save_model_creates_directory(self, real_dataset, temp_dir):
-        """Test that _save_model creates models directory"""
-        from unittest.mock import Mock
-
-        from samrfi.training.sam2_trainer import SAM2Trainer
-
-        trainer = SAM2Trainer(real_dataset, device="cpu", dir_path=temp_dir)
-
-        # Create mock model
-        mock_model = Mock()
-        mock_model.state_dict.return_value = {}
-
-        with patch("torch.save"):
-            trainer._save_model(mock_model, "tiny", 1)
-
-        models_dir = os.path.join(trainer.directory, "models")
-        assert os.path.exists(models_dir)
-
-    def test_save_model_filename_format(self, real_dataset, temp_dir):
-        """Test that saved model has correct filename format"""
-        from unittest.mock import Mock
-
-        from samrfi.training.sam2_trainer import SAM2Trainer
-
-        trainer = SAM2Trainer(real_dataset, device="cpu", dir_path=temp_dir)
-
-        mock_model = Mock()
-        mock_model.state_dict.return_value = {}
-
-        saved_path = None
-
-        def capture_save_path(state_dict, path):
-            nonlocal saved_path
-            saved_path = path
-
-        with patch("torch.save", side_effect=capture_save_path):
-            trainer._save_model(mock_model, "tiny", 5)
-
-        # Check filename components
-        filename = os.path.basename(saved_path)
-        assert "model_sam2-tiny" in filename
-        assert "stretch-SQRT" in filename
-        assert "sigma-5" in filename
-        assert "epochs5" in filename
-        assert ".pth" in filename
 
 
 class TestSAM2TrainerPlot:
