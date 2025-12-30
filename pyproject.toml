@@ -1,0 +1,205 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "samrfi"
+version = "2.0.0"
+description = "SAM2-based Radio Frequency Interference (RFI) detection and flagging for radio astronomy"
+readme = "README.md"
+authors = [
+    {name = "Derod Deal", email = "dealderod@gmail.com"},
+    {name = "Preshanth Jagannathan", email = "pjaganna@nrao.edu"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+
+# Core dependencies (CPU-only, minimal)
+dependencies = [
+    "numpy>=1.26.0",
+    "scipy>=1.10.0",
+    "pandas>=2.2.0",
+    "pillow>=9.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "matplotlib>=3.7.0",
+    "datasets>=2.10.0",
+    "patchify>=0.2.3",
+    "scikit-image>=0.20.0",
+]
+
+[project.optional-dependencies]
+# ============================================================================
+# Installation Options:
+# ============================================================================
+# Basic (CPU-only):           pip install samrfi
+# Mac GPU (Apple Silicon):    pip install samrfi[mps]  or  samrfi[gpu]
+# NVIDIA GPU:                 pip install samrfi[cuda]
+# With CASA tools:            pip install samrfi[gpu,casa]
+# Interactive visualization:  pip install samrfi[viz]
+# Development:                pip install samrfi[dev]
+# Everything:                 pip install samrfi[all]
+# ============================================================================
+
+# GPU-enabled PyTorch (supports both CUDA and MPS for Mac)
+# PyTorch 2.0+ includes native support for Apple Silicon (MPS backend)
+gpu = [
+    "torch>=2.0.0",  # MPS support requires PyTorch 2.0+
+    "torchvision>=0.15.0",  # Required for SAM2 image segmentation models
+    "transformers>=4.40.0",
+    "monai>=1.3.0",
+    "kornia",  # GPU-accelerated transforms
+    "psutil>=5.9.0",  # Memory monitoring
+]
+
+# CUDA-specific dependencies (NVIDIA GPUs only)
+cuda = [
+    "samrfi[gpu]",
+    "nvidia-ml-py3>=7.352.0",  # pynvml for NVIDIA GPU monitoring
+]
+
+# Mac GPU (Apple Silicon MPS) - same as gpu but explicit for Mac users
+mps = [
+    "samrfi[gpu]",
+]
+
+# CASA tools for MS handling (always needed)
+casa = [
+    "casatools>=6.5.0",
+    "casatasks>=6.5.0",
+]
+
+# Interactive visualization (HoloViz stack for large MS exploration)
+viz = [
+    "holoviews>=1.18.0",
+    "datashader>=0.16.0",
+    "bokeh>=3.3.0",
+    "panel>=1.3.0",  # Interactive widgets and dashboards
+    "colorcet>=3.0.0",  # Perceptually uniform colormaps
+]
+
+# CI dependencies (minimal for testing - CPU torch, no CUDA/monai/kornia, no CASA)
+ci = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "torch>=2.0.0",  # CPU-only for testing (pip installs CPU by default)
+    "transformers>=4.40.0",  # Required for inference/training tests
+]
+
+# Development dependencies (includes GPU + CASA + testing tools)
+dev = [
+    "samrfi[gpu,casa,viz]",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black==24.1.1",
+    "ruff==0.1.15",
+    "isort==5.13.2",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "ipython>=8.0.0",
+    "jupyter>=1.0.0",
+]
+
+# All dependencies (same as dev)
+all = [
+    "samrfi[dev]",
+]
+
+[project.scripts]
+samrfi = "samrfi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/preshanth/SAM-RFI"
+Documentation = "https://sam-rfi.readthedocs.io"
+Repository = "https://github.com/preshanth/SAM-RFI"
+"Bug Tracker" = "https://github.com/preshanth/SAM-RFI/issues"
+
+[tool.setuptools]
+packages = [
+    "samrfi",
+    "samrfi.utils",
+    "samrfi.data",
+    "samrfi.training",
+    "samrfi.config",
+    "samrfi.data_generation",
+    "samrfi.inference",
+    "samrfi.evaluation",
+    "samrfi.datasets",
+    "samrfi.visualization",
+]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+samrfi = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+# Exclude scripts directory (contains manual testing scripts, not unit tests)
+norecursedirs = ["scripts", "deprecated", ".git", ".github", "*.egg"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+known_first_party = ["samrfi"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    # "I",   # isort - DISABLED: using standalone isort tool instead
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused imports in __init__.py
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

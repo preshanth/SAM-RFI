@@ -1,0 +1,61 @@
+# H100 Training Config
+# GPU: 80GB VRAM | System RAM: 230GB | CPU: 20 cores | Disk: 400 GB
+#
+# Dataset sizes:
+# - Training: 4000 samples → 16000 patches (4x augmentation) → ~216 GB
+# - Validation: 1000 samples → 4000 patches (4x augmentation) → ~54 GB
+# - Total: ~270 GB (leaves 130 GB free for outputs/checkpoints)
+#
+# Memory strategy: Streaming multiprocessing
+# - Workers load batches on-demand (parallel disk I/O)
+# - Each worker caches 3 batches (~4 GB per worker)
+# - Total RAM: 12 workers × 4 GB = ~48 GB (leaving 182 GB free)
+
+data:
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_4000
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000
+  mask_type: exact_masks
+
+training:
+  device: cuda
+  num_epochs: 10
+  batch_size: 16          # H100 can handle up to 32-48 with proper data pipeline
+  learning_rate: 1.0e-5
+  model_checkpoint: large
+  output_dir: ./training_output
+
+  # Optimizer settings
+  optimizer: adamw
+  weight_decay: 0.01
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+
+  # Loss function
+  loss_function: dicece
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean
+
+  # Model architecture
+  multimask_output: false
+  freeze_vision_encoder: true
+  freeze_prompt_encoder: true
+
+  # Data augmentation
+  bbox_perturbation: 20
+
+  # DataLoader settings - Streaming multiprocessing
+  num_workers: 12           # Parallel batch loading (leaves 8 cores for system/generation)
+  prefetch_factor: 2        # Prefetch 2 batches per worker
+  persistent_workers: true  # Keep workers alive between epochs
+  pin_memory: true          # Faster GPU transfer
+
+  # Training optimization
+  log_interval: 50
+  cuda_cache_clear_interval: 50
+
+  # Output
+  plot: true
+  save_model: true

@@ -1,0 +1,37 @@
+# Test training data - 200 samples for local 1080ti testing
+
+synthetic:
+  num_samples: 200
+  num_channels: 1024
+  num_times: 1024
+
+  # Randomized physical scales for diversity
+  noise_mjy: [0.5, 2.0]
+  rfi_power_min: [100.0, 5000.0]
+  rfi_power_max: [2000.0, 50000.0]
+
+  # Randomized RFI counts
+  rfi_type_counts:
+    narrowband_persistent: [20, 40]
+    broadband_persistent: [3, 10]
+    frequency_sweep: [0, 3]
+    narrowband_bursty: [20, 40]
+    broadband_bursty: [3, 10]
+
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8
+  num_polarizations: 1
+  polarization_correlation: 0.0
+
+  generation_workers: 4
+  generation_batch_size: 50
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  patch_size: 1024
+  enable_augmentation: true
+  augmentation_rotations: 4
+  flag_sigma: 5
+  num_workers: 4

@@ -1,0 +1,942 @@
+"""
+Preprocessor - Convert waterfall data to training-ready patches
+
+Clean rewrite of RFIDataset preprocessing pipeline.
+"""
+
+from functools import partial
+from multiprocessing import Pool, cpu_count
+
+import numpy as np
+import torch
+from patchify import patchify
+from scipy import stats
+
+from samrfi.utils import logger
+
+from .torch_dataset import TorchDataset
+
+
+# Standalone functions for multiprocessing (must be picklable)
+def _patchify_single_waterfall(waterfall, patch_size):
+    """
+    Patchify a single waterfall into patches with automatic padding.
+
+    Args:
+        waterfall: 2D array (channels, times)
+        patch_size: Size of square patches
+
+    Returns:
+        Tuple: (patch_list, original_shape)
+    """
+    channels, times = waterfall.shape
+    original_shape = (channels, times)
+
+    # Quick check: skip padding if already compatible
+    if (
+        channels % patch_size == 0
+        and times % patch_size == 0
+        and channels >= patch_size
+        and times >= patch_size
+    ):
+        logger.debug(
+            f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed"
+        )
+        patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+        # Extract patches
+        patch_list = []
+        for i in range(patches.shape[0]):
+            for j in range(patches.shape[1]):
+                patch_list.append(patches[i, j])
+
+        return patch_list, original_shape
+
+    # Calculate padding needed
+    pad_channels = 0
+    pad_times = 0
+
+    if channels < patch_size:
+        pad_channels = patch_size - channels
+    elif channels % patch_size != 0:
+        pad_channels = patch_size - (channels % patch_size)
+
+    if times < patch_size:
+        pad_times = patch_size - times
+    elif times % patch_size != 0:
+        pad_times = patch_size - (times % patch_size)
+
+    # Apply padding if needed
+    if pad_channels > 0 or pad_times > 0:
+        logger.debug(
+            f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})"
+        )
+        waterfall = np.pad(
+            waterfall, ((0, pad_channels), (0, pad_times)), mode="constant", constant_values=0
+        )
+
+    patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+    # Extract patches
+    patch_list = []
+    for i in range(patches.shape[0]):
+        for j in range(patches.shape[1]):
+            patch_list.append(patches[i, j])
+
+    return patch_list, original_shape
+
+
+def _compute_mad_flag_single_patch(patch, sigma):
+    """
+    Compute MAD-based flag for a single patch.
+
+    Args:
+        patch: 2D array (patch_size, patch_size), can be complex
+        sigma: Threshold in units of MAD
+
+    Returns:
+        Boolean flag array
+    """
+    # Handle complex data by using magnitude
+    if np.iscomplexobj(patch):
+        patch = np.abs(patch)
+
+    mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
+    median = np.nanmedian(patch)
+
+    upper_thresh = median + (mad * sigma)
+    lower_thresh = median - (mad * sigma)
+
+    flag = (patch > upper_thresh) | (patch < lower_thresh)
+    return flag
+
+
+class Preprocessor:
+    """
+    Preprocess waterfall data into training patches.
+
+    Pipeline:
+        1. Four-way rotation augmentation
+        2. Patchify into fixed-size patches
+        3. Normalize before stretch (optional, configurable)
+        4. Apply stretch (optional: "SQRT", "LOG10", or None)
+        5. Normalize after stretch (optional, configurable)
+        6. Generate or use flags (flags never transformed, only patchified)
+        7. Remove blank patches
+        8. Shuffle patches
+        9. Create HuggingFace Dataset
+
+    Usage:
+        >>> # Real data: normalize, no stretch
+        >>> preprocessor = Preprocessor(data, flags=None)
+        >>> dataset = preprocessor.create_dataset(
+        ...     patch_size=128,
+        ...     normalize_before_stretch=True,
+        ...     stretch=None,
+        ...     normalize_after_stretch=False
+        ... )
+
+        >>> # Synthetic data: preserve physical scales
+        >>> preprocessor = Preprocessor(data, flags=exact_masks)
+        >>> dataset = preprocessor.create_dataset(
+        ...     patch_size=128,
+        ...     normalize_before_stretch=False,
+        ...     stretch=None,
+        ...     normalize_after_stretch=False,
+        ...     use_custom_flags=True
+        ... )
+    """
+
+    def __init__(self, data, flags=None):
+        """
+        Initialize preprocessor.
+
+        Args:
+            data: Waterfall data, shape (baselines, pols, channels, times) or (pols, channels, times)
+            flags: Optional flag array (same shape as data). If None, will generate using MAD.
+        """
+        # Handle both (baselines, pols, ch, time) and (pols, ch, time) shapes
+        if data.ndim == 4:
+            # Has baselines dimension
+            self.data = data
+        elif data.ndim == 3:
+            # Single baseline, add dimension
+            self.data = data[np.newaxis, ...]
+        else:
+            raise ValueError(f"Data must be 3D or 4D, got shape {data.shape}")
+
+        self.flags = flags
+        self.patches = None
+        self.patch_flags = None
+        self.dataset = None
+
+    def create_dataset(
+        self,
+        patch_size=128,
+        stretch=None,
+        flag_sigma=5,
+        use_custom_flags=True,
+        num_patches=None,
+        normalize_before_stretch=True,
+        normalize_after_stretch=False,
+        num_workers=4,
+        enable_augmentation=True,
+        augmentation_rotations=4,
+        inference_mode=False,
+    ):
+        """
+        Create TorchDataset from waterfall data.
+
+        Args:
+            patch_size: Size of square patches (default 128)
+            stretch: Stretch function - "SQRT", "LOG10", or None (default None)
+            flag_sigma: Sigma threshold for MAD flagging (if not using custom flags)
+            use_custom_flags: If True and flags provided, use them. Otherwise generate with MAD.
+            num_patches: Limit number of patches (default: all)
+            normalize_before_stretch: Divide by median before stretching (default True)
+            normalize_after_stretch: Divide by median after stretching (default False)
+            num_workers: Number of parallel workers for preprocessing (0 for sequential, -1 for all cores, default 4)
+            enable_augmentation: Enable rotation augmentation (default True)
+            augmentation_rotations: Number of rotations (1=none, 2=flip, 4=full, default 4)
+            inference_mode: If True, skip MAD flag generation and shuffling (for inference, default False)
+
+        Returns:
+            TorchDataset with torch tensor images (H, W, 3) and labels (H, W)
+        """
+        logger.info("\n[Preprocessor] Creating dataset...")
+        logger.info(f"  Input shape: {self.data.shape}")
+        logger.info(f"  Patch size: {patch_size}x{patch_size}")
+        logger.info(f"  Normalize before stretch: {normalize_before_stretch}")
+        logger.info(f"  Stretch: {stretch if stretch else 'None'}")
+        logger.info(f"  Normalize after stretch: {normalize_after_stretch}")
+        logger.info(f"  Parallel workers: {num_workers if num_workers else 'sequential'}")
+
+        # Step 1: Augmentation (rotation)
+        if enable_augmentation and augmentation_rotations > 1:
+            logger.info(f"  [1/7] Applying {augmentation_rotations}-way rotation augmentation...")
+            augmented_data = self._apply_rotations(self.data, augmentation_rotations)
+            logger.info(f"    Augmented to {len(augmented_data)} waterfalls")
+
+            if use_custom_flags and self.flags is not None:
+                augmented_flags = self._apply_rotations(self.flags, augmentation_rotations)
+            else:
+                augmented_flags = None
+        else:
+            logger.info("  [1/7] Skipping augmentation (disabled or rotations=1)")
+            # Flatten data without rotation
+            augmented_data = [pol for baseline in self.data for pol in baseline]
+            if use_custom_flags and self.flags is not None:
+                augmented_flags = [pol for baseline in self.flags for pol in baseline]
+            else:
+                augmented_flags = None
+            logger.info(f"    Using {len(augmented_data)} waterfalls (no augmentation)")
+
+        # Step 2: Patchify (or skip if patch_size >= image dimensions)
+        waterfall_shape = augmented_data[0].shape
+        if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
+            # Skip patching - use full waterfalls
+            logger.info(
+                f"  [2/7] Skipping patchification (patch_size={patch_size} >= image size {waterfall_shape})..."
+            )
+            self.patches = np.array(augmented_data)
+            if augmented_flags is not None:
+                augmented_flags = np.array(augmented_flags)
+            logger.info(f"    Using {len(self.patches)} full waterfalls")
+        else:
+            # Apply patching
+            logger.info(f"  [2/7] Patchifying into {patch_size}x{patch_size} patches...")
+            self.patches, original_shapes = self._create_patches(
+                augmented_data, patch_size, num_workers=num_workers
+            )
+            if augmented_flags is not None:
+                augmented_flags, _ = self._create_patches(
+                    augmented_flags, patch_size, num_workers=num_workers
+                )
+            logger.info(f"    Created {len(self.patches)} patches")
+            # Store original shapes for reconstruction
+            self.original_shapes = original_shapes
+
+        # Check if data is complex
+        is_complex = np.iscomplexobj(self.patches[0]) if len(self.patches) > 0 else False
+
+        if is_complex:
+            logger.info(
+                "  [3/7] Complex data detected - skipping normalization (will extract channels)"
+            )
+            logger.info("  [4/7] Skipping stretch (using gradient/log_amp/phase channels)")
+            logger.info("  [5/7] Skipping normalization (channels normalized independently)")
+        else:
+            # Step 3: Normalize before stretch (optional, real data only)
+            if normalize_before_stretch:
+                logger.info("  [3/7] Normalizing patches (before stretch)...")
+                self.patches = self._normalize(self.patches)
+            else:
+                logger.info("  [3/7] Skipping normalization before stretch")
+
+            # Step 4: Apply stretch (optional, real data only)
+            if stretch:
+                logger.info(f"  [4/7] Applying {stretch} stretch...")
+                self.patches = self._apply_stretch(self.patches, stretch)
+            else:
+                logger.info("  [4/7] Skipping stretch")
+
+            # Step 5: Normalize after stretch (optional, real data only)
+            if normalize_after_stretch:
+                logger.info("  [5/7] Normalizing patches (after stretch)...")
+                self.patches = self._normalize(self.patches)
+            else:
+                logger.info("  [5/7] Skipping normalization after stretch")
+
+        # Step 6: Generate or use flags
+        # IMPORTANT: Flags are NEVER transformed, only rotated/patchified to stay aligned
+        if inference_mode:
+            logger.info("  [6/7] Inference mode: creating dummy flags (not used)...")
+            # Create dummy flags - not used during inference
+            self.patch_flags = np.zeros(
+                (len(self.patches), self.patches[0].shape[0], self.patches[0].shape[1]),
+                dtype=np.uint8,
+            )
+        elif use_custom_flags and augmented_flags is not None:
+            logger.info("  [6/7] Using custom flags (respecting incoming flags)...")
+            # Flags already patchified (or converted to array) in Step 2
+            self.patch_flags = augmented_flags
+        else:
+            logger.info(
+                f"  [6/7] Generating MAD flags from processed patches (sigma={flag_sigma})..."
+            )
+            self.patch_flags = self._generate_mad_flags(
+                self.patches, flag_sigma, num_workers=num_workers
+            )
+
+        logger.info(f"    Flag patches: {self.patch_flags.shape}")
+
+        # Step 7: Remove blank patches (skip in inference mode to preserve order)
+        if not inference_mode:
+            logger.info("  [7/7] Removing blank patches...")
+            initial_count = len(self.patches)
+            self._remove_blank_patches()
+            removed = initial_count - len(self.patches)
+            logger.info(f"    Removed {removed} blank patches, {len(self.patches)} remain")
+        else:
+            logger.info("  [7/7] Inference mode: skipping blank patch removal (preserves order)")
+
+        # Step 8: Shuffle (skip in inference mode to preserve order)
+        if not inference_mode:
+            logger.info("  [8/8] Shuffling patches...")
+            self._shuffle()
+        else:
+            logger.info("  [8/8] Inference mode: skipping shuffle (preserves order)")
+
+        # Limit number of patches if requested
+        if num_patches and num_patches < len(self.patches):
+            self.patches = self.patches[:num_patches]
+            self.patch_flags = self.patch_flags[:num_patches]
+            logger.info(f"    Limited to {num_patches} patches")
+
+        # Create TorchDataset
+        logger.info("\n  Creating TorchDataset...")
+        logger.info("    Extracting 3-channel representations (gradient, log_amp, phase)...")
+
+        # Extract 3 channels from each patch (preserves dynamic range, no PIL!)
+        images_3ch = []
+        for patch in self.patches:
+            if np.iscomplexobj(patch):
+                # Complex data: extract gradient, log_amp, phase
+                img_3ch = self._extract_channels_from_complex(patch)
+            else:
+                # Real data: fallback to amplitude-based channels
+                img_3ch = self._extract_channels_from_real(patch)
+
+            # Convert to float32 and ensure proper range [0, 1]
+            img_3ch = img_3ch.astype(np.float32)
+            images_3ch.append(img_3ch)
+
+        # Convert lists to numpy arrays first
+        images_array = np.array(images_3ch, dtype=np.float32)
+
+        # Apply SAM2 ImageNet normalization (preprocess once, not during training)
+        logger.info("    Applying SAM2 ImageNet normalization...")
+        images_array = self._apply_sam2_normalization(images_array)
+
+        labels_array = np.array(self.patch_flags, dtype=np.uint8)
+
+        # Convert to torch tensors
+        logger.info("    Converting to torch tensors...")
+        images_tensor = torch.from_numpy(images_array).to(torch.float32)
+        labels_tensor = torch.from_numpy(labels_array).to(torch.uint8)
+
+        # Create metadata
+        metadata = {
+            "patch_size": patch_size,
+            "stretch": stretch,
+            "flag_sigma": flag_sigma,
+            "normalize_before_stretch": normalize_before_stretch,
+            "normalize_after_stretch": normalize_after_stretch,
+            "augmentation_rotations": augmentation_rotations,
+            "original_shapes": getattr(self, "original_shapes", None),
+        }
+
+        self.dataset = TorchDataset(images_tensor, labels_tensor, metadata)
+        logger.info(f"  ✓ Dataset ready: {len(self.dataset)} samples")
+        logger.info(
+            "    Image format: torch float32 (H, W, 3), channels=[gradient, log_amp, phase]"
+        )
+        logger.info(f"    {self.dataset}")
+
+        return self.dataset
+
+    def _apply_rotations(self, data, num_rotations):
+        """
+        Apply N-way rotation augmentation.
+
+        For each waterfall, apply rotations based on num_rotations:
+            - num_rotations=1: Original only (no augmentation)
+            - num_rotations=2: Original + vertical flip
+            - num_rotations=4: Original + flip + transpose + transpose+flip
+
+        Args:
+            data: Array of shape (baselines, pols, channels, times)
+            num_rotations: Number of rotations (1, 2, or 4)
+
+        Returns:
+            List of augmented waterfalls (each is 2D)
+        """
+        augmented = []
+
+        for baseline in data:
+            for pol in baseline:
+                # Original (always included)
+                augmented.append(pol)
+
+                if num_rotations >= 2:
+                    # Flip vertical
+                    augmented.append(np.flip(pol, axis=0))
+
+                if num_rotations >= 4:
+                    # Transpose
+                    augmented.append(pol.T)
+                    # Transpose + flip
+                    augmented.append(np.flip(pol.T, axis=0))
+
+        return augmented
+
+    def _four_rotations(self, data):
+        """
+        Apply 4-way rotation augmentation.
+
+        For each waterfall:
+            - Original
+            - Flip vertically
+            - Transpose
+            - Transpose + flip vertically
+
+        Args:
+            data: Array of shape (baselines, pols, channels, times)
+
+        Returns:
+            List of augmented waterfalls (each is 2D)
+        """
+        augmented = []
+
+        for baseline in data:
+            for pol in baseline:
+                # Original
+                augmented.append(pol)
+                # Flip vertical
+                augmented.append(np.flip(pol, axis=0))
+                # Transpose
+                augmented.append(pol.T)
+                # Transpose + flip
+                augmented.append(np.flip(pol.T, axis=0))
+
+        return augmented
+
+    def _create_patches(self, data_list, patch_size, num_workers=None):
+        """
+        Create patches from list of 2D arrays.
+
+        Args:
+            data_list: List of 2D arrays
+            patch_size: Size of square patches
+            num_workers: Number of parallel workers (None/0 for sequential, -1 for all cores)
+
+        Returns:
+            Tuple: (patches_array, original_shapes)
+        """
+        if num_workers and num_workers != 0:
+            # Parallel processing
+            n_workers = cpu_count() if num_workers == -1 else num_workers
+
+            with Pool(n_workers) as pool:
+                patch_func = partial(_patchify_single_waterfall, patch_size=patch_size)
+                results = pool.map(patch_func, data_list)
+
+            # Unpack results: each result is (patch_list, original_shape)
+            all_patches = []
+            original_shapes = []
+            for patch_list, orig_shape in results:
+                all_patches.extend(patch_list)
+                original_shapes.append(orig_shape)
+        else:
+            # Sequential processing
+            all_patches = []
+            original_shapes = []
+            for waterfall in data_list:
+                channels, times = waterfall.shape
+                original_shapes.append((channels, times))
+
+                # Quick check: skip padding if already compatible
+                if (
+                    channels % patch_size == 0
+                    and times % patch_size == 0
+                    and channels >= patch_size
+                    and times >= patch_size
+                ):
+                    logger.debug(
+                        f"    Shape {waterfall.shape} compatible with patch_size={patch_size}, no padding needed"
+                    )
+                else:
+                    # Apply padding
+                    pad_channels = 0
+                    pad_times = 0
+
+                    if channels < patch_size:
+                        pad_channels = patch_size - channels
+                    elif channels % patch_size != 0:
+                        pad_channels = patch_size - (channels % patch_size)
+
+                    if times < patch_size:
+                        pad_times = patch_size - times
+                    elif times % patch_size != 0:
+                        pad_times = patch_size - (times % patch_size)
+
+                    if pad_channels > 0 or pad_times > 0:
+                        logger.debug(
+                            f"    Padding waterfall: ({channels}, {times}) → ({channels + pad_channels}, {times + pad_times})"
+                        )
+                        waterfall = np.pad(
+                            waterfall,
+                            ((0, pad_channels), (0, pad_times)),
+                            mode="constant",
+                            constant_values=0,
+                        )
+
+                # Patchify this waterfall
+                patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+
+                # Extract patches
+                for i in range(patches.shape[0]):
+                    for j in range(patches.shape[1]):
+                        all_patches.append(patches[i, j])
+
+        return np.array(all_patches), original_shapes
+
+    def _extract_channels_from_complex(self, complex_data):
+        """
+        Extract 3 channels (gradient, log_amp, phase) from complex visibility data.
+        This makes RFI edges pop for SAM2.
+
+        Args:
+            complex_data: Complex array (H, W)
+
+        Returns:
+            3-channel array (H, W, 3) with [gradient, log_amp, phase]
+        """
+        # Extract amplitude (log scale)
+        amplitude = np.abs(complex_data)
+        log_amp = np.log10(amplitude + 1e-10)
+
+        # Extract phase [-π, π]
+        phase = np.angle(complex_data)
+
+        # Compute spatial gradient magnitude from log amplitude
+        time_deriv = np.zeros_like(log_amp)
+        freq_deriv = np.zeros_like(log_amp)
+
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)  # Time derivative
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)  # Frequency derivative
+
+        gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
+
+        # Normalize channels
+        # Log amplitude: fixed physical scale (preserves absolute intensity across patches)
+        LOG_MIN = -3.0  # log10(1 mJy noise)
+        LOG_MAX = 4.0  # log10(10,000 Jy max RFI)
+        log_amp_norm = np.clip((log_amp - LOG_MIN) / (LOG_MAX - LOG_MIN), 0, 1)
+
+        # Gradient: per-patch normalization (relative feature)
+        def normalize_channel(data):
+            data_min, data_max = np.nanmin(data), np.nanmax(data)
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+
+        gradient_norm = normalize_channel(gradient)
+        phase_norm = (phase + np.pi) / (2 * np.pi)  # Phase already bounded, map to [0,1]
+
+        # Stack as (H, W, 3) - [gradient, log_amp, phase]
+        return np.stack([gradient_norm, log_amp_norm, phase_norm], axis=-1)
+
+    def _extract_channels_from_real(self, real_data):
+        """
+        Extract 3 channels from real-valued data (fallback for non-complex data).
+        Uses amplitude-based approximations.
+
+        Args:
+            real_data: Real array (H, W)
+
+        Returns:
+            3-channel array (H, W, 3) with [gradient, log_amp, zeros]
+        """
+        # Use absolute value as amplitude proxy
+        amplitude = np.abs(real_data)
+        log_amp = np.log10(amplitude + 1e-10)
+
+        # Compute spatial gradient
+        time_deriv = np.zeros_like(log_amp)
+        freq_deriv = np.zeros_like(log_amp)
+
+        time_deriv[1:, :] = np.diff(log_amp, axis=0)
+        freq_deriv[:, 1:] = np.diff(log_amp, axis=1)
+
+        gradient = np.sqrt(time_deriv**2 + freq_deriv**2)
+
+        # Normalize
+        def normalize_channel(data):
+            data_min, data_max = np.nanmin(data), np.nanmax(data)
+            if data_max > data_min:
+                return (data - data_min) / (data_max - data_min)
+            return np.zeros_like(data)
+
+        gradient_norm = normalize_channel(gradient)
+        log_amp_norm = normalize_channel(log_amp)
+        phase_zeros = np.zeros_like(log_amp)  # No phase info for real data
+
+        # Stack as (H, W, 3) - [gradient, log_amp, zero_phase]
+        return np.stack([gradient_norm, log_amp_norm, phase_zeros], axis=-1)
+
+    def _normalize(self, patches):
+        """
+        Normalize patches by dividing by median.
+
+        Args:
+            patches: Array of patches
+
+        Returns:
+            Normalized patches
+        """
+        normalized = []
+
+        for patch in patches:
+            # Handle complex data (take magnitude before normalization)
+            if np.iscomplexobj(patch):
+                patch = np.abs(patch)
+
+            median = np.nanmedian(patch)
+            if median > 0:
+                normalized_patch = patch / median
+            else:
+                normalized_patch = patch
+            normalized.append(normalized_patch)
+
+        return np.array(normalized)
+
+    def _apply_stretch(self, patches, stretch):
+        """
+        Apply stretch function to patches.
+
+        Args:
+            patches: Array of patches
+            stretch: 'SQRT' or 'LOG10'
+
+        Returns:
+            Stretched patches
+        """
+        if stretch == "SQRT":
+            stretch_func = np.sqrt
+        elif stretch == "LOG10":
+            stretch_func = np.log10
+        else:
+            raise ValueError(f"Invalid stretch '{stretch}'. Use 'SQRT' or 'LOG10'")
+
+        stretched = []
+
+        for patch in patches:
+            # Apply stretch to absolute values
+            stretched_patch = stretch_func(np.abs(patch))
+
+            # Handle infinities
+            finite_data = stretched_patch[np.isfinite(stretched_patch)]
+            if len(finite_data) > 0:
+                mad = stats.median_abs_deviation(finite_data, nan_policy="omit")
+                stretched_patch[np.isinf(stretched_patch)] = mad
+            else:
+                stretched_patch[np.isinf(stretched_patch)] = 0
+
+            stretched.append(stretched_patch)
+
+        return np.array(stretched)
+
+    def _generate_mad_flags(self, patches, sigma, num_workers=None):
+        """
+        Generate flags using MAD (Median Absolute Deviation).
+
+        Args:
+            patches: Array of patches
+            sigma: Threshold in units of MAD
+            num_workers: Number of parallel workers (None/0 for sequential, -1 for all cores)
+
+        Returns:
+            Boolean flag array
+        """
+        if num_workers and num_workers != 0:
+            # Parallel processing
+            n_workers = cpu_count() if num_workers == -1 else num_workers
+
+            with Pool(n_workers) as pool:
+                flag_func = partial(_compute_mad_flag_single_patch, sigma=sigma)
+                flags = pool.map(flag_func, patches)
+        else:
+            # Sequential processing (original code)
+            flags = []
+
+            for patch in patches:
+                mad = stats.median_abs_deviation(patch, axis=None, nan_policy="omit")
+                median = np.nanmedian(patch)
+
+                upper_thresh = median + (mad * sigma)
+                lower_thresh = median - (mad * sigma)
+
+                flag = (patch > upper_thresh) | (patch < lower_thresh)
+                flags.append(flag)
+
+        return np.array(flags, dtype=bool)
+
+    def _remove_blank_patches(self):
+        """Remove patches where flag mask is entirely False."""
+        # Find patches with at least one flag
+        has_flags = np.array([flags.any() for flags in self.patch_flags])
+
+        # Filter
+        self.patches = self.patches[has_flags]
+        self.patch_flags = self.patch_flags[has_flags]
+
+    def _shuffle(self):
+        """Shuffle patches and flags in unison."""
+        indices = np.random.permutation(len(self.patches))
+
+        self.patches = self.patches[indices]
+        self.patch_flags = self.patch_flags[indices]
+
+    def _apply_sam2_normalization(self, images):
+        """
+        Apply SAM2 ImageNet normalization: (pixel - mean) / std
+
+        SAM2 uses ImageNet stats per channel:
+        - mean = [0.485, 0.456, 0.406]
+        - std = [0.229, 0.224, 0.225]
+
+        Args:
+            images: numpy array (N, H, W, 3) in range [0, 1]
+
+        Returns:
+            Normalized images (N, H, W, 3)
+        """
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+        # Apply: (image - mean) / std
+        return (images - mean) / std
+
+
+class GPUPreprocessor:
+    """
+    GPU-optimized preprocessor that stores RAW complex patches.
+
+    Unlike the standard Preprocessor which pre-generates all transforms on CPU,
+    this preprocessor does MINIMAL CPU work and returns raw complex patches.
+    All transforms are then applied on GPU during training (via GPUTransformDataset).
+
+    Key differences from Preprocessor:
+    - NO channel extraction (done on GPU)
+    - NO ImageNet normalization (done on GPU)
+    - NO pre-generated augmentations (done on-the-fly with Kornia)
+    - Stores complex data (30% smaller than 3-channel RGB)
+    - 4x less storage (no augmentation copies)
+
+    Usage:
+        >>> # Create GPU preprocessor
+        >>> preprocessor = GPUPreprocessor(complex_data, masks)
+        >>> raw_patches, raw_masks = preprocessor.create_raw_patches(
+        ...     patch_size=256,
+        ...     remove_blank=True
+        ... )
+        >>>
+        >>> # Use with GPUTransformDataset
+        >>> from samrfi.data.gpu_dataset import GPUTransformDataset
+        >>> dataset = GPUTransformDataset(
+        ...     complex_patches=raw_patches,
+        ...     masks=raw_masks,
+        ...     device='cuda'
+        ... )
+    """
+
+    def __init__(self, data, flags=None):
+        """
+        Initialize GPU preprocessor.
+
+        Args:
+            data: Complex waterfall data, shape (baselines, pols, channels, times)
+                  or (pols, channels, times). MUST be complex dtype.
+            flags: Optional flag array (same shape as data)
+        """
+        # Handle both (baselines, pols, ch, time) and (pols, ch, time) shapes
+        if data.ndim == 4:
+            self.data = data
+        elif data.ndim == 3:
+            self.data = data[np.newaxis, ...]
+        else:
+            raise ValueError(f"Data must be 3D or 4D, got shape {data.shape}")
+
+        # Verify complex dtype
+        if not np.iscomplexobj(data):
+            raise ValueError(
+                "GPUPreprocessor requires complex data. "
+                "Use standard Preprocessor for real-valued data."
+            )
+
+        self.flags = flags
+        self.raw_patches = None
+        self.raw_masks = None
+
+    def create_raw_patches(
+        self,
+        patch_size=256,
+        remove_blank=True,
+        num_patches=None,
+        num_workers=4,
+    ):
+        """
+        Create raw complex patches (no transforms applied).
+
+        Minimal CPU preprocessing - just patchification and blank removal.
+        All other transforms will be done on GPU during training.
+
+        Args:
+            patch_size: Size of square patches (default 256)
+            remove_blank: Remove patches with no RFI (default True)
+            num_patches: Limit number of patches (default: all)
+            num_workers: Parallel workers for patchification (default 4)
+
+        Returns:
+            Tuple of (complex_patches, masks)
+            - complex_patches: List of complex numpy arrays (H, W)
+            - masks: List of binary mask arrays (H, W)
+        """
+        logger.info("\n[GPUPreprocessor] Creating raw patches (minimal CPU work)...")
+        logger.info(f"  Input shape: {self.data.shape}")
+        logger.info(f"  Patch size: {patch_size}x{patch_size}")
+        logger.info(f"  Data type: {self.data.dtype}")
+
+        # Flatten data (no augmentation - done on GPU later)
+        logger.info("  [1/3] Flattening waterfalls (no augmentation)...")
+        flattened_data = [pol for baseline in self.data for pol in baseline]
+        logger.info(f"    Using {len(flattened_data)} waterfalls")
+
+        if self.flags is not None:
+            flattened_flags = [pol for baseline in self.flags for pol in baseline]
+        else:
+            # Generate simple flags (any non-zero value)
+            flattened_flags = [np.abs(w) > 0 for w in flattened_data]
+
+        # Patchify (or use full waterfalls)
+        waterfall_shape = flattened_data[0].shape
+        if waterfall_shape[0] <= patch_size and waterfall_shape[1] <= patch_size:
+            logger.info("  [2/3] Using full waterfalls (patch_size >= image size)...")
+            self.raw_patches = flattened_data
+            self.raw_masks = flattened_flags
+            logger.info(f"    Using {len(self.raw_patches)} full waterfalls")
+        else:
+            logger.info(f"  [2/3] Patchifying into {patch_size}x{patch_size} patches...")
+            self.raw_patches, original_shapes = self._create_patches(
+                flattened_data, patch_size, num_workers=num_workers
+            )
+            self.raw_masks, _ = self._create_patches(
+                flattened_flags, patch_size, num_workers=num_workers
+            )
+            logger.info(f"    Created {len(self.raw_patches)} patches")
+            self.original_shapes = original_shapes
+
+        # Remove blank patches (optional)
+        if remove_blank:
+            logger.info("  [3/3] Removing blank patches...")
+            initial_count = len(self.raw_patches)
+            has_rfi = [mask.any() for mask in self.raw_masks]
+            self.raw_patches = [
+                p for p, keep in zip(self.raw_patches, has_rfi, strict=False) if keep
+            ]
+            self.raw_masks = [m for m, keep in zip(self.raw_masks, has_rfi, strict=False) if keep]
+            removed = initial_count - len(self.raw_patches)
+            logger.info(f"    Removed {removed} blank patches, kept {len(self.raw_patches)}")
+        else:
+            logger.info("  [3/3] Keeping all patches (blank removal disabled)")
+
+        # Limit patches if requested
+        if num_patches and num_patches < len(self.raw_patches):
+            logger.info(f"  Limiting to {num_patches} patches...")
+            indices = np.random.choice(len(self.raw_patches), num_patches, replace=False)
+            self.raw_patches = [self.raw_patches[i] for i in indices]
+            self.raw_masks = [self.raw_masks[i] for i in indices]
+
+        # Shuffle
+        logger.info("  Shuffling patches...")
+        indices = np.random.permutation(len(self.raw_patches))
+        self.raw_patches = [self.raw_patches[i] for i in indices]
+        self.raw_masks = [self.raw_masks[i] for i in indices]
+
+        logger.info(f"\n[GPUPreprocessor] Done! Created {len(self.raw_patches)} raw patches")
+        logger.info(f"  Patch dtype: {self.raw_patches[0].dtype}")
+        logger.info(f"  Patch shape: {self.raw_patches[0].shape}")
+        logger.info(f"  Storage: {self._estimate_storage_mb():.1f} MB (complex)")
+        logger.info(
+            f"  vs CPU pipeline: ~{self._estimate_storage_mb() * 4:.1f} MB (4x augmentation + RGB)"
+        )
+        logger.info(f"  Storage savings: ~{(1 - 1/4) * 100:.0f}%")
+
+        return self.raw_patches, self.raw_masks
+
+    def _create_patches(self, waterfalls, patch_size, num_workers=4):
+        """
+        Patchify waterfalls in parallel.
+
+        Args:
+            waterfalls: List of 2D arrays
+            patch_size: Size of square patches
+            num_workers: Number of parallel workers
+
+        Returns:
+            List of patches
+        """
+        if num_workers and num_workers > 0:
+            n_workers = min(num_workers, cpu_count())
+            with Pool(n_workers) as pool:
+                patch_func = partial(_patchify_single_waterfall, patch_size=patch_size)
+                patch_lists = pool.map(patch_func, waterfalls)
+            all_patches = [p for sublist in patch_lists for p in sublist]
+        else:
+            all_patches = []
+            for waterfall in waterfalls:
+                patches = patchify(waterfall, (patch_size, patch_size), step=patch_size)
+                for i in range(patches.shape[0]):
+                    for j in range(patches.shape[1]):
+                        all_patches.append(patches[i, j])
+
+        return all_patches
+
+    def _estimate_storage_mb(self):
+        """Estimate storage size in MB."""
+        if not self.raw_patches:
+            return 0
+        bytes_per_patch = self.raw_patches[0].nbytes
+        total_bytes = bytes_per_patch * len(self.raw_patches)
+        return total_bytes / (1024 * 1024)

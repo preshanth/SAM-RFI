@@ -1,0 +1,51 @@
+# Validation Configuration for SAM-RFI
+# For running model validation against synthetic data
+
+synthetic:
+  num_channels: 1024
+  num_times: 1024
+  num_polarizations: 1
+  noise_mjy: 1.0
+  rfi_power_min: 1000.0
+  rfi_power_max: 10000.0
+  polarization_correlation: 0.8
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 0
+
+  # RFI type counts (how many instances of each type to generate)
+  rfi_type_counts:
+    broadband_persistent: 4      # ~20% coverage
+    narrowband_persistent: 10    # ~2.5% coverage
+    narrowband_bursty: 15        # ~15% coverage
+    broadband_bursty: 1          # ~2% coverage
+    narrowband_intermittent: 1   # ~1% coverage
+    # Total: ~40% coverage
+
+processing:
+  patch_size: 1024
+
+  # NO augmentation for validation
+  enable_augmentation: false
+  augmentation_rotations: 1
+
+  # NO normalization for synthetic data (preserves physical scales)
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+
+  # NO stretch for synthetic data
+  stretch: null
+
+  # Flag generation (not used during validation but kept for compatibility)
+  flag_sigma: 5
+  use_custom_flags: false
+
+validation:
+  # Number of baselines to validate (use 'all' or a number)
+  num_baselines: all
+
+  # Output directory
+  output_dir: ./validation_results
+
+  # SAM model variant to use (tiny/small/base_plus/large)
+  # MUST match the model architecture used during training
+  sam_checkpoint: large

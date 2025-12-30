@@ -1,0 +1,57 @@
+# A100 Training Config
+# GPU: 80GB VRAM | System RAM: Assume 256GB | CPU: Assume 32 cores
+#
+# Memory calculations (per batch file: 1.36GB for 100 samples):
+# - Data cache: 180GB for training data
+# - ~132 batches cached (82% of typical 10k dataset using train_4000, or 33% of 10k)
+
+data:
+  train_generation_config: configs/synthetic_train_4k.yaml
+  train_dataset: ./datasets/train_10000
+  val_generation_config: configs/synthetic_val_1k.yaml
+  val_dataset: ./datasets/val_1000
+  mask_type: exact_masks
+
+training:
+  device: cuda
+  num_epochs: 10
+  batch_size: 24          # Large batch for 80GB VRAM
+  learning_rate: 1.5e-5
+  model_checkpoint: large
+  output_dir: ./training_output
+
+  # Optimizer settings
+  optimizer: adamw
+  weight_decay: 0.01
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+
+  # Loss function
+  loss_function: dicece
+  loss_sigmoid: true
+  loss_squared_pred: true
+  loss_reduction: mean
+
+  # Model architecture
+  multimask_output: false
+  freeze_vision_encoder: true
+  freeze_prompt_encoder: true
+
+  # Data augmentation
+  bbox_perturbation: 20
+
+  # DataLoader settings - Optimized for A100
+  num_workers: 16
+  data_cache_ram_gb: 180   # 180GB for training data cache
+  val_data_cache_ram_gb: 30  # 30GB for validation
+  prefetch_factor: 3
+  persistent_workers: true
+  pin_memory: true
+
+  # Training optimization
+  log_interval: 50
+  cuda_cache_clear_interval: 50
+
+  # Output
+  plot: true
+  save_model: true

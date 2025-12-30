@@ -1,0 +1,65 @@
+# Synthetic validation data generation - 1000 samples
+# Physically realistic RFI with exact ground truth masks
+
+synthetic:
+  num_samples: 1000
+  num_channels: 1024  # Square shape for SAM2 native resolution
+  num_times: 1024     # Square shape for SAM2 native resolution
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0                 # 1 mJy noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI min
+  rfi_power_max: 10000.0         # 10000 Jy RFI max
+
+  # RFI types per sample (total ~46 RFI events per waterfall, targeting ~20% pixel coverage)
+  rfi_type_counts:
+    narrowband_persistent: 20    # GPS, satellites (persistent lines)
+    broadband_persistent: 5      # Power lines (persistent broadband)
+    frequency_sweep: 1           # Radar (linear/quadratic chirp sweep)
+    narrowband_bursty: 20        # Random pulsed transmitters (intermittent)
+    broadband_bursty: 5          # Lightning, transients (short broadband bursts)
+
+  # Bandpass effects
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8   # 8th order polynomial edge rolloff
+  polarization_correlation: 0.8  # Correlated RFI in XX/YY
+
+  # Parallel generation
+  generation_workers: 16  # Number of parallel workers (use 16 of 20 cores, leave 4 for system)
+  generation_batch_size: 100  # Raw samples per batch (100 samples → 400 patches after 4x augmentation = ~10 GB peak)
+
+processing:
+  # Normalization: Divide by median to make patches comparable
+  # - Real data: Recommended (accounts for baseline length, system temperature)
+  # - Synthetic data: NOT recommended (destroys physical scales)
+  # - Options: true, false
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+
+  # Stretching: Compress dynamic range (makes RFI look like "objects" for SAM)
+  # - Options: "SQRT" (square root), "LOG10" (logarithmic), null (disabled)
+  # - Real data: May not be needed if normalization handles dynamic range
+  # - Synthetic data: NOT recommended (preserve physical 1 mJy noise, 1000-10000 Jy RFI scales)
+  stretch: null
+
+  # MAD flagging parameters (only used when no exact masks provided)
+  flag_sigma: 5
+
+  # Patch size for training
+  # - Set to image size (1024) to disable patching (use full waterfall)
+  # - Set smaller (e.g., 128, 256, 512) to subdivide into patches
+  patch_size: 1024
+
+  # Parallelization: Number of worker processes for preprocessing
+  # - Speeds up patchification and MAD flag generation
+  # - Options:
+  #   - positive integer: number of worker processes to use
+  #   - 0 or null: sequential processing (useful for debugging)
+  #   - -1: use all available CPU cores
+  # - Default: 4 (modest, safe for most systems)
+  # - Recommended: Set to (total_cores - 2) to leave headroom for system
+  num_workers: 4
+
+  # Data augmentation
+  enable_augmentation: true   # Enable rotation augmentation
+  augmentation_rotations: 4   # Number of rotations (1=none, 2=flip, 4=full)

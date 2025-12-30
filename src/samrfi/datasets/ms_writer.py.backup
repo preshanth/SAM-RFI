@@ -1,0 +1,745 @@
+"""
+CASA Measurement Set Writer
+
+Creates proper CASA-compatible measurement sets from synthetic data.
+Compatible with aoflagger, CASA flaggers (tfcrop, rflag), and other tools.
+"""
+
+import numpy as np
+from typing import Dict, List, Tuple, Optional
+from pathlib import Path
+import logging
+from datetime import datetime, timedelta
+import shutil
+
+try:
+    import casacore.tables as pt
+    from casacore.measures import measures
+    from casacore.quanta import quantity
+
+    CASACORE_AVAILABLE = True
+except ImportError as e:
+    CASACORE_AVAILABLE = False
+    logging.warning(f"python-casacore not available: {e}")
+
+from .synthetic_ms import ObservationConfig, SyntheticVisibilityGenerator
+
+logger = logging.getLogger(__name__)
+
+
+class MSWriter:
+    """
+    Write synthetic data to proper CASA measurement set format
+    """
+
+    def __init__(self, obs_config: ObservationConfig):
+        if not CASACORE_AVAILABLE:
+            raise ImportError("python-casacore required for MS writing")
+
+        self.obs_config = obs_config
+
+    def create_measurement_set(
+        self,
+        ms_path: str,
+        visibilities: np.ndarray,
+        rfi_mask: Optional[np.ndarray] = None,
+        include_rfi_flags: bool = True,
+    ) -> None:
+        """
+        Create complete measurement set with all required tables
+
+        Args:
+            ms_path: Output measurement set path
+            visibilities: Visibility data [baseline, time, freq, pol]
+            rfi_mask: Optional RFI mask for ground truth flags
+            include_rfi_flags: Whether to include RFI flags in FLAG column
+        """
+        ms_path = Path(ms_path)
+
+        # Remove existing MS
+        if ms_path.exists():
+            logger.warning(f"Removing existing MS: {ms_path}")
+            shutil.rmtree(ms_path)
+
+        logger.info(f"Creating measurement set: {ms_path}")
+
+        # Create main table structure
+        self._create_main_table(ms_path, visibilities, rfi_mask, include_rfi_flags)
+
+        # Create all required subtables
+        self._create_antenna_table(ms_path)
+        self._create_spectral_window_table(ms_path)
+        self._create_polarization_table(ms_path)
+        self._create_field_table(ms_path)
+        self._create_observation_table(ms_path)
+        self._create_data_description_table(ms_path)
+        self._create_feed_table(ms_path)
+        self._create_source_table(ms_path)
+
+        # Set table keywords and references
+        self._set_table_keywords(ms_path)
+
+        logger.info(f"Measurement set created successfully: {ms_path}")
+
+        # Validate the MS
+        self._validate_measurement_set(ms_path)
+
+    def _create_main_table(
+        self,
+        ms_path: Path,
+        visibilities: np.ndarray,
+        rfi_mask: Optional[np.ndarray],
+        include_rfi_flags: bool,
+    ) -> None:
+        """Create main measurement set table with visibility data"""
+
+        num_baselines, num_times, num_channels, num_pols = visibilities.shape
+        total_rows = num_baselines * num_times
+
+        # Use casacore's built-in MS creation instead of manual table description
+        from casacore.tables import default_ms
+
+        # Create a default MS structure
+        default_ms(str(ms_path))
+
+        # Open the created MS for writing
+        main_table = pt.table(str(ms_path), readonly=False)
+
+        # Add the required number of rows to the MS
+        main_table.addrows(total_rows)
+
+        # Generate time grid
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [3],
+                "option": 0,
+            },
+            "DATA": {
+                "valueType": "complex",
+                "dataManagerType": "StandardStMan",
+                "shape": [num_pols, num_channels],
+                "option": 0,
+            },
+            "FLAG": {
+                "valueType": "boolean",
+                "dataManagerType": "StandardStMan",
+                "shape": [num_pols, num_channels],
+                "option": 0,
+            },
+            "FLAG_ROW": {
+                "valueType": "boolean",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "WEIGHT": {
+                "valueType": "float",
+                "dataManagerType": "StandardStMan",
+                "shape": [num_pols],
+                "option": 0,
+            },
+            "SIGMA": {
+                "valueType": "float",
+                "dataManagerType": "StandardStMan",
+                "shape": [num_pols],
+                "option": 0,
+            },
+            "ANTENNA1": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "ANTENNA2": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME_CENTROID": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "INTERVAL": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "EXPOSURE": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "DATA_DESC_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "FIELD_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "SCAN_NUMBER": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "ARRAY_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "OBSERVATION_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "STATE_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "PROCESSOR_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+        }
+
+        # Create main table
+        main_table = pt.table(str(ms_path), table_desc, nrow=total_rows)
+
+        # Generate time grid
+        start_time = datetime.fromisoformat(
+            self.obs_config.start_time.replace("T", " ")
+        )
+        times = []
+        for i in range(num_times):
+            time = start_time + timedelta(seconds=i * self.obs_config.integration_time)
+            mjd_seconds = (time - datetime(1858, 11, 17)).total_seconds()
+            times.append(mjd_seconds)
+        times = np.array(times)
+
+        # Fill main table data
+        row = 0
+        baseline_idx = 0
+
+        for ant1 in range(self.obs_config.num_antennas):
+            for ant2 in range(ant1 + 1, self.obs_config.num_antennas):
+                for time_idx in range(num_times):
+                    # Basic row data
+                    main_table.putcell("ANTENNA1", row, ant1)
+                    main_table.putcell("ANTENNA2", row, ant2)
+                    main_table.putcell("TIME", row, times[time_idx])
+                    main_table.putcell("TIME_CENTROID", row, times[time_idx])
+                    main_table.putcell(
+                        "INTERVAL", row, self.obs_config.integration_time
+                    )
+                    main_table.putcell(
+                        "EXPOSURE", row, self.obs_config.integration_time
+                    )
+                    main_table.putcell("DATA_DESC_ID", row, 0)  # Single SPW for now
+                    main_table.putcell("FIELD_ID", row, 0)
+                    main_table.putcell("SCAN_NUMBER", row, 1)
+                    main_table.putcell("ARRAY_ID", row, 0)
+                    main_table.putcell("OBSERVATION_ID", row, 0)
+                    main_table.putcell("STATE_ID", row, 0)
+                    main_table.putcell("PROCESSOR_ID", row, 0)
+
+                    # UVW coordinates (simplified)
+                    # In real implementation, this would be computed properly
+                    uvw = [100.0 * (ant2 - ant1), 0.0, 0.0]
+                    main_table.putcell("UVW", row, uvw)
+
+                    # Visibility data - reshape to [pol, chan] as expected by CASA
+                    vis_data = visibilities[
+                        baseline_idx, time_idx, :, :
+                    ].T  # [pol, chan]
+                    main_table.putcell("DATA", row, vis_data)
+
+                    # Flags
+                    if rfi_mask is not None and include_rfi_flags:
+                        flag_data = rfi_mask[
+                            baseline_idx, time_idx, :, :
+                        ].T  # [pol, chan]
+                    else:
+                        flag_data = np.zeros((num_pols, num_channels), dtype=bool)
+                    main_table.putcell("FLAG", row, flag_data)
+                    main_table.putcell("FLAG_ROW", row, np.any(flag_data))
+
+                    # Weights and sigma (uniform for synthetic data)
+                    weights = np.ones(num_pols, dtype=np.float32)
+                    sigma = np.ones(num_pols, dtype=np.float32) * 0.1
+                    main_table.putcell("WEIGHT", row, weights)
+                    main_table.putcell("SIGMA", row, sigma)
+
+                    row += 1
+
+                baseline_idx += 1
+
+        main_table.close()
+
+    def _create_antenna_table(self, ms_path: Path) -> None:
+        """Create ANTENNA subtable"""
+        antenna_path = ms_path / "ANTENNA"
+
+        # Define antenna table structure
+        table_desc = {
+            "NAME": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "STATION": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TYPE": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "MOUNT": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "POSITION": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [3],
+                "option": 0,
+            },
+            "OFFSET": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [3],
+                "option": 0,
+            },
+            "DISH_DIAMETER": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+        }
+
+        ant_table = pt.table(
+            str(antenna_path), table_desc, nrow=self.obs_config.num_antennas
+        )
+
+        # Fill antenna data
+        generator = SyntheticVisibilityGenerator(self.obs_config, None)
+        positions = generator._generate_antenna_positions()
+
+        for i in range(self.obs_config.num_antennas):
+            ant_table.putcell("NAME", i, f"ANT{i:02d}")
+            ant_table.putcell("STATION", i, f"ANT{i:02d}")
+            ant_table.putcell("TYPE", i, "GROUND-BASED")
+            ant_table.putcell("MOUNT", i, "ALT-AZ")
+            ant_table.putcell("POSITION", i, positions[i])
+            ant_table.putcell("OFFSET", i, np.zeros(3))
+            ant_table.putcell("DISH_DIAMETER", i, self.obs_config.antenna_diameter)
+
+        ant_table.close()
+
+    def _create_spectral_window_table(self, ms_path: Path) -> None:
+        """Create SPECTRAL_WINDOW subtable"""
+        spw_path = ms_path / "SPECTRAL_WINDOW"
+
+        table_desc = {
+            "NAME": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "NUM_CHAN": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "CHAN_FREQ": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [self.obs_config.channels_per_spw * self.obs_config.num_spw],
+                "option": 0,
+            },
+            "CHAN_WIDTH": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [self.obs_config.channels_per_spw * self.obs_config.num_spw],
+                "option": 0,
+            },
+            "EFFECTIVE_BW": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [self.obs_config.channels_per_spw * self.obs_config.num_spw],
+                "option": 0,
+            },
+            "RESOLUTION": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [self.obs_config.channels_per_spw * self.obs_config.num_spw],
+                "option": 0,
+            },
+            "TOTAL_BANDWIDTH": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "REF_FREQUENCY": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+        }
+
+        spw_table = pt.table(
+            str(spw_path), table_desc, nrow=1
+        )  # Single combined SPW for simplicity
+
+        # Generate frequency grid
+        generator = SyntheticVisibilityGenerator(self.obs_config, None)
+        frequencies = generator._generate_frequency_grid()
+        widths = np.full_like(frequencies, self.obs_config.channel_width)
+
+        spw_table.putcell("NAME", 0, "SPW0")
+        spw_table.putcell("NUM_CHAN", 0, len(frequencies))
+        spw_table.putcell("CHAN_FREQ", 0, frequencies)
+        spw_table.putcell("CHAN_WIDTH", 0, widths)
+        spw_table.putcell("EFFECTIVE_BW", 0, widths)
+        spw_table.putcell("RESOLUTION", 0, widths)
+        spw_table.putcell(
+            "TOTAL_BANDWIDTH", 0, len(frequencies) * self.obs_config.channel_width
+        )
+        spw_table.putcell("REF_FREQUENCY", 0, frequencies[len(frequencies) // 2])
+
+        spw_table.close()
+
+    def _create_polarization_table(self, ms_path: Path) -> None:
+        """Create POLARIZATION subtable"""
+        pol_path = ms_path / "POLARIZATION"
+
+        table_desc = {
+            "NUM_CORR": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "CORR_TYPE": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "shape": [4],
+                "option": 0,
+            },
+            "CORR_PRODUCT": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "shape": [2, 4],
+                "option": 0,
+            },
+        }
+
+        pol_table = pt.table(str(pol_path), table_desc, nrow=1)
+
+        # Standard linear polarizations: XX, XY, YX, YY
+        corr_types = [9, 10, 11, 12]  # Stokes correlation types
+        corr_products = [[0, 0], [0, 1], [1, 0], [1, 1]]  # Feed combinations
+
+        pol_table.putcell("NUM_CORR", 0, 4)
+        pol_table.putcell("CORR_TYPE", 0, corr_types)
+        pol_table.putcell("CORR_PRODUCT", 0, np.array(corr_products).T)
+
+        pol_table.close()
+
+    def _create_field_table(self, ms_path: Path) -> None:
+        """Create FIELD subtable"""
+        field_path = ms_path / "FIELD"
+
+        table_desc = {
+            "NAME": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "CODE": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "NUM_POLY": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "DELAY_DIR": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [2, 1],
+                "option": 0,
+            },
+            "PHASE_DIR": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [2, 1],
+                "option": 0,
+            },
+            "REFERENCE_DIR": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [2, 1],
+                "option": 0,
+            },
+        }
+
+        field_table = pt.table(str(field_path), table_desc, nrow=1)
+
+        # Single field pointing
+        direction = np.array(
+            [[self.obs_config.source_ra], [self.obs_config.source_dec]]
+        )
+
+        field_table.putcell("NAME", 0, self.obs_config.source_name)
+        field_table.putcell("CODE", 0, "T")  # Target
+        field_table.putcell("TIME", 0, 0.0)
+        field_table.putcell("NUM_POLY", 0, 0)
+        field_table.putcell("DELAY_DIR", 0, direction)
+        field_table.putcell("PHASE_DIR", 0, direction)
+        field_table.putcell("REFERENCE_DIR", 0, direction)
+
+        field_table.close()
+
+    def _create_observation_table(self, ms_path: Path) -> None:
+        """Create OBSERVATION subtable"""
+        obs_path = ms_path / "OBSERVATION"
+
+        table_desc = {
+            "TELESCOPE_NAME": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME_RANGE": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [2],
+                "option": 0,
+            },
+            "OBSERVER": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "PROJECT": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+        }
+
+        obs_table = pt.table(str(obs_path), table_desc, nrow=1)
+
+        start_mjd = (
+            datetime.fromisoformat(self.obs_config.start_time.replace("T", " "))
+            - datetime(1858, 11, 17)
+        ).total_seconds()
+        end_mjd = start_mjd + self.obs_config.total_duration
+
+        obs_table.putcell("TELESCOPE_NAME", 0, self.obs_config.array_name)
+        obs_table.putcell("TIME_RANGE", 0, [start_mjd, end_mjd])
+        obs_table.putcell("OBSERVER", 0, "SAM-RFI")
+        obs_table.putcell("PROJECT", 0, "SYNTHETIC_DATA")
+
+        obs_table.close()
+
+    def _create_data_description_table(self, ms_path: Path) -> None:
+        """Create DATA_DESCRIPTION subtable"""
+        dd_path = ms_path / "DATA_DESCRIPTION"
+
+        table_desc = {
+            "SPECTRAL_WINDOW_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "POLARIZATION_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+        }
+
+        dd_table = pt.table(str(dd_path), table_desc, nrow=1)
+
+        dd_table.putcell("SPECTRAL_WINDOW_ID", 0, 0)
+        dd_table.putcell("POLARIZATION_ID", 0, 0)
+
+        dd_table.close()
+
+    def _create_feed_table(self, ms_path: Path) -> None:
+        """Create minimal FEED subtable"""
+        feed_path = ms_path / "FEED"
+
+        table_desc = {
+            "ANTENNA_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "FEED_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "SPECTRAL_WINDOW_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "INTERVAL": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "NUM_RECEPTORS": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "POLARIZATION_TYPE": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "shape": [2],
+                "option": 0,
+            },
+        }
+
+        feed_table = pt.table(
+            str(feed_path), table_desc, nrow=self.obs_config.num_antennas
+        )
+
+        for i in range(self.obs_config.num_antennas):
+            feed_table.putcell("ANTENNA_ID", i, i)
+            feed_table.putcell("FEED_ID", i, 0)
+            feed_table.putcell("SPECTRAL_WINDOW_ID", i, -1)  # All SPWs
+            feed_table.putcell("TIME", i, 0.0)
+            feed_table.putcell("INTERVAL", i, self.obs_config.total_duration)
+            feed_table.putcell("NUM_RECEPTORS", i, 2)
+            feed_table.putcell("POLARIZATION_TYPE", i, ["X", "Y"])
+
+        feed_table.close()
+
+    def _create_source_table(self, ms_path: Path) -> None:
+        """Create SOURCE subtable"""
+        source_path = ms_path / "SOURCE"
+
+        table_desc = {
+            "SOURCE_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "TIME": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "INTERVAL": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "SPECTRAL_WINDOW_ID": {
+                "valueType": "int",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "NAME": {
+                "valueType": "string",
+                "dataManagerType": "StandardStMan",
+                "option": 0,
+            },
+            "DIRECTION": {
+                "valueType": "double",
+                "dataManagerType": "StandardStMan",
+                "shape": [2],
+                "option": 0,
+            },
+        }
+
+        source_table = pt.table(str(source_path), table_desc, nrow=1)
+
+        source_table.putcell("SOURCE_ID", 0, 0)
+        source_table.putcell("TIME", 0, 0.0)
+        source_table.putcell("INTERVAL", 0, self.obs_config.total_duration)
+        source_table.putcell("SPECTRAL_WINDOW_ID", 0, -1)
+        source_table.putcell("NAME", 0, self.obs_config.source_name)
+        source_table.putcell(
+            "DIRECTION", 0, [self.obs_config.source_ra, self.obs_config.source_dec]
+        )
+
+        source_table.close()
+
+    def _set_table_keywords(self, ms_path: Path) -> None:
+        """Set required table keywords and references"""
+        with pt.table(str(ms_path), readonly=False) as main_table:
+            # Set table type
+            main_table.putkeyword("MS_VERSION", 2.0)
+
+            # Set subtable references
+            subtables = [
+                "ANTENNA",
+                "DATA_DESCRIPTION",
+                "FEED",
+                "FIELD",
+                "OBSERVATION",
+                "POLARIZATION",
+                "PROCESSOR",
+                "SOURCE",
+                "SPECTRAL_WINDOW",
+                "STATE",
+            ]
+
+            for subtable in subtables:
+                if (ms_path / subtable).exists():
+                    main_table.putkeyword(subtable, f"Table: {ms_path}/{subtable}")
+
+    def _validate_measurement_set(self, ms_path: Path) -> None:
+        """Basic validation of created measurement set"""
+        try:
+            with pt.table(str(ms_path), readonly=True) as ms_table:
+                nrows = ms_table.nrows()
+                expected_rows = (
+                    self.obs_config.num_antennas
+                    * (self.obs_config.num_antennas - 1)
+                    // 2
+                    * int(
+                        self.obs_config.total_duration
+                        / self.obs_config.integration_time
+                    )
+                )
+
+                if nrows != expected_rows:
+                    logger.warning(
+                        f"Row count mismatch: expected {expected_rows}, got {nrows}"
+                    )
+                else:
+                    logger.info(f"✓ MS validation passed: {nrows} rows")
+
+        except Exception as e:
+            logger.error(f"MS validation failed: {e}")
+            raise
