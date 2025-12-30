@@ -2,27 +2,30 @@
 
 ![](https://github.com/preshanth/SAM-RFI/blob/main/samrfi.png)
 
+[![CI](https://github.com/preshanth/SAM-RFI/workflows/CI/badge.svg)](https://github.com/preshanth/SAM-RFI/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 -------------------------------------------------------------------------------------
 
 **Authors:** Derod Deal (dealderod@gmail.com), Preshanth Jagannathan (pjaganna@nrao.edu)
 
-`SAM-RFI` is a Python package that utilizes Meta's Segment Anything Model 2 (SAM2) for Radio Frequency Interference (RFI) detection and segmentation in radio astronomy data. This is a complete refactor with a clean, modular architecture.
-
+SAM-RFI is a Python package that applies Meta's Segment Anything Model 2 (SAM2) for Radio Frequency Interference (RFI) detection and flagging in radio astronomy data. The system processes CASA measurement sets and generates precise segmentation masks for contaminated visibilities.
 
 ## Overview
 
-SAM-RFI applies Meta's Segment Anything Model 2 (SAM2) to detect and flag Radio Frequency Interference (RFI) in radio astronomy data. The tool processes CASA measurement sets and generates precise segmentation masks for contaminated data.
+SAM-RFI leverages the state-of-the-art SAM2 vision transformer for RFI segmentation in radio astronomy visibility data. The package provides a complete pipeline from data generation to trained models capable of detecting and flagging RFI with superior accuracy compared to traditional statistical methods.
 
 **Key Features:**
-- 🚀 **SAM2-based segmentation** - State-of-the-art Hiera transformer architecture
-- 📊 **Physically realistic synthetic data** - Generate training data with exact ground truth
-- 🔧 **Complete training pipeline** - From MS files to trained models
-- ⚡ **GPU-accelerated** - Fast training and inference
-- 🎯 **High accuracy** - Superior to traditional MAD-based flaggers
-- 🛠️ **Command-line interface** - Easy to use CLI for all operations
+- SAM2-based segmentation using Hiera transformer architecture
+- Physically realistic synthetic data generation with exact ground truth
+- Complete training pipeline with validation tracking
+- Iterative flagging for progressive RFI cleaning
+- GPU-accelerated training and inference
+- Command-line interface for all operations
+- Modular Python API for custom workflows
 
 ---
 
@@ -31,9 +34,9 @@ SAM-RFI applies Meta's Segment Anything Model 2 (SAM2) to detect and flag Radio 
 ### Prerequisites
 - Python 3.10, 3.11, or 3.12
 - CUDA-capable GPU (recommended for training)
-- CASA tools (included in `[dev]` install)
+- CASA tools (optional, for measurement set operations)
 
-### Quick Install
+### Basic Installation
 
 ```bash
 # Clone repository
@@ -44,21 +47,54 @@ cd SAM-RFI
 conda create -n samrfi python=3.12 -y
 conda activate samrfi
 
-# Install dependencies (fixes pandas/numpy compatibility)
+# Install core dependencies (CPU-only, no GPU/CASA)
 pip install pandas>=2.2.0 numpy>=1.26.0 --only-binary :all:
-
-# Install SAM-RFI with all dependencies (GPU + CASA + dev tools)
-pip install -e .[dev]
+pip install -e .
 ```
+
+### Installation Options
+
+SAM-RFI supports modular installation based on your needs:
+
+```bash
+# GPU support (training and inference)
+pip install -e .[gpu]
+
+# CASA tools (measurement set operations)
+pip install -e .[casa]
+
+# GPU + CASA (complete functionality)
+pip install -e .[gpu,casa]
+
+# Development (all dependencies + testing tools)
+pip install -e .[dev]
+
+# Install pre-commit hooks (for development)
+pre-commit install
+```
+
+**Installation extras:**
+- **Core (default)**: Data preprocessing, synthetic data generation, evaluation metrics
+- **`[gpu]`**: PyTorch, transformers, SAM2 models (required for training/inference)
+- **`[casa]`**: CASA tools for measurement set I/O
+- **`[viz]`**: Interactive visualization tools (HoloViews, Bokeh, Datashader)
+- **`[dev]`**: All dependencies plus testing and linting tools
+- **`[ci]`**: Minimal dependencies for continuous integration
 
 ### Verify Installation
 
 ```bash
-# Check CLI is available
+# Check CLI availability
 samrfi --help
 
-# Test imports
-python -c "from samrfi.data import MSLoader, Preprocessor; from samrfi.training import SAM2Trainer; print('✓ Installation successful')"
+# Test core imports (no GPU/CASA required)
+python -c "from samrfi.data import Preprocessor; from samrfi.data_generation import SyntheticDataGenerator; print('Core installation successful')"
+
+# Test GPU functionality (requires [gpu])
+python -c "from samrfi.training import SAM2Trainer; from samrfi.inference import RFIPredictor; print('GPU installation successful')"
+
+# Test CASA functionality (requires [casa])
+python -c "from samrfi.data.ms_loader import MSLoader; print('CASA installation successful')"
 ```
 
 ---
@@ -67,26 +103,28 @@ python -c "from samrfi.data import MSLoader, Preprocessor; from samrfi.training 
 
 ### 1. Generate Synthetic Training Data
 
-Generate 1000 synthetic samples with physically realistic RFI:
+Generate physically realistic training data with exact ground truth masks:
 
 ```bash
 samrfi generate-data \
   --source synthetic \
-  --config configs/synthetic_data.yaml \
-  --output ./datasets/synthetic_p_band
+  --config configs/synthetic_train_4k.yaml \
+  --output ./datasets/train_4k
 ```
 
-**Example config** (`configs/synthetic_data.yaml`):
+**Configuration** (`configs/synthetic_train_4k.yaml`):
 ```yaml
 synthetic:
-  num_samples: 1000
-  num_channels: 2048
-  num_times: 512
+  num_samples: 4000
+  num_channels: 1024
+  num_times: 1024
+  num_baselines: 2
+  num_pols: 4
 
   # Physical scales (milli-Jansky and Jansky)
-  noise_mjy: 1.0                 # 1 mJy noise
-  rfi_power_min: 1000.0          # 1000 Jy RFI min
-  rfi_power_max: 10000.0         # 10000 Jy RFI max
+  noise_mjy: 1.0                 # 1 mJy Gaussian noise
+  rfi_power_min: 1000.0          # 1000 Jy RFI minimum
+  rfi_power_max: 10000.0         # 10000 Jy RFI maximum
 
   # RFI types per sample
   rfi_type_counts:
@@ -96,252 +134,235 @@ synthetic:
     narrowband_bursty: 2
     broadband_bursty: 1
 
-  # Optional: Bandpass effects
+  # Bandpass effects
   enable_bandpass_rolloff: true
   bandpass_polynomial_order: 8
   polarization_correlation: 0.8
 
 processing:
-  stretch: SQRT
-  flag_sigma: 5
-  patch_size: 128
-  apply_stretching: true
+  patch_size: 1024
+  stretch: null                  # No stretch for synthetic (preserves physical scales)
+  enable_augmentation: true      # 4-way rotation augmentation
+  normalize_before_stretch: false
+  normalize_after_stretch: false
 ```
 
-This generates **two datasets**:
-- `exact_masks/` - Perfect ground truth (train on this!)
-- `mad_masks/` - MAD-based masks (for comparison)
-
-**Note:** Datasets are generated locally and saved to disk. They are NOT uploaded to HuggingFace by default.
+This generates batched datasets saved to `./datasets/train_4k/exact_masks/` with perfect ground truth masks.
 
 ### 2. Train SAM2 Model
 
-**SAM2 models auto-download from HuggingFace on first use** (~850MB for `large`). This is a one-time download, cached at `~/.cache/huggingface/hub/`.
-
-Train on the synthetic data with exact ground truth:
+SAM2 models automatically download from HuggingFace on first use. Models are cached at `~/.cache/huggingface/hub/`.
 
 ```bash
 samrfi train \
-  --config configs/sam2_training.yaml \
-  --dataset ./datasets/synthetic_p_band/exact_masks \
-  --output ./models/sam2_rfi_v1
+  --config configs/gpu_v100_training.yaml \
+  --dataset ./datasets/train_4k/exact_masks \
+  --validation-dataset ./datasets/val_1k/exact_masks
 ```
 
-**Training config** (`configs/sam2_training.yaml`):
+**Training configuration** (`configs/gpu_v100_training.yaml`):
 ```yaml
 model:
-  checkpoint: large              # tiny, small, base_plus, large
-  freeze_encoders: true
+  sam_checkpoint: large          # Options: tiny, small, base_plus, large
+  device: cuda
 
 training:
   num_epochs: 10
-  batch_size: 4
+  batch_size: 12
   learning_rate: 1.0e-5
   weight_decay: 0.0
-  device: cuda                   # or cpu
+  save_best_only: true
 
 output:
-  dir_path: ./models/sam2_rfi_v1
+  output_dir: ./samrfi_data
   save_plots: true
 ```
 
-**Monitor training:**
-- Loss curves saved to `models/sam2_rfi_v1/loss_plot.png`
-- Model checkpoints: `sam2_model_YYYYMMDD_HHMMSS.pth`
+**Available SAM2 models:**
+- `tiny` (40 MB) - Fastest, lower accuracy
+- `small` (180 MB) - Balanced performance
+- `base_plus` (330 MB) - Good accuracy
+- `large` (850 MB) - Best accuracy, recommended for production
 
-### 3. Generate Dataset from Real MS
+**GPU memory requirements:**
+- 11 GB VRAM: `tiny`, batch_size=2
+- 32 GB VRAM: `base_plus`, batch_size=12
+- 40+ GB VRAM: `large`, batch_size=8-12
 
-Generate training data from your measurement set:
+### 3. Apply Trained Model
 
-```bash
-samrfi generate-data \
-  --source ms \
-  --config configs/ms_data.yaml \
-  --output ./datasets/vla_pband_3c219
-```
-
-**MS config** (`configs/ms_data.yaml`):
-```yaml
-ms:
-  path: /path/to/observation.ms
-  num_antennas: 5              # Load first N antennas
-  data_mode: DATA              # or CORRECTED_DATA
-
-processing:
-  stretch: SQRT
-  flag_sigma: 5
-  patch_size: 128
-  custom_flag: true            # Use MS flags (not MAD)
-  apply_stretching: true
-```
-
-### 4. Apply Model to Flag RFI
-
-**Single-pass prediction** (default):
+**Single-pass prediction:**
 ```bash
 samrfi predict \
-  --model ./models/sam2_rfi_v1/sam2_model_20250930_120000.pth \
-  --input observation.ms
-```
-
-**Iterative prediction** (3 passes for deep cleaning):
-```bash
-samrfi predict \
-  --model ./models/sam2_rfi_v1/sam2_model_20250930_120000.pth \
+  --model ./samrfi_data/sam2_rfi_best.pth \
   --input observation.ms \
-  --iterations 3
+  --patch-size 1024
 ```
 
-Each iteration:
-1. Masks already-flagged regions
-2. Finds fainter RFI hidden by brighter RFI
-3. Combines with previous flags
+**Iterative prediction** (recommended for deep cleaning):
+```bash
+samrfi predict \
+  --model ./samrfi_data/sam2_rfi_best.pth \
+  --input observation.ms \
+  --iterations 3 \
+  --patch-size 1024
+```
 
-**Options:**
-- `--iterations N` - Number of passes (default: 1)
-- `--num-antennas N` - Limit antennas
-- `--patch-size 128` - Match training
-- `--device cuda` - GPU or cpu
-- `--no-save` - Preview only (don't write flags)
+Iterative flagging progressively finds fainter RFI by masking already-flagged regions in each iteration. Typically converges in 2-3 passes.
+
+**Prediction options:**
+- `--iterations N` - Number of flagging passes (default: 1)
+- `--num-antennas N` - Limit number of antennas loaded
+- `--patch-size SIZE` - Must match training patch size
+- `--stretch {SQRT,LOG10,null}` - Must match training configuration
+- `--threshold FLOAT` - Probability threshold (default: adaptive/mean)
+- `--no-save` - Preview only, do not write flags to MS
 
 ---
 
 ## CLI Reference
 
-### Main Commands
+### Data Generation
 
 ```bash
-# Generate training data
-samrfi generate-data --source {synthetic|ms} --config CONFIG.yaml --output DIR
+# Generate synthetic training data
+samrfi generate-data \
+  --source synthetic \
+  --config configs/synthetic_train_4k.yaml \
+  --output ./datasets/train_4k
 
-# Train model
-samrfi train --config CONFIG.yaml --dataset DIR [--output DIR]
-
-# Predict RFI flags (single pass)
-samrfi predict --model MODEL.pth --input OBSERVATION.ms
-
-# Predict with iterative flagging (N passes)
-samrfi predict --model MODEL.pth --input OBSERVATION.ms --iterations N
-
-# Create default config
-samrfi create-config --type {training|data} --output CONFIG.yaml
-
-# Validate config
-samrfi validate-config --config CONFIG.yaml
+# Generate data from measurement set
+samrfi generate-data \
+  --source ms \
+  --config configs/ms_data.yaml \
+  --output ./datasets/vla_pband
 ```
 
----
+### Training
 
-## Iterative Flagging Strategy
-
-Iterative flagging progressively cleans deeper RFI by masking known flags in each pass:
-
-**Why iterative flagging?**
-- Bright RFI can hide fainter RFI
-- After masking bright sources, fainter ones become visible
-- Typically converges in 2-3 iterations
-
-**How it works:**
-
-```
-Pass 1: Raw data → Model → Flags_1 (finds bright RFI)
-Pass 2: Masked data (with Flags_1) → Model → Flags_2 (finds hidden RFI)
-Pass 3: Masked data (with Flags_1|2) → Model → Flags_3 (final cleanup)
-
-Final: Flags_cumulative = Flags_1 | Flags_2 | Flags_3
-```
-
-**When to use:**
-- **Single pass (N=1)**: Fast, good for mild contamination
-- **2-3 iterations**: Recommended for deep cleaning
-- **>3 iterations**: Diminishing returns, risk over-flagging
-
-**Example:**
 ```bash
-# Compare single vs iterative
-samrfi predict --model sam2.pth --input obs.ms  # 5% flagged
-samrfi predict --model sam2.pth --input obs.ms --iterations 3  # 8% flagged
+# Train with validation dataset
+samrfi train \
+  --config configs/gpu_v100_training.yaml \
+  --dataset ./datasets/train_4k/exact_masks \
+  --validation-dataset ./datasets/val_1k/exact_masks
+
+# Resume training from checkpoint
+samrfi train \
+  --config configs/gpu_v100_training.yaml \
+  --dataset ./datasets/train_4k/exact_masks \
+  --resume ./samrfi_data/sam2_rfi_best.pth
+```
+
+### Inference
+
+```bash
+# Single-pass prediction
+samrfi predict \
+  --model ./samrfi_data/sam2_rfi_best.pth \
+  --input observation.ms
+
+# Iterative prediction (3 passes)
+samrfi predict \
+  --model ./samrfi_data/sam2_rfi_best.pth \
+  --input observation.ms \
+  --iterations 3
+```
+
+### Configuration
+
+```bash
+# Create default configuration
+samrfi create-config \
+  --type {training|data|validation} \
+  --output config.yaml
+
+# Validate configuration
+samrfi validate-config --config config.yaml
 ```
 
 ---
 
 ## Python API
 
-### Load Measurement Set
+### Core Data Operations (No GPU/CASA Required)
 
 ```python
-from samrfi.data import MSLoader
+from samrfi.data import Preprocessor, TorchDataset
+from samrfi.data_generation import SyntheticDataGenerator
+from samrfi.evaluation import compute_iou, compute_ffi
 
-# Load MS
+# Generate synthetic data
+generator = SyntheticDataGenerator(config_path='configs/synthetic_train_4k.yaml')
+dataset = generator.generate(num_samples=1000, output_dir='./datasets/synthetic')
+
+# Preprocess data
+import numpy as np
+data = np.random.randn(2, 4, 1024, 1024) + 1j * np.random.randn(2, 4, 1024, 1024)
+preprocessor = Preprocessor(data)
+dataset = preprocessor.create_dataset(patch_size=1024, stretch=None)
+
+# Evaluate predictions
+iou = compute_iou(predicted_mask, ground_truth_mask)
+ffi = compute_ffi(data, flags=predicted_mask)
+```
+
+### Measurement Set Operations (Requires [casa])
+
+```python
+from samrfi.data.ms_loader import MSLoader
+
+# Load measurement set
 loader = MSLoader('observation.ms')
 loader.load(num_antennas=5, mode='DATA')
 
 # Access data
-data = loader.data           # Complex visibilities
-magnitude = loader.magnitude # Magnitude
-flags = loader.load_flags()  # Existing flags
+data = loader.data              # Complex visibilities: (baselines, pols, channels, times)
+magnitude = loader.magnitude    # Magnitude
+flags = loader.load_flags()     # Existing flags
 
 # Save new flags
-loader.save_flags(new_flags)
+loader.save_flags(predicted_flags)
 ```
 
-### Preprocess Data
-
-```python
-from samrfi.data import Preprocessor
-
-# Create preprocessor
-preprocessor = Preprocessor(data, flags=flags)
-
-# Generate dataset
-dataset = preprocessor.create_dataset(
-    patch_size=128,
-    stretch='SQRT',
-    flag_sigma=5,
-    use_custom_flags=True
-)
-
-# Save dataset
-dataset.save_to_disk('./my_dataset')
-```
-
-### Train Model
+### Training (Requires [gpu])
 
 ```python
 from samrfi.training import SAM2Trainer
-from datasets import load_from_disk
+from samrfi.data import TorchDataset
 
-# Load dataset
-dataset = load_from_disk('./my_dataset')
+# Load batched dataset
+dataset = TorchDataset.from_directory('./datasets/train_4k/exact_masks')
 
 # Create trainer
 trainer = SAM2Trainer(dataset, device='cuda')
 
-# Train
+# Train model
 trainer.train(
     num_epochs=10,
-    batch_size=4,
+    batch_size=12,
     sam_checkpoint='large',
     learning_rate=1e-5,
-    plot=True
+    output_dir='./samrfi_data',
+    save_best_only=True
 )
 ```
 
-### Apply Trained Model
+### Inference (Requires [gpu])
 
 ```python
 from samrfi.inference import RFIPredictor
 
-# Load predictor
+# Load predictor with trained model
 predictor = RFIPredictor(
-    model_path='./models/sam2_rfi.pth',
-    sam_checkpoint='large',
+    model_path='./samrfi_data/sam2_rfi_best.pth',
     device='cuda'
 )
 
 # Single-pass prediction
 flags = predictor.predict_ms(
     ms_path='observation.ms',
+    patch_size=1024,
     save_flags=True
 )
 
@@ -349,218 +370,372 @@ flags = predictor.predict_ms(
 flags = predictor.predict_iterative(
     ms_path='observation.ms',
     num_iterations=3,
+    patch_size=1024,
     save_flags=True
 )
 
-print(f"Flagged {flags.sum()/flags.size*100:.2f}% of data")
+print(f"Flagged {flags.sum() / flags.size * 100:.2f}% of data")
+```
+
+### Single Array Validation
+
+```python
+from samrfi.inference import RFIPredictor
+import numpy as np
+
+# Load model
+predictor = RFIPredictor(model_path='model.pth', device='cuda')
+
+# Predict on arbitrary-sized array
+data = np.load('baseline_data.npy')  # Any shape, e.g., (2048, 511)
+flags, probabilities = predictor.predict_array(
+    data,
+    threshold=None,  # Adaptive (uses mean of probabilities)
+    return_probabilities=True
+)
+
+# Save probabilities for custom thresholding
+np.save('probabilities.npy', probabilities)
+
+# Apply custom threshold
+custom_flags = probabilities > 0.1  # More aggressive flagging
 ```
 
 ---
 
 ## Architecture
 
+### Data Pipeline
+
 ```
-SAM-RFI Pipeline
-================
+[Measurement Set or Synthetic Generator]
+        ↓
+    MSLoader.load()
+        ├─ Complex visibilities (baselines, pols, channels, times)
+        └─ Combine spectral windows
+        ↓
+    Preprocessor.create_dataset()
+        ├─ 4-way rotation augmentation (optional)
+        ├─ Patchify into patch_size × patch_size
+        ├─ Extract 3-channel features:
+        │   • Channel 1: Spatial gradient (edge detection)
+        │   • Channel 2: Log amplitude (intensity, [-3, 4])
+        │   • Channel 3: Phase ([-π, π] → [0, 1])
+        ├─ Apply optional stretch (SQRT/LOG10 for real, None for synthetic)
+        └─ ImageNet normalization
+        ↓
+    BatchedDataset (streaming)
+        ├─ Batch files: batch_*.pt + metadata.json
+        ├─ On-demand loading in DataLoader workers
+        └─ OS filesystem cache for efficiency
+```
 
-[1] DATA GENERATION
-    ├── MS File OR Synthetic Generator
-    ├── MSLoader (load complex visibilities)
-    ├── Preprocessor (patchify, normalize, stretch, flag)
-    └── HuggingFace Dataset (saved to disk)
+### Training Pipeline
 
-[2] TRAINING
-    ├── Load Dataset
-    ├── SAMDataset (PyTorch wrapper)
-    ├── SAM2Trainer (transformers API)
-    │   ├── Sam2Processor (image + prompt)
-    │   ├── Sam2Model (Hiera backbone)
-    │   └── DiceCELoss (segmentation loss)
-    └── Trained Model (.pth)
+```
+    BatchedDataset
+        ↓
+    SAMDataset wrapper
+        ├─ Extract bounding boxes from ground truth
+        ├─ Add random perturbation (±20 pixels)
+        └─ Format: {pixel_values, input_boxes, ground_truth_mask}
+        ↓
+    SAM2Trainer.train()
+        ├─ Load SAM2Model from HuggingFace
+        ├─ Freeze vision + prompt encoders
+        ├─ Train mask decoder only (~10% of parameters)
+        ├─ Loss: DiceCELoss (Dice + Cross-Entropy)
+        └─ Save: sam2_rfi_best.pth
+```
 
-[3] INFERENCE
-    ├── Load MS
-    ├── RFIPredictor (single or iterative)
-    │   ├── Preprocess patches
-    │   ├── Apply trained SAM2
-    │   └── Reconstruct full flags
-    └── Write Flags to MS
+### Inference Pipeline
+
+```
+    [Trained Model] + [Measurement Set]
+        ↓
+    RFIPredictor.predict_ms() or predict_iterative()
+        ↓
+    MSLoader.load() → Preprocessor → Patches
+        ↓
+    SAM2Model.forward()
+        ├─ Vision encoder: Extract features
+        ├─ Prompt encoder: Encode bounding boxes
+        └─ Mask decoder: Predict segmentation
+        ↓
+    Reconstruction
+        ├─ Sigmoid(logits) > threshold
+        ├─ Reverse rotations
+        ├─ Combine patches → full waterfall
+        └─ Boolean flags: (baselines, pols, channels, times)
+        ↓
+    MSLoader.save_flags() → Write to MS FLAG column
 ```
 
 ---
 
-## Synthetic Data Features
+## Iterative Flagging
+
+Iterative flagging progressively discovers deeper RFI by masking known contamination in each pass, revealing fainter interference hidden beneath brighter sources.
+
+### Algorithm
+
+```
+Iteration 1: Raw data → Model → Flags_1 (finds bright RFI)
+Iteration 2: Data with Flags_1 masked → Model → Flags_2 (finds hidden RFI)
+Iteration 3: Data with Flags_1|2 masked → Model → Flags_3 (final cleanup)
+
+Final: Flags_cumulative = Flags_1 | Flags_2 | Flags_3
+```
+
+### Guidelines
+
+- **Single pass (N=1)**: Fast, suitable for mild contamination (5-10% flagging)
+- **2-3 iterations**: Recommended for deep cleaning (15-30% flagging)
+- **>3 iterations**: Diminishing returns, increased risk of over-flagging
+
+### Example
+
+```bash
+# Compare single vs iterative
+samrfi predict --model model.pth --input obs.ms
+# Output: Flagged 12.5% of data
+
+samrfi predict --model model.pth --input obs.ms --iterations 3
+# Output: Iteration 1: 12.5%, Iteration 2: 4.2%, Iteration 3: 1.1%
+# Total: Flagged 17.8% of data
+```
+
+---
+
+## Synthetic Data Generation
 
 ### RFI Types
-1. **Narrowband Persistent** - GPS, satellites (constant in time)
-2. **Broadband Persistent** - Power lines, harmonics
-3. **Narrowband Intermittent** - Periodic radar (duty cycle)
-4. **Narrowband Bursty** - Random pulsed transmitters
-5. **Broadband Bursty** - Lightning, transients
-6. **Frequency Sweeps** - Linear & quadratic chirps (radar)
 
-### Physical Realism
-- **Noise**: 1 mJy (milli-Jansky) Gaussian
-- **RFI Power**: 1000-10000 Jy (Jansky)
-- **Dynamic Range**: 10^6 to 10^7 (matches real observations)
-- **Bandpass Rolloff**: 8th-order polynomial edge effects
-- **Polarization**: Correlated RFI in XX/YY
+The synthetic data generator produces physically realistic RFI signatures:
 
-### Exact Ground Truth
-Unlike real data, synthetic data provides **perfect masks**:
-- We know exactly where RFI is (we generated it!)
-- Enables training with 100% accurate labels
-- Compare against MAD-based masks to quantify improvement
+1. **Narrowband Persistent** - Continuous narrowband signals (GPS, satellites)
+2. **Broadband Persistent** - Continuous wideband interference (power lines, harmonics)
+3. **Narrowband Bursty** - Intermittent narrowband pulses (radar, transmitters)
+4. **Broadband Bursty** - Transient wideband events (lightning, arcing)
+5. **Frequency Sweeps** - Linear and quadratic chirps (scanning radar)
+
+### Physical Parameters
+
+- **Noise**: 1 mJy (milli-Jansky) Gaussian, matches typical system noise
+- **RFI Power**: 1000-10000 Jy (Jansky), 10^6-10^7 dynamic range
+- **Bandpass**: 8th-order polynomial edge rolloff
+- **Polarization**: Correlated RFI across XX/YY feeds (0.8 correlation)
+
+### Ground Truth Advantage
+
+Synthetic data provides exact ground truth masks, enabling supervised training with 100% accurate labels. This is not possible with real observations, where RFI locations are only estimates from statistical flaggers.
+
+**Preservation of Physical Scales:**
+```yaml
+processing:
+  normalize_before_stretch: false  # Critical for synthetic data
+  normalize_after_stretch: false
+  stretch: null  # Preserves 10^6-10^7 dynamic range
+```
 
 ---
 
 ## Model Management
 
-### Auto-Download Behavior
+### Automatic Downloads
 
-SAM2 models are **automatically downloaded from HuggingFace** when first needed:
+SAM2 models are automatically downloaded from HuggingFace Hub on first use and cached locally:
 
 ```python
 from samrfi.training import SAM2Trainer
 
-# Model auto-downloads on first train() call
+# Model downloads automatically if not cached
 trainer = SAM2Trainer(dataset, device='cuda')
-trainer.train(num_epochs=10, sam_checkpoint='large')  # Downloads ~850MB if not cached
+trainer.train(num_epochs=10, sam_checkpoint='large')
 ```
 
-**Available models:**
-- `tiny` - 40 MB (fastest, lower accuracy)
-- `small` - 180 MB (balanced)
-- `base_plus` - 330 MB (good accuracy)
-- `large` - 850 MB (best accuracy, **recommended**)
+**Cache location:** `~/.cache/huggingface/hub/`
 
-**Models are cached at:** `~/.cache/huggingface/hub/`
-
-### Pre-Download Models (Optional)
-
-To download models before training:
-
-```python
-from samrfi.utils import ModelCache
-
-cache = ModelCache()
-cache.download_model('large', show_progress=True)  # One-time download with progress bar
-```
-
-Or via command line:
-
-```bash
-python -c "from samrfi.utils import ModelCache; ModelCache().download_model('large')"
-```
-
-### Custom Cache Location
+### Custom Cache Directory
 
 ```bash
 export HF_HOME=/path/to/custom/cache
-samrfi train --config config.yaml --dataset dataset.npz
+samrfi train --config config.yaml --dataset ./datasets/train
 ```
 
-## Training Tips
+### Pre-download Models
 
-### GPU Requirements
-- **Minimum**: 8GB VRAM (batch_size=1, checkpoint=tiny)
-- **Recommended**: 16GB VRAM (batch_size=4, checkpoint=large)
-- **Optimal**: 24GB+ VRAM (batch_size=8+, checkpoint=large)
+```python
+from samrfi.utils.model_cache import ModelCache
+
+cache = ModelCache()
+cache.download_model('large', show_progress=True)
+```
+
+Or via command line:
+```bash
+python -c "from samrfi.utils.model_cache import ModelCache; ModelCache().download_model('large')"
+```
+
+---
+
+## Training
+
+### Resume Training
+
+Training can be resumed from any checkpoint to continue where you left off:
+
+```bash
+# Initial training
+samrfi train --config config.yaml --dataset ./datasets/train --epochs 10
+
+# Resume and extend to 20 epochs
+samrfi train --config config.yaml --dataset ./datasets/train --epochs 20 \
+  --resume ./samrfi_data/sam2_rfi_best.pth
+```
+
+**Restored state:**
+- Model weights
+- Optimizer state (momentum, learning rates)
+- Training/validation loss history
+- Epoch counter
+
+**Checkpoints:**
+- `sam2_rfi_best.pth` - Best validation loss (updated during training)
+- `model_sam2-large_YYYYMMDD_HHMMSS.pth` - Final checkpoint with full state
 
 ### Hyperparameter Tuning
+
+**Fast iteration (debugging):**
 ```yaml
-# Fast iteration (debugging)
 model:
-  checkpoint: tiny
+  sam_checkpoint: tiny
 training:
   num_epochs: 3
   batch_size: 8
+  learning_rate: 1.0e-4
+```
 
-# Production quality
+**Production quality:**
+```yaml
 model:
-  checkpoint: large
+  sam_checkpoint: large
 training:
   num_epochs: 20
   batch_size: 4
   learning_rate: 1.0e-5
+  weight_decay: 0.0
 ```
 
 ### Loss Convergence
-- **Expected**: Loss should decrease from ~1.0 to <0.3 in 10 epochs
-- **Warning**: If loss stuck >0.8 after 5 epochs, check:
-  - Learning rate (try 5e-6 or 2e-5)
-  - Data quality (visualize patches)
-  - Batch size (try 2 or 8)
 
-### Resume Training
+Expected behavior: Loss decreases from approximately 1.0 to below 0.3 within 10 epochs.
 
-Training can be resumed from any checkpoint to continue from where you left off:
+**Troubleshooting stalled training (loss >0.8 after 5 epochs):**
+- Adjust learning rate (try 5e-6 or 2e-5)
+- Verify data quality (visualize sample patches)
+- Modify batch size (try 2 or 8)
+- Check for NaN values in input data
 
-```bash
-# Initial training (10 epochs)
-samrfi train --config config.yaml --dataset train.pt --epochs 10
+---
 
-# Resume and continue to epoch 20
-samrfi train --config config.yaml --dataset train.pt --epochs 20 --resume ./samrfi_data/sam2_rfi_best.pth
-```
+## Evaluation
 
-**What gets restored:**
-- Model weights
-- Optimizer state (momentum, learning rates)
-- Training/validation loss history
-- Epoch counter (continues from N+1)
+### Metrics Module
 
-**Checkpoints saved:**
-- `sam2_rfi_best.pth` - Best validation loss (updated during training)
-- `model_sam2-large_*.pth` - Final checkpoint with full training state
-
-**Python API:**
 ```python
-trainer = SAM2Trainer(dataset, device='cuda')
-
-# Resume from checkpoint
-losses = trainer.train(
-    num_epochs=20,
-    batch_size=4,
-    sam_checkpoint='large',
-    model_path='./samrfi_data/sam2_rfi_best.pth'  # Resume from here
+from samrfi.evaluation import (
+    compute_iou,           # Intersection over Union
+    compute_precision,     # True Positive Rate
+    compute_recall,        # Sensitivity
+    compute_f1,            # Harmonic mean of precision/recall
+    compute_dice,          # Dice coefficient
+    evaluate_segmentation  # All metrics
 )
+
+# Evaluate predictions
+metrics = evaluate_segmentation(predicted_mask, ground_truth_mask)
+# Returns: {'iou': 0.85, 'precision': 0.90, 'recall': 0.82, 'f1': 0.86}
 ```
 
-**Benefits:**
-- Train in stages (evaluate after N epochs, continue if needed)
-- Recover from crashes/interruptions
-- Experiment with different learning rates from same checkpoint
-- Loss curves show complete history across resume sessions
+### Statistical Validation
+
+```python
+from samrfi.evaluation import (
+    compute_statistics,              # Before/after statistics
+    compute_ffi,                     # Flagging Fidelity Index
+    print_statistics_comparison      # Formatted output
+)
+
+# Compute Flagging Fidelity Index
+ffi_metrics = compute_ffi(data, flags=predicted_mask)
+# Returns: {'ffi': 0.65, 'mad_reduction': 0.45, 'std_reduction': 0.52}
+
+# Print comparison
+print_statistics_comparison(data, predicted_mask)
+```
+
+**Flagging Fidelity Index (FFI):** Measures flagging quality by balancing noise reduction against over-flagging penalty. Higher values indicate better flagging performance.
 
 ---
 
 ## Development
 
-### Run Tests
+### Testing
 
 ```bash
-# All tests
+# Run all tests
 pytest tests/ -v
 
-# Specific module
-pytest tests/test_preprocessor.py -v
+# Unit tests only
+pytest tests/unit -v
+
+# Integration tests
+pytest tests/integration -v
 
 # With coverage
 pytest tests/ --cov=samrfi --cov-report=html
+
+# Skip slow tests
+pytest -m "not slow"
 ```
 
 ### Code Quality
 
+Pre-commit hooks are configured to run automatically on `git commit`:
+
+```bash
+# Install hooks
+pre-commit install
+
+# Run manually
+pre-commit run --all-files
+```
+
+**Checks performed:**
+- Black (code formatting, line length 100)
+- Ruff (linting and auto-fixes)
+- isort (import sorting)
+- Trailing whitespace, EOF, YAML/JSON/TOML validation
+- Large file detection (>5MB)
+
+**Manual formatting:**
 ```bash
 # Format code
-black src/ tests/
+black src/ tests/ --line-length 100
 
-# Type checking
-mypy src/
+# Lint code
+ruff check src/ tests/ --fix
 
-# Linting
-flake8 src/ tests/
+# Sort imports
+isort src/ tests/ --profile black --line-length 100
+```
+
+### Type Checking
+
+```bash
+# Type check (optional)
+mypy src/ --ignore-missing-imports
 ```
 
 ---
@@ -570,42 +745,65 @@ flake8 src/ tests/
 ```
 SAM-RFI/
 ├── src/samrfi/
-│   ├── data/                  # Data loading & preprocessing
-│   │   ├── ms_loader.py       # CASA MS loader
-│   │   ├── preprocessor.py    # Patch generation pipeline
-│   │   └── sam_dataset.py     # PyTorch wrapper
-│   ├── data_generation/       # Dataset generators
-│   │   ├── ms_generator.py    # MS → dataset
-│   │   └── synthetic_generator.py  # Synthetic → dataset
-│   ├── training/              # Training
-│   │   └── sam2_trainer.py    # SAM2 trainer
-│   ├── inference/             # Prediction
-│   │   └── predictor.py       # RFI prediction (single/iterative)
-│   ├── config/                # Configuration
-│   │   └── config_loader.py   # YAML config handling
-│   └── cli.py                 # Command-line interface
+│   ├── cli.py                      # Command-line interface
+│   ├── config/                     # Configuration management
+│   │   ├── config_loader.py        # YAML configuration loading
+│   │   └── validators.py           # Configuration validation
+│   ├── data/                       # Data loading and preprocessing
+│   │   ├── ms_loader.py            # CASA measurement set I/O
+│   │   ├── preprocessor.py         # Waterfall to patches pipeline
+│   │   ├── sam_dataset.py          # PyTorch dataset wrapper
+│   │   ├── torch_dataset.py        # Batched streaming datasets
+│   │   └── gpu_transforms.py       # Kornia-based GPU transforms
+│   ├── data_generation/            # Dataset generators
+│   │   ├── synthetic_generator.py  # Physics-based RFI simulation
+│   │   └── ms_generator.py         # MS to dataset converter
+│   ├── training/
+│   │   └── sam2_trainer.py         # SAM2 training loop
+│   ├── inference/
+│   │   └── predictor.py            # RFI prediction (single/iterative)
+│   ├── evaluation/                 # Metrics and validation
+│   │   ├── metrics.py              # Segmentation metrics
+│   │   └── statistics.py           # Flagging quality statistics
+│   └── utils/                      # Utilities
+│       ├── logger.py               # Logging configuration
+│       ├── model_cache.py          # HuggingFace model downloads
+│       └── errors.py               # Custom exceptions
 │
-├── tests/                     # Unit tests
-├── configs/                   # Example configs
-├── legacy/                    # Old implementation (archived)
-├── pyproject.toml            # Package definition
-└── README.md                 # This file
+├── tests/                          # Test suite
+│   ├── unit/                       # Unit tests
+│   ├── integration/                # Integration tests
+│   └── conftest.py                 # Shared fixtures
+│
+├── configs/                        # Example configurations
+│   ├── gpu_*.yaml                  # GPU-specific training configs
+│   ├── synthetic_*.yaml            # Synthetic data configs
+│   └── validation.yaml             # Validation config
+│
+├── .github/workflows/              # CI/CD
+│   └── ci.yml                      # GitHub Actions workflow
+│
+├── pyproject.toml                  # Package definition
+├── .pre-commit-config.yaml         # Pre-commit hooks
+└── README.md                       # This file
 ```
 
 ---
 
 ## Citation
 
-If you use SAM-RFI in your research, please cite:
+A paper describing SAM-RFI is in preparation. In the meantime, if you use this software in your research, please cite the repository:
 
 ```bibtex
-@software{samrfi2024,
+@software{samrfi2025,
   title = {SAM-RFI: Radio Frequency Interference Detection with SAM2},
   author = {Deal, Derod and Jagannathan, Preshanth},
-  year = {2024},
+  year = {2025},
   url = {https://github.com/preshanth/SAM-RFI}
 }
 ```
+
+Please check back for the updated citation once the paper is published.
 
 ---
 
@@ -618,14 +816,14 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Acknowledgments
 
 - **Meta AI** - SAM2 architecture and pre-trained models
-- **HuggingFace** - Transformers library
-- **NRAO** - Radio astronomy expertise and data
-- **NAC** - National Astronomy Consortium funding
+- **HuggingFace** - Transformers library and model hosting
+- **NRAO** - Radio astronomy expertise and computational resources
+- **NAC** - National Astronomy Consortium support and funding
 
 ---
 
 ## Support
 
 - **Issues**: https://github.com/preshanth/SAM-RFI/issues
-- **Documentation**: https://sam-rfi.readthedocs.io
+- **Documentation**: https://sam-rfi.readthedocs.io (coming soon)
 - **Contact**: pjaganna@nrao.edu

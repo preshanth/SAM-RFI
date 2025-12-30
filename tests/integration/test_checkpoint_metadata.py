@@ -10,7 +10,17 @@ import pytest
 import torch
 import torch.nn as nn
 
-from samrfi.inference import RFIPredictor
+try:
+    from samrfi.inference import RFIPredictor
+
+    INFERENCE_AVAILABLE = True
+except ImportError:
+    INFERENCE_AVAILABLE = False
+    RFIPredictor = None
+
+pytestmark = pytest.mark.skipif(
+    not INFERENCE_AVAILABLE, reason="RFIPredictor requires transformers/CASA"
+)
 
 
 # Module-level mock fixture - applies to ALL tests in this file
