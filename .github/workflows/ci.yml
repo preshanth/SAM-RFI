@@ -37,11 +37,11 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/unit -v
+          pytest tests/unit -v -m "not requires_casa"
 
       - name: Run integration tests
         run: |
-          pytest tests/integration -v
+          pytest tests/integration -v -m "not requires_casa"
 
   code-quality:
     name: Code Quality

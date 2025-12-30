@@ -10,7 +10,6 @@ from .metrics import (
     compute_recall,
     evaluate_segmentation,
 )
-from .ms_injection import inject_synthetic_data
 from .statistics import (
     compute_calcquality,
     compute_ffi,
@@ -25,9 +24,16 @@ __all__ = [
     "compute_f1",
     "compute_dice",
     "evaluate_segmentation",
-    "inject_synthetic_data",
     "compute_statistics",
     "compute_ffi",
     "compute_calcquality",
     "print_statistics_comparison",
 ]
+
+# Optional CASA dependency for MS injection
+try:
+    from .ms_injection import inject_synthetic_data
+
+    __all__.append("inject_synthetic_data")
+except ImportError:
+    pass  # CASA not available

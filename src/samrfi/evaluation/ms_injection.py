@@ -9,8 +9,14 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-from casatools import table
 from tqdm import tqdm
+
+try:
+    from casatools import table
+
+    CASA_AVAILABLE = True
+except ImportError:
+    CASA_AVAILABLE = False
 
 
 def inject_synthetic_data(
@@ -36,6 +42,11 @@ def inject_synthetic_data(
     Returns:
         Path to output MS with injected data
     """
+    if not CASA_AVAILABLE:
+        raise ImportError(
+            "casatools is required for MS injection. " "Install with: pip install samrfi[casa]"
+        )
+
     template_ms_path = Path(template_ms_path)
 
     # Default output path

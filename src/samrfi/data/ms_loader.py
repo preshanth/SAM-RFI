@@ -5,8 +5,14 @@ Clean rewrite of RadioRFI functionality, focused on data loading only.
 """
 
 import numpy as np
-from casatools import table
 from tqdm import tqdm
+
+try:
+    from casatools import table
+
+    CASA_AVAILABLE = True
+except ImportError:
+    CASA_AVAILABLE = False
 
 
 class MSLoader:
@@ -27,6 +33,10 @@ class MSLoader:
         Args:
             ms_path: Path to measurement set
         """
+        if not CASA_AVAILABLE:
+            raise ImportError(
+                "casatools is required for MSLoader. " "Install with: pip install samrfi[casa]"
+            )
         self.ms_path = str(ms_path)
 
         # Open MS and read metadata

@@ -169,6 +169,7 @@ class TestCheckpointMetadataValidation:
 class TestCheckpointMetadataInference:
     """Test that validation is called during actual inference."""
 
+    @pytest.mark.requires_casa
     def test_predict_ms_validates_parameters(self, mock_checkpoint, tmp_path, monkeypatch):
         """Test that predict_ms calls validation before inference."""
 
