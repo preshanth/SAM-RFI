@@ -10,10 +10,11 @@ from .errors import (
     SAMRFIError,
 )
 from .logger import logger, setup_logger
-from .model_cache import ModelCache
+
+# Note: ModelCache requires transformers and is not imported by default
+# Use: from samrfi.utils.model_cache import ModelCache
 
 __all__ = [
-    "ModelCache",
     "logger",
     "setup_logger",
     "SAMRFIError",

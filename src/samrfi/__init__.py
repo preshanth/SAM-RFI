@@ -35,22 +35,24 @@ config : Configuration management
 
 Usage:
 ------
->>> from samrfi.data.ms_loader import MSLoader
->>> from samrfi.data import Preprocessor
->>> from samrfi.training import SAM2Trainer
->>> from samrfi.inference import RFIPredictor
+>>> # Core data operations (no GPU/CASA required)
+>>> from samrfi.data import Preprocessor, TorchDataset
+>>> from samrfi.data_generation import SyntheticDataGenerator
 >>>
->>> # Load and preprocess data
+>>> # Optional: CASA-dependent operations
+>>> from samrfi.data.ms_loader import MSLoader  # Requires pip install samrfi[casa]
+>>>
+>>> # Optional: GPU/transformers-dependent operations
+>>> from samrfi.training import SAM2Trainer  # Requires pip install samrfi[gpu]
+>>> from samrfi.inference import RFIPredictor  # Requires pip install samrfi[gpu]
+>>>
+>>> # Full workflow example (requires [gpu,casa])
 >>> loader = MSLoader('observation.ms')
 >>> loader.load(num_antennas=5)
 >>> preprocessor = Preprocessor(loader.data)
 >>> dataset = preprocessor.create_dataset(patch_size=128)
->>>
->>> # Train model
 >>> trainer = SAM2Trainer(dataset, device='cuda')
 >>> trainer.train(num_epochs=10, batch_size=4)
->>>
->>> # Predict RFI
 >>> predictor = RFIPredictor('model.pth', device='cuda')
 >>> flags = predictor.predict_ms('observation.ms')
 """
@@ -58,6 +60,7 @@ Usage:
 __version__ = "2.0.0"
 __author__ = "Derod Deal, Preshanth Jagannathan"
 
+# Config module - always available
 # Data module
 # Config module
 from .config import ConfigLoader
@@ -73,18 +76,14 @@ from .data import (
 # Data generation module
 from .data_generation import SyntheticDataGenerator
 
-# Inference module
-from .inference import RFIPredictor
-
-# Training module
-from .training import SAM2Trainer
-
-# Utilities
-from .utils import ModelCache
-
 # Note: MSLoader and MSDataGenerator require CASA and are not imported by default
 # Use: from samrfi.data.ms_loader import MSLoader
 # Use: from samrfi.data_generation.ms_generator import MSDataGenerator
+
+# Note: ModelCache, RFIPredictor, and SAM2Trainer require transformers and are not imported by default
+# Use: from samrfi.utils.model_cache import ModelCache
+# Use: from samrfi.inference import RFIPredictor
+# Use: from samrfi.training import SAM2Trainer
 
 
 __all__ = [
@@ -97,12 +96,6 @@ __all__ = [
     "HFDatasetWrapper",
     # Data generation
     "SyntheticDataGenerator",
-    # Training
-    "SAM2Trainer",
-    # Inference
-    "RFIPredictor",
     # Config
     "ConfigLoader",
-    # Utils
-    "ModelCache",
 ]
