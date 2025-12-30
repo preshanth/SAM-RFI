@@ -92,11 +92,29 @@ class RFIPredictor:
         Initialize predictor.
 
         Args:
-            model_path: Path to trained model checkpoint (.pth)
+            model_path: Path to trained model checkpoint (.pth) OR HuggingFace repo ID
             sam_checkpoint: SAM2 checkpoint size (tiny, small, base_plus, large)
             device: Compute device ('cuda' or 'cpu')
             batch_size: Batch size for inference
         """
+        # Smart detection: local path OR HuggingFace repo ID
+        model_path_str = str(model_path)
+        if "/" in model_path_str and not Path(model_path).exists():
+            # Looks like HF repo ID (contains '/') and not a local path
+            logger.info(f"Detected HuggingFace model: {model_path}")
+
+            # Support both forms:
+            # 1. "user/repo/large" → extract repo and size
+            # 2. "user/repo" → use sam_checkpoint param for size
+            if model_path_str.endswith(("tiny", "small", "base_plus", "large")):
+                repo_id = model_path_str.rsplit("/", 1)[0]
+                model_size = model_path_str.rsplit("/", 1)[1]
+            else:
+                repo_id = model_path
+                model_size = sam_checkpoint
+
+            model_path = self._download_from_hf(repo_id, model_size)
+
         self.model_path = Path(model_path)
         self.device = device
         self.batch_size = batch_size
@@ -948,3 +966,37 @@ class RFIPredictor:
 
         logger.debug(f"[Reconstruction] Final shape: {full_flags.shape}")
         return full_flags
+
+    def _download_from_hf(self, repo_id: str, model_size: str) -> str:
+        """
+        Download trained model from HuggingFace Hub to local cache.
+
+        Args:
+            repo_id: HuggingFace repo ID (e.g., 'preshanth/sam-rfi-models')
+            model_size: Model size subdirectory (tiny, small, base_plus, large)
+
+        Returns:
+            Local path to downloaded model file
+        """
+        from huggingface_hub import hf_hub_download
+
+        logger.info(f"Downloading {model_size} model from {repo_id}...")
+
+        try:
+            # Download to default HF cache (respects HF_HOME env var)
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=f"{model_size}/model.pth",
+                repo_type="model",
+            )
+
+            logger.info(f"✓ Model downloaded to: {local_path}")
+            return local_path
+
+        except Exception as e:
+            logger.error(f"Failed to download model from {repo_id}: {e}")
+            logger.info(
+                "Check: (1) Internet connection, (2) Repo exists, (3) Token for private repos"
+            )
+            logger.info("For private repos, set HF_TOKEN environment variable")
+            raise

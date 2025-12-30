@@ -537,6 +537,8 @@ class SAM2Trainer:
                             "learning_rate": learning_rate,
                             "batch_size": batch_size,
                             "loss_function": loss_function,
+                            "freeze_vision_encoder": freeze_vision_encoder,
+                            "freeze_prompt_encoder": freeze_prompt_encoder,
                         },
                     }
                     torch.save(best_checkpoint, best_model_path)
@@ -563,6 +565,8 @@ class SAM2Trainer:
                 loss_function,
                 patch_size,
                 num_epochs,
+                freeze_vision_encoder,
+                freeze_prompt_encoder,
                 trained_model_path,
             )
 
@@ -589,6 +593,8 @@ class SAM2Trainer:
         loss_function,
         patch_size,
         num_epochs,
+        freeze_vision_encoder=True,
+        freeze_prompt_encoder=True,
         trained_model_path=None,
     ):
         """Save trained model checkpoint with full training state"""
@@ -652,6 +658,8 @@ class SAM2Trainer:
                 "learning_rate": learning_rate,
                 "batch_size": batch_size,
                 "loss_function": loss_function,
+                "freeze_vision_encoder": freeze_vision_encoder,
+                "freeze_prompt_encoder": freeze_prompt_encoder,
             },
         }
 

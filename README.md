@@ -579,6 +579,82 @@ python -c "from samrfi.utils.model_cache import ModelCache; ModelCache().downloa
 
 ---
 
+## HuggingFace Hub Integration
+
+SAM-RFI supports seamless integration with HuggingFace Hub for sharing and downloading trained models and datasets.
+
+### Quick Start
+
+**Download and use a published model:**
+```bash
+# Automatically downloads model from HuggingFace Hub
+samrfi predict --model polarimetic/sam-rfi/large --input observation.ms
+```
+
+**Publish your trained model:**
+```bash
+# Upload model to HuggingFace Hub
+samrfi publish --type model \
+  --input ./samrfi_data/sam2_rfi_best.pth \
+  --repo-id polarimetic/sam-rfi
+```
+
+**Publish a dataset:**
+```bash
+# Upload training dataset
+samrfi publish --type dataset \
+  --input ./datasets/train_4k/exact_masks \
+  --repo-id polarimetic/sam-rfi-dataset
+```
+
+### Features
+
+- **Automatic Model Downloads**: Models are downloaded and cached on first use
+- **Smart Path Detection**: CLI accepts both local paths and HuggingFace repo IDs
+- **Private Repositories**: Support for private models with token authentication
+- **Model Cards**: Auto-generated documentation with training metrics
+- **Latest Versioning**: Simple "latest" approach per model size
+
+### Python API
+
+```python
+from samrfi.inference import RFIPredictor
+
+# Initialize with HuggingFace model (auto-downloads if needed)
+predictor = RFIPredictor(
+    model_path="polarimetic/sam-rfi/large",
+    device="cuda"
+)
+
+# Use normally
+flags = predictor.predict_ms("observation.ms")
+```
+
+### Cache Management
+
+Models are cached at `~/.cache/huggingface/hub/` after first download. Set custom location:
+
+```bash
+export HF_HOME=/path/to/custom/cache
+```
+
+### Authentication
+
+For private repositories, set your HuggingFace token:
+
+```bash
+export HF_TOKEN=hf_xxxxx
+samrfi publish --type model --input model.pth --repo-id user/private-repo --private
+```
+
+Get your token from: https://huggingface.co/settings/tokens
+
+### Complete Guide
+
+For detailed documentation including troubleshooting, batch publishing, and advanced usage, see [HuggingFace Integration Guide](docs/HuggingFace.md).
+
+---
+
 ## Training
 
 ### Resume Training

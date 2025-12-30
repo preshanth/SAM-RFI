@@ -258,6 +258,18 @@ def validate_config_command(args):
         return 1
 
 
+def publish_command(args):
+    """Dispatcher for publishing datasets or models to HuggingFace Hub"""
+    publish_type = getattr(args, "type", "dataset")
+
+    if publish_type == "dataset":
+        publish_dataset_command(args)
+    elif publish_type == "model":
+        publish_model_command(args)
+    else:
+        raise ValueError(f"Unknown publish type: {publish_type}")
+
+
 def publish_dataset_command(args):
     """Publish dataset (BatchedDataset or TorchDataset) to HuggingFace Hub"""
     from .data.hf_dataset_wrapper import HFDatasetWrapper
@@ -283,6 +295,94 @@ def publish_dataset_command(args):
     print("✓ Dataset Published!")
     print("=" * 60)
     print(f"URL: https://huggingface.co/datasets/{args.repo_id}")
+
+
+def publish_model_command(args):
+    """Publish trained model to HuggingFace Hub"""
+    import torch
+    from huggingface_hub import HfApi, create_repo
+
+    from .utils.model_card import generate_model_card
+
+    print("=" * 60)
+    print("SAM-RFI Model Publishing")
+    print("=" * 60)
+
+    # Load checkpoint to extract metadata
+    print(f"\nLoading checkpoint from: {args.input}")
+    checkpoint = torch.load(args.input, map_location="cpu")
+    print("  ✓ Checkpoint loaded")
+
+    # Auto-detect model size from config (or use --model-size)
+    model_size = args.model_size or checkpoint.get("config", {}).get("sam_checkpoint", "unknown")
+
+    if model_size == "unknown":
+        logger.warning("Could not detect model size from checkpoint. Use --model-size flag.")
+        raise ValueError(
+            "Model size required for upload. Use --model-size {tiny,small,base_plus,large}"
+        )
+
+    print(f"  Detected model size: {model_size}")
+
+    # Generate model card
+    print("\nGenerating model card...")
+    model_card = generate_model_card(checkpoint, model_size)
+    print("  ✓ Model card generated")
+
+    # Create repo if doesn't exist
+    print(f"\nPreparing HuggingFace repository: {args.repo_id}")
+    api = HfApi(token=args.token)
+
+    try:
+        create_repo(
+            args.repo_id, repo_type="model", exist_ok=True, private=args.private, token=args.token
+        )
+        print("  ✓ Repository ready")
+    except Exception as e:
+        logger.error(f"Failed to create repository: {e}")
+        raise
+
+    # Upload model file to size-specific subdirectory
+    print(f"\nUploading model to {model_size}/model.pth...")
+    try:
+        api.upload_file(
+            path_or_fileobj=args.input,
+            path_in_repo=f"{model_size}/model.pth",
+            repo_id=args.repo_id,
+            repo_type="model",
+            token=args.token,
+        )
+        print("  ✓ Model uploaded")
+    except Exception as e:
+        logger.error(f"Failed to upload model: {e}")
+        raise
+
+    # Upload model card (README.md)
+    print("\nUploading model card (README.md)...")
+    try:
+        from io import BytesIO
+
+        model_card_bytes = BytesIO(model_card.encode("utf-8"))
+        api.upload_file(
+            path_or_fileobj=model_card_bytes,
+            path_in_repo="README.md",
+            repo_id=args.repo_id,
+            repo_type="model",
+            token=args.token,
+        )
+        print("  ✓ Model card uploaded")
+    except Exception as e:
+        logger.error(f"Failed to upload model card: {e}")
+        raise
+
+    print("\n" + "=" * 60)
+    print("✓ Model Published!")
+    print("=" * 60)
+    print(f"Model size: {model_size}")
+    print(f"URL: https://huggingface.co/{args.repo_id}")
+    print(f"Path in repo: {model_size}/model.pth")
+    print("\nUsage:")
+    print(f"  samrfi predict --model {args.repo_id}/{model_size} --input observation.ms")
 
 
 def predict_command(args):
@@ -425,10 +525,16 @@ Examples:
   samrfi train --config configs/sam2_training.yaml --dataset ./datasets/train_4k/exact_masks.pt --validation-dataset ./datasets/val_1k/exact_masks.pt
 
   # Publish dataset to HuggingFace Hub
-  samrfi publish --input ./datasets/train_4k/exact_masks.pt --repo-id username/sam-rfi-dataset
+  samrfi publish --type dataset --input ./datasets/train_4k/exact_masks.pt --repo-id username/sam-rfi-dataset
 
-  # Predict (single pass)
+  # Publish trained model to HuggingFace Hub
+  samrfi publish --type model --input ./models/sam2_rfi_best.pth --repo-id username/sam-rfi-models
+
+  # Predict (single pass) - local model
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
+
+  # Predict (single pass) - HuggingFace model
+  samrfi predict --model polarimetic/sam-rfi/large --input observation.ms
 
   # Predict (iterative - 3 passes)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms --iterations 3
@@ -489,20 +595,44 @@ Examples:
     validate_parser.add_argument("--config", required=True, help="Path to YAML configuration file")
 
     # Publish command
-    publish_parser = subparsers.add_parser("publish", help="Publish dataset to HuggingFace Hub")
-    publish_parser.add_argument("--input", required=True, help="Path to .pt dataset")
-    publish_parser.add_argument(
-        "--repo-id", required=True, help="HuggingFace repo ID (username/dataset-name)"
+    publish_parser = subparsers.add_parser(
+        "publish", help="Publish dataset or model to HuggingFace Hub"
     )
-    publish_parser.add_argument("--private", action="store_true", help="Make dataset private")
+    publish_parser.add_argument(
+        "--type",
+        choices=["dataset", "model"],
+        default="dataset",
+        help="Publish dataset or trained model (default: dataset)",
+    )
+    publish_parser.add_argument(
+        "--input", required=True, help="Path to .pt dataset or .pth model checkpoint"
+    )
+    publish_parser.add_argument(
+        "--repo-id",
+        required=True,
+        help="HuggingFace repo ID (username/repo-name)",
+    )
+    publish_parser.add_argument("--private", action="store_true", help="Make repository private")
     publish_parser.add_argument("--token", help="HuggingFace token (or set HF_TOKEN env var)")
     publish_parser.add_argument(
-        "--batch-size", type=int, default=50, help="Batch size for conversion (default: 50)"
+        "--batch-size",
+        type=int,
+        default=50,
+        help="[Dataset only] Batch size for conversion (default: 50)",
+    )
+    publish_parser.add_argument(
+        "--model-size",
+        choices=["tiny", "small", "base_plus", "large"],
+        help="[Model only] Model size (auto-detected from checkpoint if not specified)",
     )
 
     # Predict command
     predict_parser = subparsers.add_parser("predict", help="Apply trained model to flag RFI")
-    predict_parser.add_argument("--model", required=True, help="Path to trained model (.pth file)")
+    predict_parser.add_argument(
+        "--model",
+        required=True,
+        help="Path to trained model (.pth file) OR HuggingFace repo ID (e.g., user/repo/large)",
+    )
     predict_parser.add_argument("--input", required=True, help="Path to input measurement set")
     predict_parser.add_argument(
         "--checkpoint",
@@ -586,7 +716,7 @@ Examples:
         elif args.command == "validate-config":
             return validate_config_command(args)
         elif args.command == "publish":
-            publish_dataset_command(args)
+            publish_command(args)
             return 0
         elif args.command == "predict":
             predict_command(args)
