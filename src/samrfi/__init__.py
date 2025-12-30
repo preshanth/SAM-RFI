@@ -64,14 +64,20 @@ from .data import (
     BatchedDataset,
     BatchWriter,
     HFDatasetWrapper,
-    MSLoader,
     Preprocessor,
     SAMDataset,
     TorchDataset,
 )
 
+# Optional CASA-dependent imports
+try:
+    from .data import MSLoader
+    from .data_generation import MSDataGenerator
+except ImportError:
+    pass  # MSLoader and MSDataGenerator require CASA
+
 # Data generation module
-from .data_generation import MSDataGenerator, SyntheticDataGenerator
+from .data_generation import SyntheticDataGenerator
 
 # Inference module
 from .inference import RFIPredictor
