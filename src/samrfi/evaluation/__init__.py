@@ -7,6 +7,7 @@ for sharing across ML methods. This module provides forward-compatibility import
 
 # Forward imports from rfi_toolbox (shared metrics)
 from rfi_toolbox.evaluation import (
+    compute_calcquality,
     compute_dice,
     compute_f1,
     compute_ffi,
@@ -31,6 +32,7 @@ __all__ = [
     "evaluate_segmentation",
     "compute_statistics",
     "compute_ffi",
+    "compute_calcquality",
     "print_statistics_comparison",
     "inject_synthetic_data",
 ]
