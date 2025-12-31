@@ -1,21 +1,26 @@
 """
 Evaluation metrics and validation tools for RFI segmentation
+
+NOTE: Core metrics (IoU, F1, Dice, FFI, statistics) have been moved to rfi_toolbox
+for sharing across ML methods. This module provides forward-compatibility imports.
 """
 
-from .metrics import (
+# Forward imports from rfi_toolbox (shared metrics)
+from rfi_toolbox.evaluation import (
     compute_dice,
     compute_f1,
+    compute_ffi,
     compute_iou,
     compute_precision,
     compute_recall,
-    evaluate_segmentation,
-)
-from .statistics import (
-    compute_calcquality,
-    compute_ffi,
     compute_statistics,
+    evaluate_segmentation,
     print_statistics_comparison,
 )
+from rfi_toolbox.io import inject_synthetic_data
+
+# SAM2-specific evaluation (if any remain in local files)
+# Currently all metrics are in rfi_toolbox
 
 __all__ = [
     "compute_iou",
@@ -26,14 +31,6 @@ __all__ = [
     "evaluate_segmentation",
     "compute_statistics",
     "compute_ffi",
-    "compute_calcquality",
     "print_statistics_comparison",
+    "inject_synthetic_data",
 ]
-
-# Optional CASA dependency for MS injection
-try:
-    from .ms_injection import inject_synthetic_data
-
-    __all__.append("inject_synthetic_data")
-except ImportError:
-    pass  # CASA not available

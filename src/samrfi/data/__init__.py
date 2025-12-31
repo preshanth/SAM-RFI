@@ -1,23 +1,35 @@
 """
 Data module - MS loading, preprocessing, and dataset creation
+
+NOTE: Core data utilities (MSLoader, Preprocessor, TorchDataset, BatchWriter)
+have been moved to rfi_toolbox for sharing across ML methods.
+This module provides forward-compatibility imports.
 """
 
+from rfi_toolbox.datasets import BatchWriter, TorchDataset
+
+# Forward imports from rfi_toolbox (shared utilities)
+from rfi_toolbox.io import MSLoader
+from rfi_toolbox.preprocessing import GPUPreprocessor, Preprocessor
+
+# SAM2-specific modules (stay in samrfi)
 from .adaptive_patcher import AdaptivePatcher, check_ms_compatibility
 from .gpu_dataset import GPUBatchTransformDataset, GPUTransformDataset
 from .gpu_transforms import GPUTransforms, create_gpu_transforms
 from .hf_dataset_wrapper import HFDatasetWrapper
-from .preprocessor import GPUPreprocessor, Preprocessor
 from .ram_dataset import RAMCachedDataset
 from .sam_dataset import BatchedDataset, SAMDataset
-from .torch_dataset import BatchWriter, TorchDataset
 
 __all__ = [
+    # Shared utilities (from rfi_toolbox)
+    "MSLoader",
     "Preprocessor",
     "GPUPreprocessor",
-    "SAMDataset",
-    "BatchedDataset",
     "TorchDataset",
     "BatchWriter",
+    # SAM2-specific
+    "SAMDataset",
+    "BatchedDataset",
     "HFDatasetWrapper",
     "AdaptivePatcher",
     "check_ms_compatibility",
@@ -27,6 +39,3 @@ __all__ = [
     "GPUBatchTransformDataset",
     "RAMCachedDataset",
 ]
-
-# Note: MSLoader requires CASA and is not imported by default
-# Use: from samrfi.data.ms_loader import MSLoader

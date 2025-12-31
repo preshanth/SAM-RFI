@@ -35,6 +35,8 @@ dependencies = [
     "datasets>=2.10.0",
     "patchify>=0.2.3",
     "scikit-image>=0.20.0",
+    # NOTE: Most dependencies now come via rfi_toolbox
+    # Keeping explicit versions here for compatibility
 ]
 
 [project.optional-dependencies]
