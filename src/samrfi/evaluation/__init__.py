@@ -1,38 +1,16 @@
 """
 Evaluation metrics and validation tools for RFI segmentation
 
-NOTE: Core metrics (IoU, F1, Dice, FFI, statistics) have been moved to rfi_toolbox
-for sharing across ML methods. This module provides forward-compatibility imports.
+NOTE: Metrics are in rfi_toolbox. Import directly:
+    from rfi_toolbox.evaluation import (
+        compute_iou, compute_f1, compute_dice, compute_ffi,
+        compute_precision, compute_recall, evaluate_segmentation,
+        compute_statistics, print_statistics_comparison
+    )
+    from rfi_toolbox.io import inject_synthetic_data
 """
 
-# Forward imports from rfi_toolbox (shared metrics)
-from rfi_toolbox.evaluation import (
-    compute_calcquality,
-    compute_dice,
-    compute_f1,
-    compute_ffi,
-    compute_iou,
-    compute_precision,
-    compute_recall,
-    compute_statistics,
-    evaluate_segmentation,
-    print_statistics_comparison,
-)
-from rfi_toolbox.io import inject_synthetic_data
-
-# SAM2-specific evaluation (if any remain in local files)
+# SAM2-specific evaluation tools would go here
 # Currently all metrics are in rfi_toolbox
 
-__all__ = [
-    "compute_iou",
-    "compute_precision",
-    "compute_recall",
-    "compute_f1",
-    "compute_dice",
-    "evaluate_segmentation",
-    "compute_statistics",
-    "compute_ffi",
-    "compute_calcquality",
-    "print_statistics_comparison",
-    "inject_synthetic_data",
-]
+__all__ = []

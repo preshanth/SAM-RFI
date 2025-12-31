@@ -6,8 +6,7 @@ Tests the metrics module used for validation and comparison.
 
 import numpy as np
 import torch
-
-from samrfi.evaluation import (
+from rfi_toolbox.evaluation import (
     compute_calcquality,
     compute_dice,
     compute_f1,
