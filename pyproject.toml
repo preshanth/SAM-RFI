@@ -25,6 +25,8 @@ requires-python = ">=3.10"
 
 # Core dependencies (CPU-only, minimal)
 dependencies = [
+    # rfi_toolbox: Shared RFI utilities (io, preprocessing, evaluation, datasets)
+    "rfi_toolbox @ git+https://github.com/preshanth/rfi_toolbox.git@updates",
     "numpy>=1.26.0",
     "scipy>=1.10.0",
     "pandas>=2.2.0",
@@ -33,10 +35,7 @@ dependencies = [
     "tqdm>=4.65.0",
     "matplotlib>=3.7.0",
     "datasets>=2.10.0",
-    "patchify>=0.2.3",
     "scikit-image>=0.20.0",
-    # NOTE: Most dependencies now come via rfi_toolbox
-    # Keeping explicit versions here for compatibility
 ]
 
 [project.optional-dependencies]

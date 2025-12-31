@@ -9,12 +9,34 @@ from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import torch
-from patchify import patchify
 from scipy import stats
 
 from samrfi.utils import logger
 
 from .torch_dataset import TorchDataset
+
+
+def patchify(array, patch_shape, step):
+    """
+    Extract patches from 2D array using torch.unfold (replaces patchify library).
+
+    Args:
+        array: 2D numpy array (H, W)
+        patch_shape: Tuple (patch_h, patch_w)
+        step: Step size for patch extraction
+
+    Returns:
+        4D array (n_patches_h, n_patches_w, patch_h, patch_w)
+    """
+    patch_h, patch_w = patch_shape
+    tensor = torch.from_numpy(array)
+
+    # Use unfold to extract patches: (H, W) -> (n_h, n_w, patch_h, patch_w)
+    patches = tensor.unfold(0, patch_h, step).unfold(1, patch_w, step)
+
+    # Rearrange to match patchify output format
+    patches = patches.contiguous().numpy()
+    return patches
 
 
 # Standalone functions for multiprocessing (must be picklable)
