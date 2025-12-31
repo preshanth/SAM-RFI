@@ -1,8 +1,15 @@
-"""Data generation modules for SAM-RFI"""
+"""Data generation modules for SAM-RFI
 
-from .synthetic_generator import SyntheticDataGenerator
+NOTE: SyntheticDataGenerator has been moved to rfi_toolbox for sharing across ML methods.
+For backward compatibility, we provide both:
+- rfi_toolbox.data_generation.SyntheticDataGenerator (recommended)
+- samrfi.data_generation.synthetic_generator.SyntheticDataGenerator (deprecated, will be removed)
+"""
 
-__all__ = ["SyntheticDataGenerator"]
+# Forward import from rfi_toolbox (recommended)
+from rfi_toolbox.data_generation import SyntheticDataGenerator
 
-# Note: MSDataGenerator requires CASA and is not imported by default
-# Use: from samrfi.data_generation.ms_generator import MSDataGenerator
+# SAM2-specific data generation
+from .ms_generator import MSDataGenerator
+
+__all__ = ["SyntheticDataGenerator", "MSDataGenerator"]
