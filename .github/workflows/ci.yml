@@ -38,11 +38,10 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/unit -v -m "not requires_casa"
-
+            OMP_NUM_THREADS=1 pytest tests/unit -v -m "not requires_casa"
       - name: Run integration tests
         run: |
-          pytest tests/integration -v -m "not requires_casa"
+            OMP_NUM_THREADS=1 pytest tests/integration -v -m "not requires_casa"
 
   code-quality:
     name: Code Quality
