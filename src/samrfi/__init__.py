@@ -35,12 +35,13 @@ config : Configuration management
 
 Usage:
 ------
->>> # Core data operations (no GPU/CASA required)
->>> from samrfi.data import Preprocessor, TorchDataset
+>>> # Core data operations
+>>> from rfi_toolbox.preprocessing import Preprocessor
+>>> from rfi_toolbox.datasets import TorchDataset
 >>> from samrfi.data_generation import SyntheticDataGenerator
 >>>
 >>> # Optional: CASA-dependent operations
->>> from samrfi.data.ms_loader import MSLoader  # Requires pip install samrfi[casa]
+>>> from rfi_toolbox.io import MSLoader  # Requires pip install samrfi[casa]
 >>>
 >>> # Optional: GPU/transformers-dependent operations
 >>> from samrfi.training import SAM2Trainer  # Requires pip install samrfi[gpu]
@@ -60,24 +61,21 @@ Usage:
 __version__ = "2.0.0"
 __author__ = "Derod Deal, Preshanth Jagannathan"
 
-# Config module - always available
-# Data module
 # Config module
 from .config import ConfigLoader
-from .data import (
-    BatchedDataset,
-    BatchWriter,
-    HFDatasetWrapper,
-    Preprocessor,
-    SAMDataset,
-    TorchDataset,
-)
+
+# SAM2-specific data modules
+from .data import BatchedDataset, HFDatasetWrapper, SAMDataset
 
 # Data generation module
 from .data_generation import SyntheticDataGenerator
 
-# Note: MSLoader and MSDataGenerator require CASA and are not imported by default
-# Use: from samrfi.data.ms_loader import MSLoader
+# Note: Shared utilities (MSLoader, Preprocessor, BatchWriter, TorchDataset)
+# are in rfi_toolbox. Import directly when needed:
+#   from rfi_toolbox.io import MSLoader
+#   from rfi_toolbox.preprocessing import Preprocessor
+#   from rfi_toolbox.datasets import BatchWriter, TorchDataset
+# Note: MSDataGenerator requires CASA and is not imported by default
 # Use: from samrfi.data_generation.ms_generator import MSDataGenerator
 
 # Note: ModelCache, RFIPredictor, and SAM2Trainer require transformers and are not imported by default

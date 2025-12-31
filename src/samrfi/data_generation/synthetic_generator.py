@@ -7,9 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from rfi_toolbox.preprocessing import Preprocessor
 from tqdm import tqdm
-
-from samrfi.data import Preprocessor
 
 # Global generator instance for multiprocessing workers
 _global_generator = None

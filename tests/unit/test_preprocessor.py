@@ -6,8 +6,7 @@ Tests the preprocessing pipeline including our critical patchification fix.
 
 import numpy as np
 import torch
-
-from samrfi.data import Preprocessor
+from rfi_toolbox.preprocessing import Preprocessor
 
 
 class TestPatchification:

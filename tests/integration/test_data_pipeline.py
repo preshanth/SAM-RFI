@@ -13,7 +13,7 @@ class TestPreprocessingPipeline:
 
     def test_complex_data_to_dataset(self, synthetic_data_with_rfi):
         """Test complete pipeline from complex data to TorchDataset."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_data_with_rfi["data"]
         flags = synthetic_data_with_rfi["flags"]
@@ -46,7 +46,7 @@ class TestPreprocessingPipeline:
 
     def test_preprocessing_metadata_consistency(self, synthetic_waterfall_small):
         """Test that metadata remains consistent through preprocessing."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_waterfall_small[np.newaxis, ...]
 
@@ -84,7 +84,7 @@ class TestInferencePipelineIntegration:
 
     def test_metadata_flows_to_reconstruction(self, synthetic_data_with_rfi):
         """Test that metadata flows from preprocessing to reconstruction."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_data_with_rfi["data"]
 
@@ -127,7 +127,7 @@ class TestPipelineRobustness:
 
     def test_pipeline_handles_single_baseline(self, synthetic_waterfall_small):
         """Test pipeline works with single baseline."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         # Single baseline
         data = synthetic_waterfall_small[np.newaxis, ...]
@@ -143,7 +143,7 @@ class TestPipelineRobustness:
 
     def test_pipeline_handles_multiple_baselines(self, synthetic_waterfall_small):
         """Test pipeline works with multiple baselines."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         # 3 baselines
         data = np.stack([synthetic_waterfall_small] * 3)
@@ -159,7 +159,7 @@ class TestPipelineRobustness:
 
     def test_pipeline_preserves_data_integrity(self, synthetic_data_with_rfi):
         """Test that preprocessing doesn't corrupt data."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_data_with_rfi["data"]
         original_data = data.copy()
@@ -182,7 +182,7 @@ class TestAugmentationConsistency:
 
     def test_augmentation_matches_num_rotations(self, synthetic_waterfall_small):
         """Test that enabling augmentation creates expected number of patches."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_waterfall_small[np.newaxis, ...]
 
@@ -206,7 +206,7 @@ class TestAugmentationConsistency:
 
     def test_inference_mode_disables_blank_removal(self, synthetic_waterfall_small):
         """Test that inference mode preserves all patches (no blank removal)."""
-        from samrfi.data import Preprocessor
+        from rfi_toolbox.preprocessing import Preprocessor
 
         data = synthetic_waterfall_small[np.newaxis, ...]
 

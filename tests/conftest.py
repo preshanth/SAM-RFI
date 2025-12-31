@@ -233,7 +233,7 @@ def mock_torch_dataset():
     if not TORCH_AVAILABLE:
         pytest.skip("torch not available")
 
-    from samrfi.data import TorchDataset
+    from rfi_toolbox.datasets import TorchDataset
 
     # Create mock images (10 samples, 256×256×3)
     images = torch.randn(10, 256, 256, 3, dtype=torch.float32)
