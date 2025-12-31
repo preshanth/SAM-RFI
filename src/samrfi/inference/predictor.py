@@ -8,11 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from rfi_toolbox.io import MSLoader
+from rfi_toolbox.preprocessing import Preprocessor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import Sam2Model, Sam2Processor
 
-from samrfi.data import AdaptivePatcher, MSLoader, Preprocessor, SAMDataset
+from samrfi.data import AdaptivePatcher, SAMDataset
 from samrfi.utils import logger
 from samrfi.utils.errors import CheckpointMismatchError
 
