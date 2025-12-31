@@ -33,6 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas>=2.2.0 numpy>=1.26.0 --only-binary :all:
+          pip install --no-cache-dir --upgrade "rfi_toolbox @ git+https://github.com/preshanth/rfi_toolbox.git"
           pip install -e .[ci]
 
       - name: Run unit tests
