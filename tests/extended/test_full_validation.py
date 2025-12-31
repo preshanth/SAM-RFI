@@ -25,7 +25,8 @@ class TestFullPipelineWithTinyModel:
         This is a smoke test to ensure the full pipeline works end-to-end.
         Does not train the model (too slow), just tests inference with pretrained weights.
         """
-        from samrfi.evaluation import evaluate_segmentation
+        from rfi_toolbox.evaluation import evaluate_segmentation
+
         from samrfi.inference import RFIPredictor
 
         # Get synthetic data
