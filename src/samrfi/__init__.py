@@ -38,7 +38,7 @@ Usage:
 >>> # Core data operations
 >>> from rfi_toolbox.preprocessing import Preprocessor
 >>> from rfi_toolbox.datasets import TorchDataset
->>> from samrfi.data_generation import SyntheticDataGenerator
+>>> from rfi_toolbox.data_generation import SyntheticDataGenerator
 >>>
 >>> # Optional: CASA-dependent operations
 >>> from rfi_toolbox.io import MSLoader  # Requires pip install samrfi[casa]
@@ -67,16 +67,13 @@ from .config import ConfigLoader
 # SAM2-specific data modules
 from .data import BatchedDataset, HFDatasetWrapper, SAMDataset
 
-# Data generation module
-from .data_generation import SyntheticDataGenerator
-
-# Note: Shared utilities (MSLoader, Preprocessor, BatchWriter, TorchDataset)
-# are in rfi_toolbox. Import directly when needed:
+# Note: Shared utilities from rfi_toolbox - import directly when needed:
 #   from rfi_toolbox.io import MSLoader
 #   from rfi_toolbox.preprocessing import Preprocessor
 #   from rfi_toolbox.datasets import BatchWriter, TorchDataset
+#   from rfi_toolbox.data_generation import SyntheticDataGenerator
 # Note: MSDataGenerator requires CASA and is not imported by default
-# Use: from samrfi.data_generation.ms_generator import MSDataGenerator
+# Use: from samrfi.data_generation import MSDataGenerator
 
 # Note: ModelCache, RFIPredictor, and SAM2Trainer require transformers and are not imported by default
 # Use: from samrfi.utils.model_cache import ModelCache
