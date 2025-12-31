@@ -6,11 +6,14 @@ have been moved to rfi_toolbox for sharing across ML methods.
 This module provides forward-compatibility imports.
 """
 
-from rfi_toolbox.datasets import BatchWriter, TorchDataset
+from rfi_toolbox.datasets.batched_dataset import BatchWriter, TorchDataset
 
 # Forward imports from rfi_toolbox (shared utilities)
-from rfi_toolbox.io import MSLoader
-from rfi_toolbox.preprocessing import GPUPreprocessor, Preprocessor
+try:
+    from rfi_toolbox.io.ms_loader import MSLoader
+except ImportError:
+    MSLoader = None  # CASA not available
+from rfi_toolbox.preprocessing.preprocessor import GPUPreprocessor, Preprocessor
 
 # SAM2-specific modules (stay in samrfi)
 from .adaptive_patcher import AdaptivePatcher, check_ms_compatibility
