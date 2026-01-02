@@ -432,9 +432,21 @@ class RFIPredictor:
             patch_size, stretch, normalize_before_stretch, normalize_after_stretch
         )
 
-        data_shape = data.shape
-        logger.info(f"  Input shape: {data_shape}")
+        original_data_shape = data.shape
+        logger.info(f"  Input shape: {original_data_shape}")
         logger.info(f"  Data dtype: {data.dtype}, complex: {np.iscomplexobj(data)}")
+
+        # Setup adaptive padding (same as predict_ms)
+        baselines, pols, channels, times = original_data_shape
+        patcher = AdaptivePatcher(original_data_shape, patch_size=patch_size)
+
+        # Pad data if needed
+        if patcher.pad_channels > 0 or patcher.pad_times > 0:
+            print("  Applying adaptive padding...")
+            data = patcher.pad_data(data)
+
+        # Update data_shape to padded dimensions
+        data_shape = data.shape
 
         # Preprocess (pass complex data directly - Preprocessor will extract features)
         logger.info("\nPreprocessing data...")
@@ -466,36 +478,9 @@ class RFIPredictor:
         # Extract augmentation state from dataset metadata
         num_rotations = getattr(dataset, "metadata", {}).get("augmentation_rotations", 1)
 
-        # Get padded shape for reconstruction loop
-        metadata = getattr(dataset, "metadata", {})
-        original_shapes = metadata.get("original_shapes")
-        if original_shapes is not None and len(original_shapes) > 0:
-            orig_channels, orig_times = original_shapes[0]
-            # Calculate padded dimensions
-            baselines, pols, channels, times = data_shape
-
-            pad_channels = 0
-            if orig_channels < patch_size:
-                pad_channels = patch_size - orig_channels
-            elif orig_channels % patch_size != 0:
-                pad_channels = patch_size - (orig_channels % patch_size)
-
-            pad_times = 0
-            if orig_times < patch_size:
-                pad_times = patch_size - orig_times
-            elif orig_times % patch_size != 0:
-                pad_times = patch_size - (orig_times % patch_size)
-
-            padded_shape = (baselines, pols, orig_channels + pad_channels, orig_times + pad_times)
-            logger.debug(
-                f"[predict_array] Using padded shape for reconstruction: {data_shape} → {padded_shape}"
-            )
-            recon_shape = padded_shape
-        else:
-            recon_shape = data_shape
-
+        # Use padded data_shape for reconstruction (data was already padded before preprocessing)
         result = self._reconstruct_flags(
-            predicted_patches, recon_shape, patch_size, num_rotations, dataset=dataset
+            predicted_patches, data_shape, patch_size, num_rotations, dataset=dataset
         )
 
         # Save probabilities if requested
@@ -510,6 +495,11 @@ class RFIPredictor:
             thresh = result.mean() if threshold is None else threshold
             logger.info(f"  Applying threshold: {thresh:.4f}")
             result = result > thresh
+
+        # Crop to original dimensions if padding was used
+        if patcher.pad_channels > 0 or patcher.pad_times > 0:
+            logger.info("  Cropping to original dimensions...")
+            result = patcher.crop_flags(result)
 
         if return_probabilities or save_probabilities is not None:
             logger.info(

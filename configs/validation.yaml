@@ -14,11 +14,11 @@ synthetic:
 
   # RFI type counts (how many instances of each type to generate)
   rfi_type_counts:
-    broadband_persistent: 4      # ~20% coverage
-    narrowband_persistent: 10    # ~2.5% coverage
-    narrowband_bursty: 15        # ~15% coverage
-    broadband_bursty: 1          # ~2% coverage
-    narrowband_intermittent: 1   # ~1% coverage
+    broadband_persistent: 5      # ~20% coverage
+    narrowband_persistent: 20    # ~2.5% coverage
+    narrowband_bursty: 20        # ~15% coverage
+    broadband_bursty: 2          # ~2% coverage
+    narrowband_intermittent: 5   # ~1% coverage
     # Total: ~40% coverage
 
 processing:

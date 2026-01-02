@@ -9,10 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from rfi_toolbox.io import MSLoader
 
 from .config import validate_all
 from .config.config_loader import ConfigLoader
-from .data import MSLoader
 from .data_generation.ms_generator import MSDataGenerator
 from .data_generation.synthetic_generator import SyntheticDataGenerator
 from .evaluation.metrics import evaluate_segmentation

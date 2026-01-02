@@ -19,12 +19,11 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+from rfi_toolbox.data_generation import SyntheticDataGenerator
+from rfi_toolbox.io import MSLoader, inject_synthetic_data
 from tqdm import tqdm
 
 from samrfi.config import ConfigLoader
-from samrfi.data import MSLoader
-from samrfi.data_generation import SyntheticDataGenerator
-from samrfi.evaluation import inject_synthetic_data
 
 
 def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
@@ -48,23 +47,36 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
     print(f"{'='*70}")
     print(f"Input MS: {input_ms}")
 
-    # Load MS to get dimensions
-    print("\n[1/4] Loading MS structure...")
+    # Get MS metadata without loading data (fast)
+    print("\n[1/4] Getting MS metadata...")
     loader = MSLoader(input_ms)
-    loader.load(mode="DATA")
+    metadata = loader.get_metadata(mode="DATA")
 
-    baselines, pols, channels, times = loader.data.shape
-    print(f"  MS shape: {loader.data.shape}")
+    baselines = metadata["num_baselines"]
+    pols = metadata["num_pols"]
+    channels = metadata["num_channels"]
+    times = metadata["num_times"]
+    baseline_map = metadata["baseline_map"]
+
+    print(f"  MS shape: {metadata['shape']}")
     print(f"  Baselines: {baselines}")
     print(f"  Pols: {pols}")
     print(f"  Channels: {channels}")
     print(f"  Times: {times}")
 
-    baseline_map = loader.antenna_baseline_map
+    # Create working MS first (copy before any operations)
+    print("\n[2/4] Creating working MS...")
+    work_ms = output_dir / "synthetic_rfi.ms"
+
+    if work_ms.exists():
+        shutil.rmtree(work_ms)
+
+    shutil.copytree(input_ms, work_ms)
+    print(f"  Copied: {input_ms} → {work_ms}")
     loader.close()
 
-    # Generate synthetic RFI
-    print(f"\n[2/4] Generating synthetic RFI ({baselines} baselines)...")
+    # Generate and inject baseline-by-baseline
+    print(f"\n[3/4] Generating and injecting synthetic RFI ({baselines} baselines)...")
 
     synth_config = config.synthetic
     generator = SyntheticDataGenerator(config)
@@ -84,51 +96,46 @@ def inject_rfi_into_ms(input_ms, config, output_dir="./synthetic_injection"):
         "synth_config": synth_config,
     }
 
-    all_waterfalls = []
     all_ground_truth = []
+    total_rfi_pixels = 0
+    total_pixels = 0
 
-    for _baseline_idx in tqdm(range(baselines), desc="Generating"):
+    for _baseline_idx, (ant1, ant2) in enumerate(tqdm(baseline_map, desc="Processing baselines")):
+        # Generate synthetic data for this baseline
         waterfall, ground_truth, _ = generator._generate_single_sample(**gen_kwargs)
-        all_waterfalls.append(waterfall[0])
+
+        # Save ground truth for later
         all_ground_truth.append(ground_truth[0])
 
-    full_waterfall = np.stack(all_waterfalls)
-    full_ground_truth = np.stack(all_ground_truth)
+        # Track RFI stats
+        total_rfi_pixels += np.sum(ground_truth[0])
+        total_pixels += ground_truth[0].size
 
-    # Verify RFI fraction
-    actual_rfi_fraction = np.sum(full_ground_truth) / full_ground_truth.size
-    print(f"  Generated RFI: {actual_rfi_fraction*100:.1f}% of data")
+        # Inject this baseline into MS
+        inject_synthetic_data(
+            template_ms_path=work_ms,
+            synthetic_data=waterfall[0][np.newaxis, :, :, :],  # Add baseline dim back
+            output_ms_path=work_ms,
+            baseline_map=[(ant1, ant2)],  # Single baseline
+        )
 
     # Save ground truth
+    print("\n[4/4] Saving ground truth...")
+    full_ground_truth = np.stack(all_ground_truth)
+    actual_rfi_fraction = total_rfi_pixels / total_pixels
+
+    print(f"  Generated RFI: {actual_rfi_fraction*100:.1f}% of data")
+
     gt_path = output_dir / "ground_truth.npy"
     np.save(gt_path, full_ground_truth)
     print(f"  ✓ Saved ground truth: {gt_path}")
-
-    # Create working MS with injection
-    print("\n[3/4] Creating working MS with synthetic RFI...")
-    work_ms = output_dir / "synthetic_rfi.ms"
-
-    if work_ms.exists():
-        shutil.rmtree(work_ms)
-
-    shutil.copytree(input_ms, work_ms)
-    print(f"  Copied: {input_ms} → {work_ms}")
-
-    # Inject synthetic data
-    print("\n[4/4] Injecting synthetic RFI into MS...")
-    inject_synthetic_data(
-        template_ms_path=work_ms,
-        synthetic_data=full_waterfall,
-        output_ms_path=work_ms,
-        baseline_map=baseline_map,
-    )
 
     # Save metadata
     metadata = {
         "input_ms": str(input_ms),
         "work_ms": str(work_ms),
         "ground_truth": str(gt_path),
-        "shape": list(full_waterfall.shape),
+        "shape": list(full_ground_truth.shape),
         "rfi_fraction_actual": float(actual_rfi_fraction),
         "baselines": baselines,
         "baseline_map": baseline_map,
