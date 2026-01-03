@@ -419,37 +419,68 @@ def predict_command(args):
     # Determine if iterative
     num_iterations = args.iterations if args.iterations else 1
     is_iterative = num_iterations > 1
+    per_baseline = args.per_baseline
 
-    if is_iterative:
-        print(f"\nMode: Iterative flagging ({num_iterations} passes)")
-        flags = predictor.predict_iterative(
-            ms_path=args.input,
-            num_iterations=num_iterations,
-            num_antennas=args.num_antennas,
-            patch_size=args.patch_size,
-            stretch=stretch,
-            save_flags=not args.no_save,
-            apply_existing_flags=args.apply_existing,
-            threshold=threshold,
-        )
+    if per_baseline:
+        # Per-baseline mode (low memory)
+        if is_iterative:
+            print(f"\nMode: Iterative per-baseline ({num_iterations} passes, low memory)")
+            predictor.predict_iterative_per_baseline(
+                ms_path=args.input,
+                num_iterations=num_iterations,
+                num_antennas=args.num_antennas,
+                patch_size=args.patch_size,
+                stretch=stretch,
+                save_flags=not args.no_save,
+                threshold=threshold,
+            )
+        else:
+            print("\nMode: Per-baseline flagging (low memory)")
+            predictor.predict_ms_per_baseline(
+                ms_path=args.input,
+                num_antennas=args.num_antennas,
+                patch_size=args.patch_size,
+                stretch=stretch,
+                save_flags=not args.no_save,
+                threshold=threshold,
+            )
+        print("\n" + "=" * 60)
+        print("Prediction Complete!")
+        print("=" * 60)
+        if not args.no_save:
+            print(f"Flags saved to: {args.input}")
     else:
-        print("\nMode: Single-pass flagging")
-        flags = predictor.predict_ms(
-            ms_path=args.input,
-            num_antennas=args.num_antennas,
-            patch_size=args.patch_size,
-            stretch=stretch,
-            apply_existing_flags=args.apply_existing,
-            save_flags=not args.no_save,
-            threshold=threshold,
-        )
+        # Original mode (greedy)
+        if is_iterative:
+            print(f"\nMode: Iterative flagging ({num_iterations} passes)")
+            flags = predictor.predict_iterative(
+                ms_path=args.input,
+                num_iterations=num_iterations,
+                num_antennas=args.num_antennas,
+                patch_size=args.patch_size,
+                stretch=stretch,
+                save_flags=not args.no_save,
+                apply_existing_flags=args.apply_existing,
+                threshold=threshold,
+            )
+        else:
+            print("\nMode: Single-pass flagging")
+            flags = predictor.predict_ms(
+                ms_path=args.input,
+                num_antennas=args.num_antennas,
+                patch_size=args.patch_size,
+                stretch=stretch,
+                apply_existing_flags=args.apply_existing,
+                save_flags=not args.no_save,
+                threshold=threshold,
+            )
 
-    print("\n" + "=" * 60)
-    print("Prediction Complete!")
-    print("=" * 60)
-    print(f"Total flagged: {flags.sum()/flags.size*100:.2f}%")
-    if not args.no_save:
-        print(f"Flags saved to: {args.input}")
+        print("\n" + "=" * 60)
+        print("Prediction Complete!")
+        print("=" * 60)
+        print(f"Total flagged: {flags.sum()/flags.size*100:.2f}%")
+        if not args.no_save:
+            print(f"Flags saved to: {args.input}")
 
 
 def evaluate_command(args):
@@ -675,6 +706,11 @@ Examples:
     )
     predict_parser.add_argument(
         "--no-save", action="store_true", help="Do not save flags to MS (prediction only)"
+    )
+    predict_parser.add_argument(
+        "--per-baseline",
+        action="store_true",
+        help="Process one baseline at a time (low memory usage)",
     )
 
     # Evaluate parser

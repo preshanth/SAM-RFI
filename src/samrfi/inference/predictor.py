@@ -632,6 +632,81 @@ class RFIPredictor:
 
         return predicted_flags
 
+    def predict_ms_per_baseline(
+        self,
+        ms_path,
+        num_antennas=None,
+        patch_size=128,
+        stretch="SQRT",
+        save_flags=True,
+        normalize_before_stretch=False,
+        normalize_after_stretch=False,
+        threshold=None,
+        field_id=None,
+    ):
+        """
+        Predict on MS one baseline at a time - low memory usage.
+
+        Args:
+            ms_path: Path to measurement set
+            num_antennas: Number of antennas (None = all)
+            patch_size: Patch size for prediction
+            stretch: Stretch function ('SQRT', 'LOG10', or None)
+            save_flags: If True, save flags back to MS
+            normalize_before_stretch: Normalize before stretch
+            normalize_after_stretch: Normalize after stretch
+            threshold: Probability threshold for RFI detection
+            field_id: Optional FIELD_ID to load
+
+        Returns:
+            None (flags saved to MS if save_flags=True)
+        """
+        logger.info(f"\n{'='*60}")
+        logger.info("RFI Prediction - Per Baseline")
+        logger.info(f"{'='*60}")
+
+        # Validate preprocessing parameters
+        self._validate_preprocessing_params(
+            patch_size, stretch, normalize_before_stretch, normalize_after_stretch
+        )
+
+        # Open MS
+        loader = MSLoader(ms_path, field_id=field_id)
+        baseline_pairs = loader.get_baseline_pairs(num_antennas)
+
+        logger.info(f"\nProcessing {len(baseline_pairs)} baselines")
+        logger.info(f"  Patch size: {patch_size}")
+        logger.info("  Memory: ~1 baseline in RAM at a time")
+
+        # Process each baseline
+        for ant1, ant2 in tqdm(baseline_pairs, desc="Baselines"):
+            # Load one baseline
+            baseline_data = loader.load_baseline(ant1, ant2, mode="DATA", field_id=field_id)
+
+            # Add baseline dimension
+            baseline_data = baseline_data[np.newaxis, ...]  # (1, pols, channels, times)
+
+            # Predict
+            baseline_flags = self.predict_array(
+                baseline_data,
+                patch_size=patch_size,
+                stretch=stretch,
+                normalize_before_stretch=normalize_before_stretch,
+                normalize_after_stretch=normalize_after_stretch,
+                return_probabilities=False,
+                threshold=threshold,
+            )[
+                0
+            ]  # Remove baseline dimension
+
+            # Write flags
+            if save_flags:
+                loader.save_baseline_flags(ant1, ant2, baseline_flags, field_id=field_id)
+
+        logger.info(f"\n{'='*60}")
+        logger.info("✓ Prediction complete")
+        logger.info(f"{'='*60}")
+
     def predict_iterative(
         self,
         ms_path,
@@ -760,6 +835,92 @@ class RFIPredictor:
         logger.info(f"{'='*60}")
 
         return cumulative_flags
+
+    def predict_iterative_per_baseline(
+        self,
+        ms_path,
+        num_iterations=3,
+        num_antennas=None,
+        patch_size=128,
+        stretch="SQRT",
+        save_flags=True,
+        normalize_before_stretch=False,
+        normalize_after_stretch=False,
+        threshold=None,
+        field_id=None,
+    ):
+        """
+        Iterative prediction per baseline - low memory usage.
+
+        Args:
+            ms_path: Path to measurement set
+            num_iterations: Number of flagging passes
+            num_antennas: Number of antennas (None = all)
+            patch_size: Patch size for prediction
+            stretch: Stretch function ('SQRT', 'LOG10', or None)
+            save_flags: If True, save final flags to MS
+            normalize_before_stretch: Normalize before stretch
+            normalize_after_stretch: Normalize after stretch
+            threshold: Probability threshold for RFI detection
+            field_id: Optional FIELD_ID to load
+
+        Returns:
+            None (flags saved to MS if save_flags=True)
+        """
+        logger.info(f"\n{'='*60}")
+        logger.info(f"RFI Prediction - Iterative Per Baseline ({num_iterations} passes)")
+        logger.info(f"{'='*60}")
+
+        # Validate preprocessing parameters
+        self._validate_preprocessing_params(
+            patch_size, stretch, normalize_before_stretch, normalize_after_stretch
+        )
+
+        # Open MS
+        loader = MSLoader(ms_path, field_id=field_id)
+        baseline_pairs = loader.get_baseline_pairs(num_antennas)
+
+        logger.info(f"\nProcessing {len(baseline_pairs)} baselines")
+        logger.info(f"  Iterations: {num_iterations}")
+        logger.info("  Memory: ~1 baseline in RAM at a time")
+
+        # Process each baseline
+        for ant1, ant2 in tqdm(baseline_pairs, desc="Baselines"):
+            # Load original data
+            original_data = loader.load_baseline(ant1, ant2, mode="DATA", field_id=field_id)
+
+            # Initialize cumulative flags for this baseline
+            cumulative_flags = np.zeros(original_data.shape, dtype=bool)
+
+            # Iterative flagging for this baseline
+            for _iteration in range(num_iterations):
+                # Mask previously flagged data
+                masked_data = np.where(cumulative_flags, np.nan, original_data)
+
+                # Add baseline dimension
+                masked_data = masked_data[np.newaxis, ...]
+
+                # Predict
+                iteration_flags = self.predict_array(
+                    masked_data,
+                    patch_size=patch_size,
+                    stretch=stretch,
+                    normalize_before_stretch=normalize_before_stretch,
+                    normalize_after_stretch=normalize_after_stretch,
+                    return_probabilities=False,
+                    threshold=threshold,
+                )[0]
+
+                # Combine flags
+                cumulative_flags = cumulative_flags | iteration_flags
+
+            # Write final flags for this baseline
+            if save_flags:
+                loader.save_baseline_flags(ant1, ant2, cumulative_flags, field_id=field_id)
+
+        logger.info(f"\n{'='*60}")
+        logger.info("✓ Iterative prediction complete")
+        logger.info(f"{'='*60}")
 
     def _predict_dataset(
         self, dataset, target_size=None, return_probabilities=False, threshold=None
