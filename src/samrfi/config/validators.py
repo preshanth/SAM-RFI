@@ -1,27 +1,41 @@
 """
 Configuration validation for SAM-RFI.
 
-Validates config parameters early to provide clear error messages
+Validates configuration parameters early to provide clear error messages
 before expensive operations like training or data generation.
 """
 
 from pathlib import Path
+from typing import Any, Dict, Union
 
 from samrfi.utils.errors import ConfigValidationError
 
 
-def validate_preprocessing_config(config):
+def validate_preprocessing_config(config: Union[Dict[str, Any], Any]) -> bool:
     """
-    Validate preprocessing configuration.
+    Validate preprocessing configuration parameters.
 
-    Args:
-        config: Preprocessing config dict with keys like patch_size, stretch, etc.
+    Parameters
+    ----------
+    config : dict or object
+        Preprocessing configuration with parameters like patch_size, stretch, etc.
+        Can be a dictionary or object with attribute access.
 
-    Raises:
-        ConfigValidationError: If config is invalid
+    Returns
+    -------
+    bool
+        True if validation passes.
 
-    Returns:
-        True if valid
+    Raises
+    ------
+    ConfigValidationError
+        If any configuration parameter is invalid.
+
+    Examples
+    --------
+    >>> config = {'patch_size': 256, 'stretch': 'SQRT'}
+    >>> validate_preprocessing_config(config)
+    True
     """
     # Patch size must be power of 2
     patch_size = config.get("patch_size", 128)
@@ -41,18 +55,31 @@ def validate_preprocessing_config(config):
     return True
 
 
-def validate_training_config(config):
+def validate_training_config(config: Union[Dict[str, Any], Any]) -> bool:
     """
-    Validate training configuration.
+    Validate training configuration parameters.
 
-    Args:
-        config: Training config dict
+    Parameters
+    ----------
+    config : dict or object
+        Training configuration with parameters like sam_checkpoint, batch_size, etc.
+        Can be a dictionary or object with attribute access.
 
-    Raises:
-        ConfigValidationError: If config is invalid
+    Returns
+    -------
+    bool
+        True if validation passes.
 
-    Returns:
-        True if valid
+    Raises
+    ------
+    ConfigValidationError
+        If any configuration parameter is invalid.
+
+    Examples
+    --------
+    >>> config = {'sam_checkpoint': 'large', 'batch_size': 8, 'learning_rate': 1e-4}
+    >>> validate_training_config(config)
+    True
     """
     # SAM checkpoint
     sam_checkpoint = config.get("sam_checkpoint", "large")
@@ -74,18 +101,31 @@ def validate_training_config(config):
     return True
 
 
-def validate_paths_exist(config):
+def validate_paths_exist(config: Union[Dict[str, Any], Any]) -> bool:
     """
-    Validate that paths in config exist.
+    Validate that file and directory paths in configuration exist.
 
-    Args:
-        config: Config dict potentially containing file/directory paths
+    Parameters
+    ----------
+    config : dict or object
+        Configuration potentially containing file/directory paths.
+        Can be a dictionary or object with attribute access.
 
-    Raises:
-        ConfigValidationError: If paths don't exist
+    Returns
+    -------
+    bool
+        True if all paths exist.
 
-    Returns:
-        True if valid
+    Raises
+    ------
+    ConfigValidationError
+        If any specified path doesn't exist.
+
+    Examples
+    --------
+    >>> config = {'dataset': '/path/to/dataset', 'ms_path': '/path/to/ms'}
+    >>> validate_paths_exist(config)  # doctest: +SKIP
+    True
     """
     # Check dataset path
     if "dataset" in config:
@@ -108,18 +148,37 @@ def validate_paths_exist(config):
     return True
 
 
-def validate_all(config):
+def validate_all(config: Union[Dict[str, Any], Any]) -> bool:
     """
-    Run all applicable validators on config.
+    Run all applicable validators on configuration.
 
-    Args:
-        config: Complete config object with processing, training, etc. sections
+    Validates preprocessing, training, and path existence based on
+    which sections are present in the configuration.
 
-    Raises:
-        ConfigValidationError: If any validation fails
+    Parameters
+    ----------
+    config : dict or object
+        Complete configuration object with processing, training, etc. sections.
+        Can be a dictionary or object with attribute access.
 
-    Returns:
-        True if valid
+    Returns
+    -------
+    bool
+        True if all validations pass.
+
+    Raises
+    ------
+    ConfigValidationError
+        If any validation check fails.
+
+    Examples
+    --------
+    >>> config = {
+    ...     'processing': {'patch_size': 256, 'stretch': 'SQRT'},
+    ...     'training': {'sam_checkpoint': 'large', 'batch_size': 8}
+    ... }
+    >>> validate_all(config)
+    True
     """
     # Validate preprocessing section if present
     if hasattr(config, "processing"):

@@ -1,9 +1,33 @@
 """
-MS Data Generator - Generate training data from measurement sets
+MS data generator for SAM-RFI training datasets.
+
+This module provides functionality to generate SAM2 training datasets from
+CASA measurement sets (MS). It handles loading MS files, extracting complex
+visibilities, preprocessing data through normalization and stretching, and
+saving datasets in batched PyTorch format.
+
+Classes
+-------
+MSDataGenerator
+    Generate SAM2 training datasets from CASA measurement sets.
+
+Examples
+--------
+>>> from samrfi.data_generation import MSDataGenerator
+>>> from samrfi.config import ConfigLoader
+>>>
+>>> # Load configuration
+>>> config = ConfigLoader.load_data('ms_config.yaml')
+>>>
+>>> # Generate dataset
+>>> generator = MSDataGenerator(config)
+>>> dataset_path = generator.generate('./output/ms_dataset')
+>>> print(f"Dataset saved to: {dataset_path}")
 """
 
 import json
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from samrfi.data import Preprocessor
 from samrfi.data.ms_loader import MSLoader
@@ -11,35 +35,122 @@ from samrfi.data.ms_loader import MSLoader
 
 class MSDataGenerator:
     """
-    Generate SAM2 training datasets from CASA measurement sets
+    Generate SAM2 training datasets from CASA measurement sets.
 
-    Workflow:
-        1. Load MS file → complex visibilities
-        2. Extract magnitude → waterfall plots
-        3. Patchify with 4-way rotation augmentation
-        4. Normalize + stretch (SQRT/LOG10)
-        5. Generate ground truth masks (MAD or custom flags)
-        6. Save BatchedDataset to disk (batch_*.pt files)
+    This class implements a complete pipeline for converting CASA measurement sets
+    into training-ready datasets for SAM2 model training. The pipeline includes:
+
+    1. Load MS file and extract complex visibilities
+    2. Extract magnitude data as waterfall plots
+    3. Patchify data with 4-way rotation augmentation
+    4. Apply normalization and stretching (SQRT/LOG10)
+    5. Generate ground truth masks (MAD or custom flags)
+    6. Save BatchedDataset to disk (batch_*.pt files)
+
+    Parameters
+    ----------
+    config : DataConfig
+        Configuration object containing MS path, processing parameters,
+        and output settings. Expected structure:
+
+        - ms.path : str - Path to measurement set
+        - ms.num_antennas : int, optional - Number of antennas to load
+        - ms.data_mode : str - Data column ('DATA' or 'CORRECTED_DATA')
+        - processing.patch_size : int - Patch size (128, 256, 512, 1024)
+        - processing.stretch : str or None - Stretching method ('SQRT', 'LOG10', or None)
+        - processing.flag_sigma : int - Sigma threshold for MAD flagging
+        - processing.custom_flag : bool - Use MS flags as ground truth
+        - processing.num_patches : int, optional - Maximum patches to generate
+        - processing.num_workers : int - Number of parallel workers
+
+    Attributes
+    ----------
+    config : DataConfig
+        Stored configuration object.
+
+    Examples
+    --------
+    >>> from samrfi.config import ConfigLoader
+    >>> from samrfi.data_generation import MSDataGenerator
+    >>>
+    >>> # Load configuration from YAML
+    >>> config = ConfigLoader.load_data('configs/ms_gen.yaml')
+    >>>
+    >>> # Create generator
+    >>> generator = MSDataGenerator(config)
+    >>>
+    >>> # Generate dataset
+    >>> output_path = generator.generate('./output/ms_dataset')
+    >>> print(f"Dataset saved: {output_path}")
+    Dataset saved: ./output/ms_dataset
+
+    Notes
+    -----
+    The generator uses BatchWriter to save datasets in batched format
+    (batch_*.pt files), which enables memory-efficient loading during training.
+    Ground truth masks can come from either MS flags (custom_flag=True) or
+    MAD-based automatic flagging (custom_flag=False).
     """
 
-    def __init__(self, config):
+    def __init__(self, config: Any) -> None:
         """
-        Initialize MS data generator
+        Initialize MS data generator.
 
-        Args:
-            config: Configuration object with MS and processing parameters
+        Parameters
+        ----------
+        config : DataConfig
+            Configuration object with MS and processing parameters.
         """
         self.config = config
 
-    def generate(self, output_path):
+    def generate(self, output_path: str) -> str:
         """
-        Generate dataset from measurement set
+        Generate dataset from measurement set.
 
-        Args:
-            output_path: Directory to save generated dataset
+        This method performs the complete data generation pipeline:
+        1. Validates MS path
+        2. Loads MS data using MSLoader
+        3. Optionally loads MS flags for ground truth
+        4. Preprocesses data (patchify, normalize, stretch)
+        5. Saves dataset in batched format
+        6. Generates metadata JSON files
 
-        Returns:
-            Path to saved dataset
+        Parameters
+        ----------
+        output_path : str
+            Directory path where generated dataset will be saved.
+            Will be created if it doesn't exist.
+
+        Returns
+        -------
+        str
+            Absolute path to the saved dataset directory.
+
+        Raises
+        ------
+        ValueError
+            If MS path is not specified in config.
+        FileNotFoundError
+            If measurement set doesn't exist at specified path.
+
+        Examples
+        --------
+        >>> generator = MSDataGenerator(config)
+        >>> dataset_path = generator.generate('./datasets/my_ms_data')
+        ==========================================
+        MS Data Generation
+        ==========================================
+        ...
+        ✓ Data generation complete!
+
+        Notes
+        -----
+        The output directory will contain:
+        - batch_*.pt : PyTorch batched dataset files
+        - metadata.json : Dataset metadata (source, parameters, statistics)
+
+        The metadata includes MS path, number of antennas, patch size,
+        stretching method, and augmentation details.
         """
         print("=" * 60)
         print("MS Data Generation")

@@ -1,12 +1,23 @@
 """
-MS Data Injection - Replace DATA column with synthetic visibilities for validation
+Measurement Set data injection for RFI validation.
 
-This module allows injecting synthetic RFI data into existing measurement sets
-for benchmarking SAM-RFI against traditional CASA flagging methods.
+This module enables injection of synthetic RFI data into existing CASA
+measurement sets (MS) for benchmarking SAM-RFI against traditional CASA
+flagging methods. The injection process preserves all MS structure and
+metadata while replacing visibility data in the DATA column.
+
+The typical workflow:
+1. Generate synthetic RFI visibilities with known ground truth
+2. Use an existing MS as a template for proper structure
+3. Inject synthetic data into the DATA column
+4. Use the modified MS for algorithm comparison
+
+Requires casatools for MS manipulation. Install with: pip install samrfi[casa]
 """
 
 import shutil
 from pathlib import Path
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -20,27 +31,82 @@ except ImportError:
 
 
 def inject_synthetic_data(
-    template_ms_path,
-    synthetic_data,
-    output_ms_path=None,
-    baseline_map=None,
-    num_antennas=None,
-):
+    template_ms_path: Union[str, Path],
+    synthetic_data: np.ndarray,
+    output_ms_path: Optional[Union[str, Path]] = None,
+    baseline_map: Optional[List[Tuple[int, int]]] = None,
+    num_antennas: Optional[int] = None,
+) -> Path:
     """
     Inject synthetic visibility data into a measurement set.
 
-    Takes an existing MS as template (for proper structure/metadata) and replaces
-    the DATA column with synthetic visibilities. Preserves all MS structure.
+    Takes an existing MS as a template (for proper structure/metadata) and
+    replaces the DATA column with synthetic visibilities. All other MS
+    components (UVW coordinates, metadata, flags, etc.) are preserved.
 
-    Args:
-        template_ms_path: Path to existing MS to use as template
-        synthetic_data: Complex visibility data, shape (baselines, pols, channels, times)
-        output_ms_path: Path for output MS (default: template_ms_path + '.synthetic')
-        baseline_map: List of (ant1, ant2) tuples matching data order (optional)
-        num_antennas: Number of antennas (optional, inferred from data if not provided)
+    Parameters
+    ----------
+    template_ms_path : str or Path
+        Path to existing MS to use as template for structure.
+    synthetic_data : np.ndarray
+        Complex visibility data with shape (baselines, pols, channels, times).
+        Must match the MS structure dimensions.
+    output_ms_path : str or Path, optional
+        Path for output MS with injected data.
+        Default: template_ms_path + '.synthetic.ms'
+        If same as template_ms_path, modifies in-place.
+    baseline_map : list of tuple, optional
+        List of (ant1, ant2) tuples matching data baseline order.
+        If None, automatically generates sequential baselines from num_antennas.
+    num_antennas : int, optional
+        Number of antennas in the array.
+        If None and baseline_map is None, inferred from number of baselines
+        assuming all unique pairs: n_baselines = n_ant * (n_ant - 1) / 2.
 
-    Returns:
-        Path to output MS with injected data
+    Returns
+    -------
+    Path
+        Path to output MS with injected synthetic data.
+
+    Raises
+    ------
+    ImportError
+        If casatools is not available.
+    ValueError
+        If data shape doesn't match MS structure or channel counts mismatch.
+    RuntimeError
+        If unable to read/write DATA column.
+
+    Notes
+    -----
+    - Assumes all spectral windows (SPWs) have the same channel count
+    - If data channels match total across SPWs, splits data across them
+    - If data channels match one SPW, replicates to all SPWs
+    - Uses bulk column writes for speed, falls back to per-row if needed
+
+    Examples
+    --------
+    >>> # Generate synthetic data: 10 baselines, 2 pols, 64 channels, 100 times
+    >>> import numpy as np
+    >>> synth_data = np.random.randn(10, 2, 64, 100) + 1j * np.random.randn(10, 2, 64, 100)
+    >>>
+    >>> # Inject into MS
+    >>> output_ms = inject_synthetic_data(
+    ...     template_ms_path='template.ms',
+    ...     synthetic_data=synth_data,
+    ...     num_antennas=5  # 5 antennas = 10 baselines
+    ... )  # doctest: +SKIP
+    >>> print(output_ms)  # doctest: +SKIP
+    PosixPath('template.synthetic.ms')
+
+    >>> # Inject with custom baseline mapping
+    >>> baseline_map = [(0, 1), (0, 2), (1, 2)]  # 3 baselines
+    >>> synth_data = np.random.randn(3, 2, 64, 100) + 1j * np.random.randn(3, 2, 64, 100)
+    >>> output_ms = inject_synthetic_data(
+    ...     template_ms_path='template.ms',
+    ...     synthetic_data=synth_data,
+    ...     baseline_map=baseline_map
+    ... )  # doctest: +SKIP
     """
     if not CASA_AVAILABLE:
         raise ImportError(
@@ -257,5 +323,5 @@ def inject_synthetic_data(
 
     tb.close()
 
-    print(f"\n✓ Synthetic data injected into: {output_ms_path}")
+    print(f"\nSynthetic data injected into: {output_ms_path}")
     return output_ms_path

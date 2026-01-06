@@ -1,6 +1,60 @@
 """
-SAM2 Trainer - Clean implementation using transformers library
-Mirrors the working SAM1 training approach
+SAM2 model training for RFI detection.
+
+This module provides a PyTorch-based trainer for fine-tuning Meta's SAM2 (Segment
+Anything Model 2) on radio frequency interference (RFI) detection tasks. It uses
+HuggingFace transformers library and supports flexible training configurations,
+GPU-accelerated data transforms, validation, and checkpoint management.
+
+Classes
+-------
+SAM2Trainer
+    Main training class for SAM2 model fine-tuning.
+
+Functions
+---------
+_log_progress
+    Internal progress logging without TQDM overhead.
+
+Examples
+--------
+Basic training workflow:
+
+>>> from samrfi.data import RFIDataset
+>>> from samrfi.training import SAM2Trainer
+>>>
+>>> # Create dataset
+>>> dataset = RFIDataset()
+>>> dataset.load_ms('observation.ms')
+>>> dataset.create_dataset(patch_size=256)
+>>>
+>>> # Train model
+>>> trainer = SAM2Trainer(dataset, device='cuda')
+>>> losses = trainer.train(
+...     num_epochs=10,
+...     batch_size=8,
+...     sam_checkpoint='large',
+...     learning_rate=1e-5
+... )
+
+GPU-accelerated training with on-the-fly transforms:
+
+>>> from samrfi.data import GPUPreprocessor
+>>>
+>>> # Use GPU-accelerated pipeline (10-100x faster)
+>>> preprocessor = GPUPreprocessor(complex_data, masks)
+>>> preprocessor.create_raw_patches(patch_size=256)
+>>>
+>>> trainer = SAM2Trainer(preprocessor, device='cuda', use_gpu_transforms=True)
+>>> losses = trainer.train(batch_size=32)  # 4x larger batches possible
+
+Notes
+-----
+- SAM2 training requires GPU with sufficient VRAM (8GB+ recommended)
+- Training freezes vision and prompt encoders by default (only mask decoder trained)
+- Supports multiple loss functions: DiceCE, Dice, Cross-Entropy, Focal
+- Checkpoints include full training state for resuming
+- GPU transforms provide 10-100x speedup over CPU pipeline
 """
 
 import gc
@@ -10,6 +64,7 @@ import os
 import time
 from datetime import datetime
 from statistics import mean
+from typing import Any, Dict, List, Optional, Union
 
 import matplotlib.pyplot as plt
 import monai
@@ -31,9 +86,45 @@ if not logger.hasHandlers():
     )
 
 
-def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=None):
+def _log_progress(
+    batch_idx: int,
+    total_batches: int,
+    start_time: float,
+    prefix: str = "",
+    current_loss: Optional[float] = None,
+) -> None:
     """
     Log training progress without TQDM overhead.
+
+    Provides lightweight progress logging that displays batch progress, elapsed time,
+    processing rate, and optional loss values. Designed as a TQDM alternative to
+    avoid additional dependencies and overhead.
+
+    Parameters
+    ----------
+    batch_idx : int
+        Current batch index (1-indexed).
+    total_batches : int
+        Total number of batches in epoch.
+    start_time : float
+        Epoch start time from time.time().
+    prefix : str, optional
+        Message prefix for log output (e.g., "Epoch 1/10 [Train]"), by default "".
+    current_loss : float, optional
+        Current batch loss value to display, by default None.
+
+    Examples
+    --------
+    >>> import time
+    >>> start = time.time()
+    >>> _log_progress(100, 500, start, prefix="Epoch 1/10 [Train]", current_loss=0.234)
+    [2025-01-15 10:30:45] Epoch 1/10 [Train][100/500] Elapsed: 2m15s, Rate: 0.74 batch/s, Loss: 0.234000
+
+    Notes
+    -----
+    - Time elapsed displayed in minutes:seconds format
+    - Processing rate calculated as batches per second
+    - Loss display is optional and formatted to 6 decimal places
     """
     elapsed = time.time() - start_time
     rate = batch_idx / elapsed if elapsed > 0 else 0
@@ -52,20 +143,113 @@ def _log_progress(batch_idx, total_batches, start_time, prefix="", current_loss=
 
 class SAM2Trainer:
     """
-    SAM2 training using HuggingFace transformers library.
-    Simple, clean implementation that mirrors working SAM1 code.
+    PyTorch trainer for fine-tuning SAM2 model on RFI detection.
+
+    Provides a clean, simple training interface using HuggingFace transformers
+    library. Supports both CPU and GPU training, validation splits, checkpoint
+    resuming, and GPU-accelerated data transforms. Designed to mirror SAM1
+    training approach with modern best practices.
+
+    Parameters
+    ----------
+    rfidataset_instance : RFIDataset or GPUPreprocessor
+        Dataset instance containing training data. Can be either:
+        - RFIDataset instance with `.dataset` attribute (CPU pipeline)
+        - GPUPreprocessor instance with `.raw_patches` attribute (GPU pipeline)
+    device : str, optional
+        Training device: 'cuda' or 'cpu', by default 'cuda'.
+    dir_path : str, optional
+        Directory to save models and plots. If None, uses current working
+        directory. Creates 'samrfi_data' subdirectory, by default None.
+    use_gpu_transforms : bool, optional
+        Enable GPU-accelerated on-the-fly transforms (10-100x faster than CPU).
+        Requires GPUPreprocessor instance, by default False.
+
+    Attributes
+    ----------
+    device : str
+        Training device ('cuda' or 'cpu').
+    RFIDataset : RFIDataset or GPUPreprocessor
+        Dataset instance for training.
+    use_gpu_transforms : bool
+        Whether GPU-accelerated transforms are enabled.
+    directory : str
+        Output directory for saving models and plots.
+    ave_meanloss : list of float
+        Training loss history (mean loss per epoch).
+    val_losses : list of float or None
+        Validation loss history if validation dataset provided.
+    best_val_loss : float
+        Best validation loss seen (set during training if validation enabled).
+
+    Examples
+    --------
+    Basic training with CPU transforms:
+
+    >>> from samrfi.data import RFIDataset
+    >>> dataset = RFIDataset()
+    >>> dataset.load_ms('observation.ms')
+    >>> dataset.create_dataset(patch_size=256)
+    >>>
+    >>> trainer = SAM2Trainer(dataset, device='cuda')
+    >>> losses = trainer.train(num_epochs=10, batch_size=8)
+
+    GPU-accelerated training (10-100x faster data pipeline):
+
+    >>> from samrfi.data import GPUPreprocessor
+    >>> preprocessor = GPUPreprocessor(complex_data, masks)
+    >>> preprocessor.create_raw_patches(patch_size=256)
+    >>>
+    >>> trainer = SAM2Trainer(preprocessor, device='cuda', use_gpu_transforms=True)
+    >>> losses = trainer.train(batch_size=32)  # 4x larger batches possible
+
+    Training with validation and checkpoint resuming:
+
+    >>> trainer = SAM2Trainer(dataset, device='cuda')
+    >>> losses = trainer.train(
+    ...     num_epochs=20,
+    ...     batch_size=8,
+    ...     validation_dataset=val_dataset,
+    ...     model_path='checkpoint.pth'  # Resume from checkpoint
+    ... )
+
+    Notes
+    -----
+    - GPU transforms reduce storage by 75% (no pre-generated augmentations)
+    - Training checkpoints include full state for resuming
+    - Validation enabled automatically if validation_dataset provided
+    - Best model saved separately during validation
+    - Memory optimized with periodic cache clearing
     """
 
-    def __init__(self, rfidataset_instance, device="cuda", dir_path=None, use_gpu_transforms=False):
+    def __init__(
+        self,
+        rfidataset_instance: Any,
+        device: str = "cuda",
+        dir_path: Optional[str] = None,
+        use_gpu_transforms: bool = False,
+    ) -> None:
         """
-        Initialize SAM2 trainer
+        Initialize SAM2 trainer with dataset and configuration.
 
-        Args:
-            rfidataset_instance: RFIDataset instance with .dataset attribute
-                                OR GPUPreprocessor instance with .raw_patches attribute
-            device: 'cuda' or 'cpu'
-            dir_path: Directory to save models (default: ./samrfi_data)
-            use_gpu_transforms: Use GPU-accelerated transforms (10-100x faster) (default: False)
+        Sets up trainer instance with dataset, device configuration, output directory,
+        and GPU transform settings. Initializes loss tracking attributes and prepares
+        output directory structure.
+
+        Parameters
+        ----------
+        rfidataset_instance : RFIDataset or GPUPreprocessor
+            Dataset instance containing training data.
+        device : str, optional
+            Training device: 'cuda' or 'cpu', by default 'cuda'.
+        dir_path : str, optional
+            Directory to save models and plots, by default None (uses cwd).
+        use_gpu_transforms : bool, optional
+            Enable GPU-accelerated transforms, by default False.
+
+        Notes
+        -----
+        Creates 'samrfi_data/models' subdirectory for checkpoints and plots.
         """
         self.device = device
         self.RFIDataset = rfidataset_instance
@@ -84,60 +268,171 @@ class SAM2Trainer:
             os.makedirs(new_directory)
 
         self.directory = new_directory
-        self.ave_meanloss = []
-        self.val_losses = None
+        self.ave_meanloss: List[float] = []
+        self.val_losses: Optional[List[float]] = None
 
     def train(
         self,
-        num_epochs=3,
-        batch_size=4,
-        sam_checkpoint="large",
-        learning_rate=1e-6,
+        num_epochs: int = 3,
+        batch_size: int = 4,
+        sam_checkpoint: str = "large",
+        learning_rate: float = 1e-6,
         # Optimizer settings
-        optimizer="adam",
-        weight_decay=0.05,
-        adam_betas=(0.9, 0.999),
-        adam_eps=1e-8,
-        momentum=0.9,
+        optimizer: str = "adam",
+        weight_decay: float = 0.05,
+        adam_betas: tuple = (0.9, 0.999),
+        adam_eps: float = 1e-8,
+        momentum: float = 0.9,
         # Loss function settings
-        loss_function="dicece",
-        loss_sigmoid=True,
-        loss_squared_pred=True,
-        loss_reduction="mean",
+        loss_function: str = "dicece",
+        loss_sigmoid: bool = True,
+        loss_squared_pred: bool = True,
+        loss_reduction: str = "mean",
         # Model architecture
-        multimask_output=False,
-        freeze_vision_encoder=True,
-        freeze_prompt_encoder=True,
+        multimask_output: bool = False,
+        freeze_vision_encoder: bool = True,
+        freeze_prompt_encoder: bool = True,
         # Data augmentation
-        bbox_perturbation=20,
+        bbox_perturbation: int = 20,
         # DataLoader settings
-        num_workers=0,
-        prefetch_factor=2,
-        persistent_workers=True,
-        pin_memory=True,
+        num_workers: int = 0,
+        prefetch_factor: int = 2,
+        persistent_workers: bool = True,
+        pin_memory: bool = True,
         # Training optimization
-        log_interval=100,
-        cuda_cache_clear_interval=100,
+        log_interval: int = 100,
+        cuda_cache_clear_interval: int = 100,
         # Output settings
-        plot=True,
-        model_path=None,
-        trained_model_path=None,
-        validation_dataset=None,
-        save_model=True,
-    ):
+        plot: bool = True,
+        model_path: Optional[str] = None,
+        trained_model_path: Optional[str] = None,
+        validation_dataset: Optional[Any] = None,
+        save_model: bool = True,
+    ) -> Union[List[float], Dict[str, List[float]]]:
         """
-        Train SAM2 model on RFI dataset
+        Train SAM2 model on RFI detection dataset.
 
-        Args:
-            num_epochs: Number of training epochs
-            batch_size: Batch size for training
-            sam_checkpoint: 'tiny', 'small', 'base_plus', or 'large'
-            learning_rate: Learning rate (default: 1e-5)
-            plot: Whether to plot loss curve
-            model_path: Path to pretrained model to resume from
-            trained_model_path: Path to save trained model
-            validation_dataset: Optional HuggingFace dataset for validation
-            save_model: Whether to save model checkpoint (default: True, set False for validation)
+        Performs complete training workflow including model loading, dataset preparation,
+        optimizer setup, training loop with optional validation, checkpoint saving, and
+        loss visualization. Supports checkpoint resuming, validation splits, and multiple
+        loss functions.
+
+        Parameters
+        ----------
+        num_epochs : int, optional
+            Number of training epochs, by default 3.
+        batch_size : int, optional
+            Training batch size (GPU memory permitting), by default 4.
+        sam_checkpoint : str, optional
+            SAM2 model size: 'tiny', 'small', 'base_plus', or 'large', by default 'large'.
+        learning_rate : float, optional
+            Learning rate for optimizer, by default 1e-6.
+        optimizer : str, optional
+            Optimizer type: 'adam', 'adamw', or 'sgd', by default 'adam'.
+        weight_decay : float, optional
+            L2 regularization weight decay, by default 0.05.
+        adam_betas : tuple of float, optional
+            Beta coefficients for Adam optimizer (beta1, beta2), by default (0.9, 0.999).
+        adam_eps : float, optional
+            Epsilon for numerical stability in Adam, by default 1e-8.
+        momentum : float, optional
+            Momentum factor for SGD optimizer, by default 0.9.
+        loss_function : str, optional
+            Loss function: 'dicece' (Dice+CrossEntropy), 'dice', 'ce', or 'focal',
+            by default 'dicece'.
+        loss_sigmoid : bool, optional
+            Apply sigmoid to predictions before loss calculation, by default True.
+        loss_squared_pred : bool, optional
+            Use squared predictions in Dice loss, by default True.
+        loss_reduction : str, optional
+            Loss reduction method: 'mean' or 'sum', by default 'mean'.
+        multimask_output : bool, optional
+            Enable SAM2 multi-mask output mode, by default False.
+        freeze_vision_encoder : bool, optional
+            Freeze vision encoder weights (only train mask decoder), by default True.
+        freeze_prompt_encoder : bool, optional
+            Freeze prompt encoder weights, by default True.
+        bbox_perturbation : int, optional
+            Bounding box perturbation in pixels for data augmentation, by default 20.
+        num_workers : int, optional
+            Number of DataLoader workers (0=main process), by default 0.
+        prefetch_factor : int, optional
+            Number of batches to prefetch per worker (only if num_workers>0), by default 2.
+        persistent_workers : bool, optional
+            Keep workers alive between epochs (only if num_workers>0), by default True.
+        pin_memory : bool, optional
+            Pin memory for faster GPU transfer, by default True.
+        log_interval : int, optional
+            Log progress every N batches, by default 100.
+        cuda_cache_clear_interval : int, optional
+            Clear CUDA cache every N batches (0=disable), by default 100.
+        plot : bool, optional
+            Plot and save loss curves after training, by default True.
+        model_path : str, optional
+            Path to pretrained checkpoint to resume from, by default None.
+        trained_model_path : str, optional
+            Custom path to save final trained model, by default None (auto-generated).
+        validation_dataset : Any, optional
+            Validation dataset (same format as training dataset), by default None.
+        save_model : bool, optional
+            Save final model checkpoint (set False for validation-only runs), by default True.
+
+        Returns
+        -------
+        list of float or dict
+            If no validation: Returns list of training losses (one per epoch).
+            If validation enabled: Returns dict with keys 'train' and 'val', each
+            containing list of losses per epoch.
+
+        Raises
+        ------
+        ValueError
+            If sam_checkpoint not in ['tiny', 'small', 'base_plus', 'large'].
+            If optimizer not in ['adam', 'adamw', 'sgd'].
+            If loss_function not in ['dicece', 'dice', 'ce', 'focal'].
+            If use_gpu_transforms=True but dataset is not GPUPreprocessor.
+
+        Examples
+        --------
+        Basic training:
+
+        >>> trainer = SAM2Trainer(dataset, device='cuda')
+        >>> losses = trainer.train(num_epochs=10, batch_size=8)
+        >>> print(f"Final loss: {losses[-1]:.4f}")
+
+        Training with validation:
+
+        >>> losses = trainer.train(
+        ...     num_epochs=20,
+        ...     batch_size=8,
+        ...     validation_dataset=val_dataset
+        ... )
+        >>> print(f"Train: {losses['train'][-1]:.4f}, Val: {losses['val'][-1]:.4f}")
+
+        Resume from checkpoint:
+
+        >>> losses = trainer.train(
+        ...     num_epochs=30,
+        ...     model_path='checkpoint_epoch_10.pth'
+        ... )
+
+        Custom loss and optimizer:
+
+        >>> losses = trainer.train(
+        ...     loss_function='focal',
+        ...     optimizer='adamw',
+        ...     weight_decay=0.01,
+        ...     learning_rate=1e-4
+        ... )
+
+        Notes
+        -----
+        - Training automatically freezes encoders (only mask decoder trained)
+        - Checkpoints include full state: model, optimizer, losses, config
+        - Best validation model saved separately if validation enabled
+        - GPU memory optimized with periodic cache clearing
+        - Supports checkpoint resuming with full state restoration
+        - Loss curves automatically plotted and saved
         """
 
         # Fix multiprocessing for CUDA in workers (required for GPU transforms)
@@ -584,20 +879,79 @@ class SAM2Trainer:
 
     def _save_model(
         self,
-        model,
-        optimizer,
-        epoch,
-        sam_checkpoint,
-        learning_rate,
-        batch_size,
-        loss_function,
-        patch_size,
-        num_epochs,
-        freeze_vision_encoder=True,
-        freeze_prompt_encoder=True,
-        trained_model_path=None,
-    ):
-        """Save trained model checkpoint with full training state"""
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        sam_checkpoint: str,
+        learning_rate: float,
+        batch_size: int,
+        loss_function: str,
+        patch_size: Union[int, str],
+        num_epochs: int,
+        freeze_vision_encoder: bool = True,
+        freeze_prompt_encoder: bool = True,
+        trained_model_path: Optional[str] = None,
+    ) -> None:
+        """
+        Save trained model checkpoint with full training state.
+
+        Creates comprehensive checkpoint file containing model weights, optimizer state,
+        training history, preprocessing metadata, and training configuration. Supports
+        both custom save paths and auto-generated filenames with timestamp and parameters.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            Trained SAM2 model instance.
+        optimizer : torch.optim.Optimizer
+            Optimizer instance with current state.
+        epoch : int
+            Final epoch number (0-indexed).
+        sam_checkpoint : str
+            SAM2 model size ('tiny', 'small', 'base_plus', 'large').
+        learning_rate : float
+            Learning rate used for training.
+        batch_size : int
+            Batch size used for training.
+        loss_function : str
+            Loss function used ('dicece', 'dice', 'ce', 'focal').
+        patch_size : int or str
+            Patch size used for training (e.g., 256) or 'unknown'.
+        num_epochs : int
+            Total number of training epochs.
+        freeze_vision_encoder : bool, optional
+            Whether vision encoder was frozen, by default True.
+        freeze_prompt_encoder : bool, optional
+            Whether prompt encoder was frozen, by default True.
+        trained_model_path : str, optional
+            Custom path to save checkpoint. If None, auto-generates filename
+            with timestamp and parameters, by default None.
+
+        Notes
+        -----
+        Checkpoint structure:
+        - model_state_dict: Model weights
+        - optimizer_state_dict: Optimizer state for resuming
+        - epoch: Final epoch number
+        - training_losses: List of training losses per epoch
+        - validation_losses: List of validation losses (or None)
+        - patch_size: Patch size (kept for backward compatibility)
+        - preprocessing: Dict of preprocessing metadata
+        - config: Dict of training configuration
+
+        Auto-generated filename format:
+        model_sam2-{checkpoint}_stretch-{stretch}_sigma-{sigma}_patch-{method}_size-{size}_epochs{n}_{timestamp}.pth
+
+        Examples
+        --------
+        >>> # Called internally by train() method
+        >>> trainer._save_model(
+        ...     model, optimizer, epoch=9, sam_checkpoint='large',
+        ...     learning_rate=1e-5, batch_size=8, loss_function='dicece',
+        ...     patch_size=256, num_epochs=10
+        ... )
+        Model checkpoint saved to: ./samrfi_data/models/model_sam2-large_...pth
+        """
         # Extract params from dataset if available (for backward compatibility in filename)
         params = getattr(self.RFIDataset, "dataset_params", None)
 
@@ -676,8 +1030,38 @@ class SAM2Trainer:
             torch.save(checkpoint, save_path)
             logger.info(f"Model checkpoint saved to: {save_path}")
 
-    def _plot_loss_curve(self, sam_checkpoint, num_epochs):
-        """Plot and save training and validation loss curves"""
+    def _plot_loss_curve(self, sam_checkpoint: str, num_epochs: int) -> None:
+        """
+        Plot and save training and validation loss curves.
+
+        Creates matplotlib figure showing training loss (and validation loss if available)
+        over epochs. Saves high-resolution plot to models directory with auto-generated
+        filename containing training parameters and timestamp.
+
+        Parameters
+        ----------
+        sam_checkpoint : str
+            SAM2 model size ('tiny', 'small', 'base_plus', 'large') for plot title.
+        num_epochs : int
+            Total number of training epochs for plot title.
+
+        Notes
+        -----
+        - Plot dimensions: 12x6 inches at 300 DPI
+        - Training loss: Blue line with circle markers
+        - Validation loss: Red line with square markers (if available)
+        - Includes dataset size in title
+        - Auto-generated filename matches model checkpoint naming
+
+        Filename format:
+        loss_plot_sam2-{checkpoint}_stretch-{stretch}_sigma-{sigma}_patch-{method}_size-{size}_epochs{n}_{timestamp}.png
+
+        Examples
+        --------
+        >>> # Called internally by train() method
+        >>> trainer._plot_loss_curve(sam_checkpoint='large', num_epochs=10)
+        Loss plot saved to: ./samrfi_data/models/loss_plot_sam2-large_...png
+        """
         # Extract params from dataset if available (for backward compatibility)
         params = getattr(self.RFIDataset, "dataset_params", None)
 

@@ -1,11 +1,71 @@
 """
-Command-line interface for SAM-RFI training
+Command-line interface for SAM-RFI.
+
+This module provides the main CLI entry point for SAM-RFI operations including
+data generation, model training, prediction, evaluation, and publishing to
+HuggingFace Hub.
+
+Functions
+---------
+generate_data_command
+    Generate synthetic or MS-based training datasets.
+train_command
+    Train SAM2 models on pre-generated datasets.
+predict_command
+    Apply trained models for RFI prediction on measurement sets.
+evaluate_command
+    Evaluate prediction accuracy against ground truth.
+publish_command
+    Publish datasets or models to HuggingFace Hub.
+create_config_command
+    Create default YAML configuration files.
+validate_config_command
+    Validate YAML configuration files.
+load_dataset
+    Load datasets from disk (BatchedDataset or RAMCachedDataset).
+main
+    Main CLI entry point and argument parser.
+
+Examples
+--------
+Generate a synthetic training dataset:
+
+>>> # Command line
+>>> samrfi generate-data --source synthetic --config configs/synthetic.yaml --output ./data
+
+Train a model:
+
+>>> # Command line
+>>> samrfi train --config configs/training.yaml --dataset ./data/exact_masks
+
+Predict RFI flags:
+
+>>> # Command line
+>>> samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
+
+Notes
+-----
+The CLI is organized around subcommands that correspond to major workflows:
+- generate-data: Dataset creation from synthetic or measurement set sources
+- train: Model training with validation support
+- predict: RFI flagging with single-pass or iterative modes
+- evaluate: Metrics computation against ground truth
+- publish: Dataset/model publishing to HuggingFace Hub
+- create-config: Configuration file generation
+- validate-config: Configuration validation
+
+See Also
+--------
+samrfi.config.config_loader : Configuration loading and validation
+samrfi.training.sam2_trainer : SAM2 model training
+samrfi.inference : RFI prediction and flagging
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -22,8 +82,59 @@ from .utils import logger, setup_logger
 from .utils.errors import ConfigValidationError
 
 
-def generate_data_command(args):
-    """Execute data generation command"""
+def generate_data_command(args: argparse.Namespace) -> None:
+    """
+    Execute data generation command.
+
+    Generates training/validation datasets from either synthetic RFI
+    simulations or real measurement set observations. Creates both
+    exact ground truth masks and MAD-based masks.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - config : str
+            Path to YAML configuration file
+        - source : str
+            Data source type ('synthetic' or 'ms')
+        - output : str
+            Output directory path for generated datasets
+
+    Raises
+    ------
+    ValueError
+        If source is not 'synthetic' or 'ms'.
+    FileNotFoundError
+        If configuration file doesn't exist.
+
+    Examples
+    --------
+    Generate synthetic dataset:
+
+    >>> # Command line
+    >>> samrfi generate-data --source synthetic \\
+    ...     --config configs/synthetic_train_4k.yaml \\
+    ...     --output ./datasets/train_4k
+
+    Generate dataset from measurement set:
+
+    >>> # Command line
+    >>> samrfi generate-data --source ms \\
+    ...     --config configs/ms_data.yaml \\
+    ...     --output ./datasets/my_ms_data
+
+    Notes
+    -----
+    Output directory structure:
+    - exact_masks/ : Perfect ground truth masks
+    - mad_masks/ : Median Absolute Deviation based masks
+
+    See Also
+    --------
+    SyntheticDataGenerator : Synthetic RFI data generation
+    MSDataGenerator : Measurement set data generation
+    """
     print("=" * 60)
     print("SAM-RFI Data Generation")
     print("=" * 60)
@@ -51,13 +162,60 @@ def generate_data_command(args):
     print("  mad_masks/ - MAD-based masks")
 
 
-def load_dataset(path):
+def load_dataset(path: str) -> Any:
     """
-    Load dataset from batched .pt directory (BatchedDataset or RAMCachedDataset).
+    Load dataset from batched .pt directory.
 
+    Automatically detects and loads either BatchedDataset (preprocessed)
+    or RAMCachedDataset (raw) formats based on metadata.json format field.
+
+    Parameters
+    ----------
+    path : str
+        Path to dataset directory containing batch_*.pt files and metadata.json.
+
+    Returns
+    -------
+    BatchedDataset or RAMCachedDataset
+        Loaded dataset ready for training or validation.
+
+    Raises
+    ------
+    ValueError
+        If path is not a directory, missing metadata.json, or invalid format.
+
+    Examples
+    --------
+    Load preprocessed dataset:
+
+    >>> dataset = load_dataset('./datasets/train_4k/exact_masks')
+    Loading BatchedDataset (preprocessed format) from ./datasets/train_4k/exact_masks
+
+    Load raw dataset with GPU transforms:
+
+    >>> dataset = load_dataset('./datasets/raw_data')
+    Loading RAMCachedDataset (raw format) from ./datasets/raw_data
+
+    Notes
+    -----
     Supported formats:
-    - BatchedDataset (preprocessed): Contains batch_*.pt + metadata.json
-    - RAMCachedDataset (raw): Contains batch_*.pt + metadata.json with format='raw'
+    - BatchedDataset (preprocessed): batch_*.pt + metadata.json with format='preprocessed'
+    - RAMCachedDataset (raw): batch_*.pt + metadata.json with format='raw'
+
+    Legacy single .pt files are no longer supported. Use generate-data command
+    to create modern batched datasets.
+
+    Expected directory structure:
+    - dataset_dir/
+      - batch_000.pt
+      - batch_001.pt
+      - ...
+      - metadata.json
+
+    See Also
+    --------
+    BatchedDataset : Streaming preprocessed dataset loader
+    RAMCachedDataset : RAM-cached raw dataset with GPU transforms
     """
     from samrfi.data import BatchedDataset
 
@@ -108,8 +266,77 @@ def load_dataset(path):
         return BatchedDataset(path)
 
 
-def train_command(args):
-    """Execute training command on pre-generated dataset"""
+def train_command(args: argparse.Namespace) -> None:
+    """
+    Execute training command on pre-generated dataset.
+
+    Trains SAM2 models for RFI detection using pre-generated training
+    datasets. Supports optional validation dataset and checkpoint resumption.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - config : str
+            Path to YAML training configuration file
+        - dataset : str
+            Path to training dataset directory
+        - validation_dataset : str, optional
+            Path to validation dataset directory
+        - resume : str, optional
+            Path to checkpoint file to resume training from
+        - device : str, optional
+            Device override ('cuda' or 'cpu')
+        - output_dir : str, optional
+            Output directory override for models and plots
+
+    Raises
+    ------
+    ValueError
+        If dataset path is missing or invalid.
+    ConfigValidationError
+        If configuration validation fails.
+
+    Examples
+    --------
+    Train with basic configuration:
+
+    >>> # Command line
+    >>> samrfi train --config configs/sam2_training.yaml \\
+    ...     --dataset ./datasets/train_4k/exact_masks
+
+    Train with validation dataset:
+
+    >>> # Command line
+    >>> samrfi train --config configs/sam2_training.yaml \\
+    ...     --dataset ./datasets/train_4k/exact_masks \\
+    ...     --validation-dataset ./datasets/val_1k/exact_masks
+
+    Resume training from checkpoint:
+
+    >>> # Command line
+    >>> samrfi train --config configs/sam2_training.yaml \\
+    ...     --dataset ./datasets/train_4k/exact_masks \\
+    ...     --resume ./models/checkpoint_epoch_10.pth
+
+    Notes
+    -----
+    The training process:
+    1. Loads and validates configuration
+    2. Loads training dataset (and optional validation dataset)
+    3. Initializes SAM2 model and trainer
+    4. Trains for specified epochs with optional validation
+    5. Saves model checkpoints and training plots
+
+    Models are saved to: <output_dir>/models/
+    Plots are saved to: <output_dir>/plots/
+
+    See Also
+    --------
+    SAM2Trainer : SAM2 model training implementation
+    ConfigLoader : Configuration loading and validation
+    load_dataset : Dataset loading utility
+    """
 
     print("=" * 60)
     print("SAM-RFI SAM2 Training")
@@ -228,8 +455,48 @@ def train_command(args):
     print(f"Models saved to: {config.dir_path}/models/")
 
 
-def create_config_command(args):
-    """Create default configuration file"""
+def create_config_command(args: argparse.Namespace) -> None:
+    """
+    Create default configuration file.
+
+    Generates a YAML configuration file with default training parameters
+    that can be customized for specific training workflows.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - output : str, optional
+            Output path for configuration file (default: 'sam2_config.yaml')
+
+    Examples
+    --------
+    Create default configuration:
+
+    >>> # Command line
+    >>> samrfi create-config
+
+    Create configuration with custom path:
+
+    >>> # Command line
+    >>> samrfi create-config --output my_config.yaml
+
+    Notes
+    -----
+    The generated configuration includes all TrainingConfig fields with
+    default values. Edit the file to customize:
+    - Model settings (checkpoint size, frozen encoders)
+    - Training hyperparameters (epochs, batch size, learning rate)
+    - Optimizer configuration (Adam/SGD, weight decay)
+    - Loss function settings
+    - Dataset preprocessing (stretch, patch size, sigma)
+    - Output settings (save paths, plotting)
+
+    See Also
+    --------
+    ConfigLoader.create_default_config : Configuration file generator
+    TrainingConfig : Complete configuration schema
+    """
     output_path = args.output or "sam2_config.yaml"
 
     print(f"Creating default configuration: {output_path}")
@@ -239,8 +506,54 @@ def create_config_command(args):
     print(f"  samrfi train --config {output_path} --ms-path <path-to-ms>")
 
 
-def validate_config_command(args):
-    """Validate configuration file"""
+def validate_config_command(args: argparse.Namespace) -> int:
+    """
+    Validate configuration file.
+
+    Checks YAML configuration file for syntax errors, missing fields,
+    and invalid parameter values. Prints configuration summary if valid.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - config : str
+            Path to YAML configuration file to validate
+
+    Returns
+    -------
+    int
+        Exit code: 0 if valid, 1 if invalid.
+
+    Examples
+    --------
+    Validate training configuration:
+
+    >>> # Command line
+    >>> samrfi validate-config --config configs/sam2_training.yaml
+    ✓ Configuration is valid
+
+    Configuration summary:
+      Model: sam2-large
+      Epochs: 10
+      Batch size: 8
+      Learning rate: 0.0001
+      Device: cuda
+
+    Notes
+    -----
+    Validation checks:
+    - YAML syntax parsing
+    - Required fields present
+    - Value types correct (int, float, str, bool)
+    - Enum values valid (model checkpoint, device, optimizer, etc.)
+    - Numeric ranges reasonable (positive epochs, learning rate < 1)
+
+    See Also
+    --------
+    ConfigLoader.load : Configuration loading with validation
+    validate_all : Full configuration validation suite
+    """
     print(f"Validating configuration: {args.config}")
 
     try:
@@ -258,8 +571,31 @@ def validate_config_command(args):
         return 1
 
 
-def publish_command(args):
-    """Dispatcher for publishing datasets or models to HuggingFace Hub"""
+def publish_command(args: argparse.Namespace) -> None:
+    """
+    Dispatcher for publishing datasets or models to HuggingFace Hub.
+
+    Routes to appropriate publishing function based on --type argument
+    (dataset or model).
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - type : str
+            Publication type ('dataset' or 'model')
+        - Additional arguments passed to specific publish functions
+
+    Raises
+    ------
+    ValueError
+        If publish type is not 'dataset' or 'model'.
+
+    See Also
+    --------
+    publish_dataset_command : Dataset publishing to HuggingFace Hub
+    publish_model_command : Model publishing to HuggingFace Hub
+    """
     publish_type = getattr(args, "type", "dataset")
 
     if publish_type == "dataset":
@@ -270,8 +606,62 @@ def publish_command(args):
         raise ValueError(f"Unknown publish type: {publish_type}")
 
 
-def publish_dataset_command(args):
-    """Publish dataset (BatchedDataset or TorchDataset) to HuggingFace Hub"""
+def publish_dataset_command(args: argparse.Namespace) -> None:
+    """
+    Publish dataset to HuggingFace Hub.
+
+    Converts BatchedDataset or RAMCachedDataset to HuggingFace Dataset
+    format and uploads to the Hub for sharing and reproducibility.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - input : str
+            Path to local dataset directory
+        - repo_id : str
+            HuggingFace repository ID (username/repo-name)
+        - private : bool
+            Whether to make repository private
+        - token : str, optional
+            HuggingFace API token (or use HF_TOKEN env var)
+        - batch_size : int
+            Batch size for conversion (default: 50)
+
+    Examples
+    --------
+    Publish public dataset:
+
+    >>> # Command line
+    >>> samrfi publish --type dataset \\
+    ...     --input ./datasets/train_4k/exact_masks \\
+    ...     --repo-id username/sam-rfi-dataset
+
+    Publish private dataset with token:
+
+    >>> # Command line
+    >>> samrfi publish --type dataset \\
+    ...     --input ./datasets/train_4k/exact_masks \\
+    ...     --repo-id username/sam-rfi-dataset \\
+    ...     --private --token hf_xxxxx
+
+    Notes
+    -----
+    Publishing process:
+    1. Load local dataset (auto-detect format)
+    2. Convert to HuggingFace Dataset format
+    3. Upload to HuggingFace Hub
+    4. Generate dataset card with metadata
+
+    The published dataset can be loaded with:
+    >>> from datasets import load_dataset
+    >>> dataset = load_dataset('username/sam-rfi-dataset')
+
+    See Also
+    --------
+    HFDatasetWrapper : HuggingFace dataset conversion wrapper
+    load_dataset : Local dataset loading
+    """
     from .data.hf_dataset_wrapper import HFDatasetWrapper
 
     print("=" * 60)
@@ -297,8 +687,77 @@ def publish_dataset_command(args):
     print(f"URL: https://huggingface.co/datasets/{args.repo_id}")
 
 
-def publish_model_command(args):
-    """Publish trained model to HuggingFace Hub"""
+def publish_model_command(args: argparse.Namespace) -> None:
+    """
+    Publish trained model to HuggingFace Hub.
+
+    Uploads trained SAM2 model checkpoint to HuggingFace Hub with
+    auto-generated model card containing training metadata and usage examples.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - input : str
+            Path to local model checkpoint (.pth file)
+        - repo_id : str
+            HuggingFace repository ID (username/repo-name)
+        - model_size : str, optional
+            Model size ('tiny', 'small', 'base_plus', 'large')
+            Auto-detected from checkpoint if not specified
+        - private : bool
+            Whether to make repository private
+        - token : str, optional
+            HuggingFace API token (or use HF_TOKEN env var)
+
+    Raises
+    ------
+    ValueError
+        If model size cannot be detected and not specified.
+
+    Examples
+    --------
+    Publish model with auto-detection:
+
+    >>> # Command line
+    >>> samrfi publish --type model \\
+    ...     --input ./models/sam2_rfi_best.pth \\
+    ...     --repo-id username/sam-rfi-models
+
+    Publish with explicit model size:
+
+    >>> # Command line
+    >>> samrfi publish --type model \\
+    ...     --input ./models/sam2_rfi_best.pth \\
+    ...     --repo-id username/sam-rfi-models \\
+    ...     --model-size large
+
+    Notes
+    -----
+    Publishing process:
+    1. Load checkpoint and extract metadata
+    2. Auto-detect model size from checkpoint config
+    3. Generate model card with training info and usage examples
+    4. Create HuggingFace repository (if doesn't exist)
+    5. Upload model to {model_size}/model.pth
+    6. Upload README.md with model card
+
+    Model organization on Hub:
+    - repo-name/
+      - tiny/model.pth
+      - small/model.pth
+      - base_plus/model.pth
+      - large/model.pth
+      - README.md
+
+    The published model can be used with:
+    >>> samrfi predict --model username/sam-rfi-models/large --input obs.ms
+
+    See Also
+    --------
+    generate_model_card : Model card generation
+    RFIPredictor : Model loading and inference
+    """
     import torch
     from huggingface_hub import HfApi, create_repo
 
@@ -385,8 +844,96 @@ def publish_model_command(args):
     print(f"  samrfi predict --model {args.repo_id}/{model_size} --input observation.ms")
 
 
-def predict_command(args):
-    """Execute prediction command"""
+def predict_command(args: argparse.Namespace) -> None:
+    """
+    Execute RFI prediction command.
+
+    Applies trained SAM2 model to flag RFI in measurement sets.
+    Supports single-pass and iterative flagging modes with adaptive
+    or fixed probability thresholds.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - model : str
+            Path to trained model (.pth) or HuggingFace repo ID
+        - input : str
+            Path to input measurement set
+        - checkpoint : str
+            SAM2 checkpoint size ('tiny', 'small', 'base_plus', 'large')
+        - iterations : int, optional
+            Number of iterative flagging passes (default: 1 = single-pass)
+        - num_antennas : int, optional
+            Number of antennas to load (default: all)
+        - patch_size : int
+            Patch size in pixels (default: 128)
+        - stretch : str
+            Stretch function ('SQRT', 'LOG10', 'None')
+        - threshold : float, optional
+            RFI probability threshold (default: None = adaptive mean)
+        - device : str
+            Compute device ('cuda' or 'cpu')
+        - batch_size : int
+            Batch size for inference (default: 4)
+        - apply_existing : bool
+            Apply existing MS flags before prediction
+        - no_save : bool
+            Don't save flags to MS (prediction only)
+
+    Examples
+    --------
+    Single-pass prediction with local model:
+
+    >>> # Command line
+    >>> samrfi predict --model ./models/sam2_rfi.pth --input observation.ms
+
+    Single-pass with HuggingFace model:
+
+    >>> # Command line
+    >>> samrfi predict --model polarimetic/sam-rfi/large --input observation.ms
+
+    Iterative flagging (3 passes):
+
+    >>> # Command line
+    >>> samrfi predict --model ./models/sam2_rfi.pth \\
+    ...     --input observation.ms --iterations 3
+
+    Fixed threshold prediction:
+
+    >>> # Command line
+    >>> samrfi predict --model ./models/sam2_rfi.pth \\
+    ...     --input observation.ms --threshold 0.5
+
+    Prediction without saving flags:
+
+    >>> # Command line
+    >>> samrfi predict --model ./models/sam2_rfi.pth \\
+    ...     --input observation.ms --no-save
+
+    Notes
+    -----
+    Flagging modes:
+    - Single-pass (iterations=1): One forward pass through all data
+    - Iterative (iterations>1): Multiple passes, refining flags each iteration
+
+    Threshold modes:
+    - Adaptive (threshold=None): Uses mean of predicted probabilities
+    - Fixed (threshold=0.0-1.0): Uses specified threshold value
+
+    The prediction process:
+    1. Load measurement set and trained model
+    2. Extract patches from visibility data
+    3. Run SAM2 inference to predict RFI probabilities
+    4. Apply threshold to generate binary flags
+    5. Save flags to measurement set (unless --no-save)
+
+    See Also
+    --------
+    RFIPredictor : Prediction and inference implementation
+    RFIPredictor.predict_ms : Single-pass prediction
+    RFIPredictor.predict_iterative : Iterative prediction
+    """
     print("=" * 60)
     print("SAM-RFI RFI Prediction")
     print("=" * 60)
@@ -452,8 +999,65 @@ def predict_command(args):
         print(f"Flags saved to: {args.input}")
 
 
-def evaluate_command(args):
-    """Execute evaluation command - compute metrics given ground truth and predicted flags"""
+def evaluate_command(args: argparse.Namespace) -> int:
+    """
+    Execute evaluation command.
+
+    Computes segmentation metrics by comparing predicted RFI flags
+    against ground truth masks. Saves results to CSV.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command-line arguments containing:
+        - input : str
+            Path to measurement set with predicted flags
+        - ground_truth : str
+            Path to ground truth .npy file
+        - output : str
+            Output CSV file path (default: 'metrics.csv')
+
+    Returns
+    -------
+    int
+        Exit code: 0 if successful, 1 if error.
+
+    Examples
+    --------
+    Evaluate predictions against ground truth:
+
+    >>> # Command line
+    >>> samrfi evaluate \\
+    ...     --input observation.ms \\
+    ...     --ground-truth ground_truth.npy \\
+    ...     --output metrics.csv
+
+    Notes
+    -----
+    Computed metrics:
+    - Precision: TP / (TP + FP)
+    - Recall: TP / (TP + FN)
+    - F1 Score: 2 * (Precision * Recall) / (Precision + Recall)
+    - IoU (Jaccard): TP / (TP + FP + FN)
+    - Accuracy: (TP + TN) / (TP + TN + FP + FN)
+    - Specificity: TN / (TN + FP)
+
+    Where:
+    - TP: True Positives (correctly flagged RFI)
+    - TN: True Negatives (correctly unflagged clean data)
+    - FP: False Positives (incorrectly flagged clean data)
+    - FN: False Negatives (missed RFI)
+
+    Output CSV format:
+    - ms_path: Path to measurement set
+    - ground_truth_path: Path to ground truth file
+    - precision, recall, f1, iou, accuracy, specificity: Metric values
+
+    See Also
+    --------
+    evaluate_segmentation : Metrics computation implementation
+    MSLoader.load_flags : Flag loading from measurement sets
+    """
     print("=" * 60)
     print("SAM-RFI Evaluation")
     print("=" * 60)
@@ -505,8 +1109,53 @@ def evaluate_command(args):
     print("=" * 60)
 
 
-def main():
-    """Main CLI entry point"""
+def main() -> int:
+    """
+    Main CLI entry point.
+
+    Parses command-line arguments and dispatches to appropriate command
+    handlers for SAM-RFI operations.
+
+    Returns
+    -------
+    int
+        Exit code: 0 if successful, 1 if error.
+
+    Examples
+    --------
+    Display help:
+
+    >>> # Command line
+    >>> samrfi --help
+
+    Run a command:
+
+    >>> # Command line
+    >>> samrfi train --config config.yaml --dataset ./data
+
+    Notes
+    -----
+    Available commands:
+    - generate-data: Generate training datasets
+    - train: Train SAM2 models
+    - predict: Apply models for RFI flagging
+    - evaluate: Compute metrics against ground truth
+    - publish: Upload datasets/models to HuggingFace Hub
+    - create-config: Generate default configuration files
+    - validate-config: Validate configuration files
+
+    Global options (available for all commands):
+    - --log-level: Set logging verbosity (DEBUG, INFO, WARNING, ERROR)
+    - --log-file: Write logs to file in addition to console
+
+    See Also
+    --------
+    generate_data_command : Data generation
+    train_command : Model training
+    predict_command : RFI prediction
+    evaluate_command : Metrics evaluation
+    publish_command : HuggingFace Hub publishing
+    """
     parser = argparse.ArgumentParser(
         description="SAM-RFI: SAM2 training and prediction for Radio Frequency Interference detection",
         formatter_class=argparse.RawDescriptionHelpFormatter,

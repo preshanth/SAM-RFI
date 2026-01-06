@@ -1,9 +1,51 @@
 """
-Synthetic Data Generator - Generate training data from synthetic RFI simulations
+Synthetic RFI data generator for SAM-RFI training datasets.
+
+This module provides functionality to generate SAM2 training datasets from
+synthetic RFI simulations with exact ground truth masks. It supports physically
+realistic RFI types including narrowband/broadband persistent signals, intermittent
+periodic signals, random bursts, and frequency sweeps. The generator creates
+datasets with 6 orders of magnitude dynamic range (1 mJy noise to 1000 Jy RFI).
+
+Classes
+-------
+RawPatchDataset
+    Simple container for raw complex patches without preprocessing.
+SyntheticDataGenerator
+    Generate SAM2 training datasets from synthetic RFI simulations.
+
+Functions
+---------
+_init_worker
+    Initialize worker process with generator instance for multiprocessing.
+_worker_generate_and_preprocess
+    Worker function to generate and optionally preprocess one sample.
+
+Examples
+--------
+>>> from samrfi.data_generation import SyntheticDataGenerator
+>>> from samrfi.config import ConfigLoader
+>>>
+>>> # Load configuration
+>>> config = ConfigLoader.load_data('synthetic_config.yaml')
+>>>
+>>> # Generate synthetic dataset
+>>> generator = SyntheticDataGenerator(config)
+>>> dataset_path = generator.generate('./output/synthetic_dataset')
+>>> print(f"Dataset with exact ground truth saved to: {dataset_path}")
+
+Notes
+-----
+Physical parameters used for realistic RFI simulation:
+- Noise level: ~1 mJy (milli-Jansky)
+- RFI power: ~1000-10000 Jy (6 orders of magnitude above noise)
+- Bandpass rolloff: 8th order polynomial edge effects (optional)
+- Polarization correlation: Correlated RFI across polarizations (default 0.8)
 """
 
 import json
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -18,33 +60,102 @@ _global_proc_config = None
 
 class RawPatchDataset:
     """
-    Simple container for raw complex patches (no preprocessing).
+    Simple container for raw complex patches without preprocessing.
 
-    Compatible with BatchWriter interface (uses .images and .labels attributes).
+    This class provides a minimal dataset interface compatible with BatchWriter
+    for storing raw complex visibility data before channel extraction and
+    augmentation. Used when save_raw=True in configuration.
+
+    Parameters
+    ----------
+    complex_patches : torch.Tensor
+        Complex patches tensor with shape (N, H, W) and dtype complex64,
+        where N is number of patches, H is height, W is width.
+    masks : torch.Tensor
+        Binary masks tensor with shape (N, H, W) and dtype uint8,
+        indicating RFI locations (1=RFI, 0=clean).
+
+    Attributes
+    ----------
+    images : torch.Tensor
+        Stored complex patches (named for BatchWriter compatibility).
+    labels : torch.Tensor
+        Stored binary masks (named for BatchWriter compatibility).
+
+    Examples
+    --------
+    >>> import torch
+    >>> patches = torch.randn(10, 128, 128, dtype=torch.complex64)
+    >>> masks = torch.randint(0, 2, (10, 128, 128), dtype=torch.uint8)
+    >>> dataset = RawPatchDataset(patches, masks)
+    >>> len(dataset)
+    10
+
+    Notes
+    -----
+    The .images attribute contains raw complex data, not RGB images.
+    Channel extraction (gradient, log_amp, phase) happens during training
+    when using GPUDataset with on-the-fly transforms.
     """
 
-    def __init__(self, complex_patches, masks):
+    def __init__(
+        self, complex_patches: torch.Tensor, masks: torch.Tensor
+    ) -> None:
         """
-        Args:
-            complex_patches: torch.Tensor of complex patches (N, H, W) - complex64
-            masks: torch.Tensor of binary masks (N, H, W) - uint8
+        Initialize raw patch dataset.
+
+        Parameters
+        ----------
+        complex_patches : torch.Tensor
+            Complex patches with shape (N, H, W) and dtype complex64.
+        masks : torch.Tensor
+            Binary masks with shape (N, H, W) and dtype uint8.
         """
         # Use .images and .labels for BatchWriter compatibility
         self.images = complex_patches  # Raw complex data (not RGB images)
         self.labels = masks
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """
+        Get number of patches in dataset.
+
+        Returns
+        -------
+        int
+            Number of patches.
+        """
         return len(self.images)
 
 
-def _init_worker(config_dict):
-    """Initialize worker process with generator instance."""
+def _init_worker(config_dict: Dict[str, Any]) -> None:
+    """
+    Initialize worker process with generator instance for multiprocessing.
+
+    This function is called once per worker process to create a global
+    SyntheticDataGenerator instance. Required for multiprocessing Pool
+    to avoid pickling the generator on every task.
+
+    Parameters
+    ----------
+    config_dict : dict
+        Configuration dictionary (serializable for pickling).
+        Will be converted to SimpleNamespace for attribute access.
+
+    Notes
+    -----
+    Sets global variables:
+    - _global_generator : SyntheticDataGenerator instance
+    - _global_proc_config : Processing configuration dict
+
+    This is an internal function used by multiprocessing.Pool.
+    """
     global _global_generator, _global_proc_config
 
     from types import SimpleNamespace
 
     # Convert dict to namespace
-    def dict_to_namespace(d):
+    def dict_to_namespace(d: Any) -> Any:
+        """Recursively convert dict to SimpleNamespace."""
         if isinstance(d, dict):
             return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
         return d
@@ -54,11 +165,45 @@ def _init_worker(config_dict):
     _global_proc_config = config_dict.get("processing", {})
 
 
-def _worker_generate_and_preprocess(**gen_kwargs):
+def _worker_generate_and_preprocess(**gen_kwargs: Any) -> Tuple[Any, Dict[str, Any]]:
     """
-    Worker function: Generate and optionally preprocess one sample.
+    Worker function to generate and optionally preprocess one sample.
 
-    Uses global generator instance initialized by _init_worker.
+    This function is executed by each worker process in the multiprocessing pool.
+    It generates one synthetic waterfall sample, then either saves it as raw
+    complex data or preprocesses it (patchify, augment, normalize, stretch).
+
+    Parameters
+    ----------
+    **gen_kwargs : dict
+        Keyword arguments for _generate_single_sample including:
+        - num_channels : int - Number of frequency channels
+        - num_times : int - Number of time samples
+        - noise_level : float or tuple - Noise level in mJy
+        - rfi_power_min : float or tuple - Minimum RFI power in Jy
+        - rfi_power_max : float or tuple - Maximum RFI power in Jy
+        - rfi_config : dict - RFI type configuration
+        - enable_bandpass : bool - Enable bandpass rolloff
+        - bandpass_order : int - Polynomial order for bandpass
+        - num_polarizations : int - Number of polarizations
+        - pol_corr : float - Polarization correlation coefficient
+        - synth_config : object - Full synthetic configuration
+
+    Returns
+    -------
+    dataset : RawPatchDataset or Dataset
+        If save_raw=True, returns RawPatchDataset with complex patches.
+        Otherwise, returns preprocessed Dataset with RGB images.
+    rfi_params : dict
+        Dictionary of RFI parameters for this sample (for metadata tracking).
+
+    Notes
+    -----
+    Uses global variables set by _init_worker:
+    - _global_generator : SyntheticDataGenerator instance
+    - _global_proc_config : Processing configuration dict
+
+    This is an internal function used by multiprocessing.Pool.
     """
     global _global_generator, _global_proc_config
 
@@ -110,49 +255,155 @@ def _worker_generate_and_preprocess(**gen_kwargs):
 
 class SyntheticDataGenerator:
     """
-    Generate SAM2 training datasets from synthetic RFI simulations
+    Generate SAM2 training datasets from synthetic RFI simulations.
 
-    Workflow:
-        1. Generate synthetic waterfall plots with realistic RFI types
-        2. Add physically accurate RFI (6 orders of magnitude above noise)
-        3. Generate EXACT ground truth masks (we know where RFI is!)
-        4. Patchify with 4-way rotation augmentation
-        5. Normalize + stretch (SQRT/LOG10)
-        6. Save HuggingFace dataset to disk
+    This class provides a complete pipeline for generating synthetic radio
+    interferometry data with physically realistic RFI signals and exact ground
+    truth masks. The generator supports multiple RFI types with configurable
+    parameters and outputs datasets ready for SAM2 training.
 
-    RFI Types Supported:
-        - Narrowband persistent: GPS, cell towers, satellite
-        - Broadband persistent: Lightning, power lines
-        - Narrowband intermittent (periodic): Rotating radar
-        - Narrowband bursty (random): Random pulsed transmitters
-        - Broadband bursty (random): Lightning strikes
-        - Frequency sweeps: Radar chirps, satellite drift
+    Workflow
+    --------
+    1. Generate synthetic waterfall plots with realistic RFI types
+    2. Add physically accurate RFI (6 orders of magnitude above noise)
+    3. Generate EXACT ground truth masks (we know where RFI is!)
+    4. Patchify with 4-way rotation augmentation
+    5. Normalize and stretch (SQRT/LOG10)
+    6. Save batched PyTorch dataset to disk
 
-    Physical Realism:
-        - Noise: ~1 mJy (milli-Jansky)
-        - RFI: ~1000 Jy (6 orders of magnitude higher)
-        - Bandpass rolloff: 8th order polynomial edge effects
-        - Polarization correlation: Correlated RFI across XX/YY
+    RFI Types Supported
+    -------------------
+    - Narrowband persistent: GPS, cell towers, satellites
+    - Broadband persistent: Lightning, power lines
+    - Narrowband intermittent (periodic): Rotating radar
+    - Narrowband bursty (random): Random pulsed transmitters
+    - Broadband bursty (random): Lightning strikes
+    - Frequency sweeps: Radar chirps, satellite drift (linear or quadratic)
+
+    Physical Realism
+    ----------------
+    - Noise: ~1 mJy (milli-Jansky)
+    - RFI: ~1000-10000 Jy (6 orders of magnitude higher)
+    - Bandpass rolloff: 8th order polynomial edge effects (optional)
+    - Polarization correlation: Correlated RFI across XX/YY (default 0.8)
+
+    Parameters
+    ----------
+    config : DataConfig
+        Configuration object with synthetic RFI parameters. Expected structure:
+
+        - synthetic.num_samples : int - Number of waterfall samples to generate
+        - synthetic.num_channels : int - Number of frequency channels (e.g., 2048)
+        - synthetic.num_times : int - Number of time samples (e.g., 512)
+        - synthetic.noise_mjy : float or tuple - Noise level in mJy
+        - synthetic.rfi_power_min : float or tuple - Min RFI power in Jy
+        - synthetic.rfi_power_max : float or tuple - Max RFI power in Jy
+        - synthetic.rfi_types : list - RFI types to include
+        - synthetic.rfi_type_counts : dict - Count per RFI type (int or [min, max])
+        - synthetic.enable_bandpass_rolloff : bool - Enable bandpass
+        - synthetic.bandpass_polynomial_order : int - Polynomial order (default 8)
+        - synthetic.num_polarizations : int - Number of polarizations (default 1)
+        - synthetic.polarization_correlation : float - Pol correlation (default 0.8)
+        - synthetic.generation_batch_size : int - Samples per generation batch
+        - synthetic.generation_workers : int - Parallel workers (default 1)
+        - synthetic.generate_mad_masks : bool - Also generate MAD masks
+        - processing.patch_size : int - Patch size (128, 256, 512, 1024)
+        - processing.stretch : str or None - Stretching ('SQRT', 'LOG10', None)
+        - processing.save_raw : bool - Save raw complex patches (default False)
+        - processing.enable_augmentation : bool - Enable augmentation
+        - processing.augmentation_rotations : int - Number of rotations (1, 2, 4)
+
+    Attributes
+    ----------
+    config : DataConfig
+        Stored configuration object.
+
+    Examples
+    --------
+    >>> from samrfi.config import ConfigLoader
+    >>> from samrfi.data_generation import SyntheticDataGenerator
+    >>>
+    >>> # Load configuration
+    >>> config = ConfigLoader.load_data('configs/synthetic_gen.yaml')
+    >>>
+    >>> # Generate dataset
+    >>> generator = SyntheticDataGenerator(config)
+    >>> output_path = generator.generate('./datasets/synthetic_rfi')
+    ==========================================
+    Synthetic Data Generation with Physical Realism
+    ==========================================
+    ...
+    ✓ Synthetic data generation complete!
+
+    Notes
+    -----
+    The generator supports both preprocessed and raw output modes:
+
+    - Preprocessed (save_raw=False): Generates RGB images with stretching,
+      normalization, and 4-way augmentation. Ready for immediate training.
+
+    - Raw (save_raw=True): Saves raw complex patches. Channel extraction
+      and augmentation happen on-the-fly during training (GPU pipeline).
+
+    Dynamic ranges can be randomized by specifying ranges instead of fixed values:
+    - noise_mjy: [0.5, 1.5] - Random noise level per sample
+    - rfi_power_min: [500, 1500] - Random minimum RFI power per sample
+    - rfi_type_counts: {narrowband_persistent: [1, 5]} - Random count per sample
     """
 
-    def __init__(self, config):
+    def __init__(self, config: Any) -> None:
         """
-        Initialize synthetic data generator
+        Initialize synthetic data generator.
 
-        Args:
-            config: Configuration object with synthetic RFI parameters
+        Parameters
+        ----------
+        config : DataConfig
+            Configuration object with synthetic RFI parameters.
         """
         self.config = config
 
-    def generate(self, output_path):
+    def generate(self, output_path: str) -> str:
         """
-        Generate synthetic dataset with exact ground truth masks
+        Generate synthetic dataset with exact ground truth masks.
 
-        Args:
-            output_path: Directory to save generated dataset
+        This method executes the complete synthetic data generation pipeline,
+        including parallel generation (if workers > 1), batched processing,
+        and saving in PyTorch format with comprehensive metadata.
 
-        Returns:
-            Path to saved dataset
+        Parameters
+        ----------
+        output_path : str
+            Directory path where generated dataset will be saved.
+            Will be created if it doesn't exist.
+
+        Returns
+        -------
+        str
+            Absolute path to the saved dataset directory.
+
+        Examples
+        --------
+        >>> generator = SyntheticDataGenerator(config)
+        >>> dataset_path = generator.generate('./datasets/synthetic')
+        ==========================================
+        Synthetic Data Generation with Physical Realism
+        ==========================================
+        [1/5] Generating 100 synthetic samples...
+        ...
+        ✓ Synthetic data generation complete!
+
+        Notes
+        -----
+        Output directory structure:
+        - exact_masks/ : Dataset with exact ground truth
+          - batch_*.pt : Batched PyTorch files
+          - metadata.json : Batch metadata
+        - mad_masks/ : Dataset with MAD-based masks (if generate_mad_masks=True)
+        - generation_metadata.json : Generation parameters and statistics
+        - rfi_parameters.json : Per-sample RFI parameters
+
+        The generation process is memory-efficient, processing samples in
+        batches and streaming to disk to avoid loading all samples in RAM.
         """
         print("=" * 60)
         print("Synthetic Data Generation with Physical Realism")
@@ -519,25 +770,75 @@ class SyntheticDataGenerator:
 
     def _generate_single_sample(
         self,
-        num_channels,
-        num_times,
-        noise_level,
-        rfi_power_min,
-        rfi_power_max,
-        rfi_config,
-        enable_bandpass,
-        bandpass_order,
-        num_polarizations,
-        pol_corr,
-        synth_config,
-    ):
+        num_channels: int,
+        num_times: int,
+        noise_level: float,
+        rfi_power_min: float,
+        rfi_power_max: float,
+        rfi_config: Dict[str, Any],
+        enable_bandpass: bool,
+        bandpass_order: int,
+        num_polarizations: int,
+        pol_corr: float,
+        synth_config: Any,
+    ) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]]]:
         """
-        Generate a single synthetic sample with exact mask
+        Generate a single synthetic waterfall sample with exact ground truth mask.
 
-        Returns:
-            waterfall: (1, num_polarizations, channels, times)
-            exact_mask: (1, num_polarizations, channels, times) - binary mask of RFI locations
-            rfi_params: dict of RFI parameters for this sample
+        This method creates one synthetic observation including Gaussian noise,
+        optional bandpass rolloff, multiple RFI signals of various types,
+        and correlated polarizations with complex visibilities.
+
+        Parameters
+        ----------
+        num_channels : int
+            Number of frequency channels.
+        num_times : int
+            Number of time samples.
+        noise_level : float
+            Noise level in mJy (milli-Jansky).
+        rfi_power_min : float
+            Minimum RFI power in Jy (Jansky).
+        rfi_power_max : float
+            Maximum RFI power in Jy (Jansky).
+        rfi_config : dict
+            RFI type configuration with counts per type.
+        enable_bandpass : bool
+            Whether to apply bandpass rolloff.
+        bandpass_order : int
+            Polynomial order for bandpass rolloff (e.g., 8).
+        num_polarizations : int
+            Number of polarizations to generate.
+        pol_corr : float
+            Polarization correlation coefficient (0.0 to 1.0).
+        synth_config : object
+            Full synthetic configuration object.
+
+        Returns
+        -------
+        waterfall : np.ndarray
+            Complex visibility waterfall with shape (1, num_polarizations, channels, times).
+            Dtype is complex128 (complex real+imaginary components).
+        exact_mask : np.ndarray
+            Binary RFI mask with shape (1, num_polarizations, channels, times).
+            Dtype is bool (True=RFI, False=clean).
+        rfi_params : list of dict
+            List of RFI parameter dictionaries for each RFI signal added.
+            Each dict contains type, amplitude, and type-specific parameters.
+
+        Notes
+        -----
+        The generation process:
+        1. Creates Gaussian noise baseline (~1 mJy)
+        2. Applies optional bandpass rolloff (polynomial edge attenuation)
+        3. Adds RFI signals (6 orders of magnitude stronger: ~1000-10000 Jy)
+        4. Creates polarizations with correlation
+        5. Adds random phase to create complex visibilities
+
+        Polarization handling:
+        - Pol 0: Full RFI + noise
+        - Pol 1: Correlated RFI (pol_corr fraction) + noise
+        - Pol 2+: Noise only (no RFI)
         """
         # Sample noise level if range provided
         if isinstance(noise_level, (list | tuple)):
@@ -655,8 +956,32 @@ class SyntheticDataGenerator:
 
         return waterfall, exact_mask, rfi_params
 
-    def _generate_bandpass(self, num_channels, order):
-        """Generate realistic bandpass with polynomial rolloff at edges"""
+    def _generate_bandpass(self, num_channels: int, order: int) -> np.ndarray:
+        """
+        Generate realistic bandpass response with polynomial rolloff at edges.
+
+        Simulates realistic radio telescope bandpass with reduced sensitivity
+        at band edges due to filter characteristics.
+
+        Parameters
+        ----------
+        num_channels : int
+            Number of frequency channels.
+        order : int
+            Polynomial order for rolloff curve (higher = sharper transition).
+            Typical value: 8.
+
+        Returns
+        -------
+        bandpass : np.ndarray
+            Bandpass response array with shape (num_channels,).
+            Values range from 0.0 (fully attenuated) to 1.0 (full sensitivity).
+
+        Notes
+        -----
+        Applies polynomial rolloff to 10% of channels at each band edge.
+        Central 80% of band has full sensitivity (response = 1.0).
+        """
         bandpass = np.ones(num_channels)
         edge_fraction = 0.1  # Rolloff in 10% of channels at each edge
         edge_channels = int(num_channels * edge_fraction)
@@ -672,8 +997,42 @@ class SyntheticDataGenerator:
 
         return bandpass
 
-    def _add_narrowband_persistent(self, nc, nt, amp, config):
-        """Persistent narrowband RFI (GPS, satellite)"""
+    def _add_narrowband_persistent(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+        """
+        Add persistent narrowband RFI signal.
+
+        Simulates continuous narrowband interference sources like GPS satellites,
+        cell towers, or broadcast transmitters that occupy a few channels
+        continuously across all time samples.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused, for future extensibility).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: center_freq (int), bandwidth (int).
+
+        Notes
+        -----
+        - Center frequency: Random location in central 80% of band
+        - Bandwidth: Random 1-10 channels
+        - Persistence: Constant amplitude across all time samples
+        """
         center_freq = np.random.randint(int(nc * 0.1), int(nc * 0.9))
         bandwidth = np.random.randint(1, 10)
 
@@ -691,8 +1050,41 @@ class SyntheticDataGenerator:
         params = {"center_freq": int(center_freq), "bandwidth": int(bandwidth)}
         return signal, mask, params
 
-    def _add_broadband_persistent(self, nc, nt, amp, config):
-        """Persistent broadband RFI (power lines)"""
+    def _add_broadband_persistent(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+        """
+        Add persistent broadband RFI signal.
+
+        Simulates broadband interference sources like power lines or continuous
+        broadband emitters that affect all channels during a time window.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: center_time (int), time_width (int).
+
+        Notes
+        -----
+        - Center time: Random location in central 80% of observation
+        - Time width: Random 5-50 time samples
+        - Broadband: Affects all frequency channels simultaneously
+        """
         center_time = np.random.randint(int(nt * 0.1), int(nt * 0.9))
         time_width = np.random.randint(5, 50)
 
@@ -708,8 +1100,42 @@ class SyntheticDataGenerator:
         params = {"center_time": int(center_time), "time_width": int(time_width)}
         return signal, mask, params
 
-    def _add_narrowband_intermittent(self, nc, nt, amp, config):
-        """Periodic narrowband RFI (rotating radar)"""
+    def _add_narrowband_intermittent(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+        """
+        Add intermittent periodic narrowband RFI signal.
+
+        Simulates periodic interference sources like rotating radar systems that
+        emit narrowband signals at regular intervals with a duty cycle.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: center_freq (int), bandwidth (int), period (int), duty_cycle (float).
+
+        Notes
+        -----
+        - Center frequency: Random location in central 80% of band
+        - Bandwidth: Random 2-15 channels
+        - Period: Random 20-200 time samples
+        - Duty cycle: Random 0.1-0.5 (10-50% active time)
+        """
         center_freq = np.random.randint(int(nc * 0.1), int(nc * 0.9))
         bandwidth = np.random.randint(2, 15)
         period = np.random.randint(20, 200)
@@ -736,8 +1162,43 @@ class SyntheticDataGenerator:
         }
         return signal, mask, params
 
-    def _add_narrowband_bursty(self, nc, nt, amp, config):
-        """Random bursty narrowband RFI (pulsed transmitters)"""
+    def _add_narrowband_bursty(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+        """
+        Add random bursty narrowband RFI signal.
+
+        Simulates random pulsed narrowband emitters like intermittent transmitters
+        with irregular burst patterns.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: center_freq (int), bandwidth (int), num_bursts (int).
+
+        Notes
+        -----
+        - Center frequency: Random location in central 80% of band
+        - Bandwidth: Random 2-20 channels
+        - Number of bursts: Random 3-15 bursts
+        - Burst widths: Random 2-20 time samples per burst
+        - Burst times: Randomly distributed (no fixed period)
+        """
         center_freq = np.random.randint(int(nc * 0.1), int(nc * 0.9))
         bandwidth = np.random.randint(2, 20)
         num_bursts = np.random.randint(3, 15)
@@ -764,8 +1225,42 @@ class SyntheticDataGenerator:
         }
         return signal, mask, params
 
-    def _add_broadband_bursty(self, nc, nt, amp, config):
-        """Random bursty broadband RFI (lightning)"""
+    def _add_broadband_bursty(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+        """
+        Add random bursty broadband RFI signal.
+
+        Simulates random broadband bursts like lightning strikes or other
+        impulsive broadband interference affecting all channels.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: num_bursts (int).
+
+        Notes
+        -----
+        - Number of bursts: Random 2-10 bursts
+        - Burst widths: Random 1-5 time samples (very brief)
+        - Burst times: Randomly distributed
+        - Broadband: Affects all frequency channels
+        """
         num_bursts = np.random.randint(2, 10)
 
         signal = np.zeros((nc, nt))
@@ -782,8 +1277,43 @@ class SyntheticDataGenerator:
         params = {"num_bursts": int(num_bursts)}
         return signal, mask, params
 
-    def _add_frequency_sweep(self, nc, nt, amp, config):
-        """Frequency sweep RFI (radar chirp, satellite drift)"""
+    def _add_frequency_sweep(
+        self, nc: int, nt: int, amp: float, config: Any
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, int]]:
+        """
+        Add frequency sweep RFI signal.
+
+        Simulates narrowband RFI that sweeps across frequency channels over time,
+        like radar chirps or drifting satellite signals.
+
+        Parameters
+        ----------
+        nc : int
+            Number of frequency channels.
+        nt : int
+            Number of time samples.
+        amp : float
+            RFI amplitude in mJy (milli-Jansky).
+        config : object
+            Configuration object (currently unused).
+
+        Returns
+        -------
+        signal : np.ndarray
+            RFI signal array with shape (nc, nt).
+        mask : np.ndarray
+            Binary mask with shape (nc, nt), dtype bool.
+        params : dict
+            Parameters: start_freq (int), end_freq (int), bandwidth (int), sweep_order (int).
+
+        Notes
+        -----
+        - Start frequency: Random location in lower half of band
+        - End frequency: Random location in upper half of band
+        - Bandwidth: Random 2-10 channels
+        - Sweep order: 1 (linear) or 2 (quadratic/accelerating)
+        - Creates diagonal patterns in time-frequency space
+        """
         start_freq = np.random.randint(int(nc * 0.1), int(nc * 0.5))
         end_freq = np.random.randint(int(nc * 0.5), int(nc * 0.9))
         bandwidth = np.random.randint(2, 10)
@@ -814,8 +1344,46 @@ class SyntheticDataGenerator:
         }
         return signal, mask, params
 
-    def _parse_rfi_config(self, config):
-        """Parse RFI configuration from config"""
+    def _parse_rfi_config(self, config: Any) -> Dict[str, Dict[str, Any]]:
+        """
+        Parse RFI configuration from configuration object.
+
+        Extracts RFI types and counts from configuration, applying defaults
+        for any unspecified types.
+
+        Parameters
+        ----------
+        config : object
+            Configuration object with optional attributes:
+            - rfi_types : list - RFI types to include
+            - rfi_type_counts : dict - Counts per RFI type (int or [min, max])
+
+        Returns
+        -------
+        rfi_config : dict
+            Dictionary mapping RFI type names to configuration dicts.
+            Each config dict contains:
+            - count : int or list - Number of instances (or [min, max] range)
+
+        Examples
+        --------
+        >>> config = SimpleNamespace(
+        ...     rfi_types=['narrowband_persistent', 'frequency_sweep'],
+        ...     rfi_type_counts={'narrowband_persistent': [1, 3], 'frequency_sweep': 2}
+        ... )
+        >>> generator._parse_rfi_config(config)
+        {'narrowband_persistent': {'count': [1, 3]}, 'frequency_sweep': {'count': 2}, ...}
+
+        Notes
+        -----
+        Default RFI types if not specified:
+        - narrowband_persistent: 1
+        - broadband_persistent: 1
+        - narrowband_bursty: 1
+        - frequency_sweep: 1
+        - narrowband_intermittent: 0 (disabled)
+        - broadband_bursty: 0 (disabled)
+        """
         rfi_types = config.get(
             "rfi_types", ["narrowband_persistent", "broadband_persistent", "frequency_sweep"]
         )

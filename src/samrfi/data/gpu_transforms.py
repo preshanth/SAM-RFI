@@ -1,29 +1,35 @@
 """
-GPU-Accelerated Transforms for SAM-RFI Training
+GPU-Accelerated Transforms for SAM-RFI Training.
 
 This module provides GPU-accelerated versions of all data transformations
 that were previously done on CPU. Delivers 10-100x speedup for data preprocessing.
 
-Key Features:
+Key Features
+------------
 - Channel extraction from complex visibilities (100x faster than CPU)
 - Physics-preserving 4-way augmentation (IDENTICAL to CPU implementation)
 - GPU-resident normalization (essentially free)
 - Batched operations for maximum parallelism
 
-IMPORTANT: Augmentation Strategy
-The 4-way augmentation used here is IDENTICAL to the CPU implementation and was
-specifically designed to preserve the physics of radio frequency interference data:
+Important Notes
+---------------
+Augmentation Strategy:
+    The 4-way augmentation used here is IDENTICAL to the CPU implementation and was
+    specifically designed to preserve the physics of radio frequency interference data:
+
     1. Original (identity)
     2. Vertical flip (frequency axis flip)
     3. Transpose (swap time/frequency axes)
     4. Transpose + vertical flip
 
-These are NOT arbitrary rotations or random transforms. They preserve the physical
-meaning of the time and frequency axes in radio astronomy data.
+    These are NOT arbitrary rotations or random transforms. They preserve the physical
+    meaning of the time and frequency axes in radio astronomy data.
 
 Author: SAM-RFI Team
 Date: 2025-12-08 (Original), 2025-12-12 (Physics-preserving augmentation fix)
 """
+
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -33,21 +39,60 @@ class GPUTransforms:
     """
     GPU-accelerated transform pipeline for SAM-RFI training.
 
-    All operations are performed on GPU using PyTorch and Kornia,
-    avoiding CPU bottlenecks in the data pipeline.
+    All operations are performed on GPU using PyTorch, avoiding CPU
+    bottlenecks in the data pipeline. Provides 10-100x speedup over
+    CPU-based preprocessing.
+
+    Parameters
+    ----------
+    device : str, default='cuda'
+        Device to run transforms on: 'cuda', 'mps', or 'cpu'.
+    enable_augmentation : bool, default=True
+        Whether to apply physics-preserving augmentations.
+
+    Attributes
+    ----------
+    device : str
+        Device where transforms are executed.
+    enable_augmentation : bool
+        Whether augmentation is enabled.
+    imagenet_mean : torch.Tensor
+        ImageNet mean values for normalization (3, 1, 1).
+    imagenet_std : torch.Tensor
+        ImageNet standard deviation values for normalization (3, 1, 1).
+
+    Examples
+    --------
+    >>> transforms = GPUTransforms(device='cuda', enable_augmentation=True)
+    >>> complex_data = torch.randn(256, 256, dtype=torch.complex64).cuda()
+    >>> mask = torch.randint(0, 2, (256, 256)).cuda()
+    >>> image, aug_mask = transforms.full_transform_pipeline(
+    ...     complex_data, mask, augmentation_index=1
+    ... )
+    >>> image.shape
+    torch.Size([3, 256, 256])
     """
 
     # ImageNet normalization constants (SAM2 standard)
     IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
     IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
 
-    def __init__(self, device: str = "cuda", enable_augmentation: bool = True):
+    def __init__(self, device: str = "cuda", enable_augmentation: bool = True) -> None:
         """
         Initialize GPU transforms.
 
-        Args:
-            device: Device to run transforms on ('cuda', 'mps', or 'cpu')
-            enable_augmentation: Whether to apply physics-preserving augmentations
+        Parameters
+        ----------
+        device : str, default='cuda'
+            Device to run transforms on: 'cuda', 'mps', or 'cpu'.
+        enable_augmentation : bool, default=True
+            Whether to apply physics-preserving augmentations.
+
+        Notes
+        -----
+        Augmentation is NOT done via Kornia's random transforms. Instead, we use
+        deterministic 4-way augmentation that matches CPU implementation to preserve
+        the physics of time-frequency radio data.
         """
         self.device = device
         self.enable_augmentation = enable_augmentation
@@ -67,21 +112,38 @@ class GPUTransforms:
         """
         Extract 3-channel representation from complex visibilities on GPU.
 
-        This matches the CPU implementation in preprocessor.py exactly.
-        Uses np.diff-equivalent gradient computation for compatibility.
+        This matches the CPU implementation in preprocessor.py exactly, using
+        np.diff-equivalent gradient computation for compatibility. Provides
+        100x speedup over CPU implementation.
 
-        Channels (in order):
+        Parameters
+        ----------
+        complex_data : torch.Tensor
+            Complex visibility tensor of shape (B, H, W) or (H, W).
+        eps : float, default=1e-10
+            Small constant for numerical stability in log operations.
+
+        Returns
+        -------
+        torch.Tensor
+            3-channel RGB representation of shape (B, H, W, 3) or (H, W, 3),
+            normalized to [0, 1]. Channels are ordered as:
             - Channel 0: Gradient magnitude (spatial derivative of log amplitude)
             - Channel 1: Log amplitude (fixed physical scale)
             - Channel 2: Phase (normalized to [0, 1])
 
-        Args:
-            complex_data: Complex tensor (B, H, W) or (H, W)
-            eps: Small constant for numerical stability
+        Notes
+        -----
+        Returns (H, W, 3) format to match CPU implementation. Use
+        `imagenet_normalize_gpu` to convert to (3, H, W) format for SAM2.
 
-        Returns:
-            3-channel tensor (B, H, W, 3) or (H, W, 3) normalized to [0, 1]
-            NOTE: Returns (H, W, 3) format to match CPU implementation!
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> complex_data = torch.randn(256, 256, dtype=torch.complex64).cuda()
+        >>> rgb = transforms.channel_extraction_gpu(complex_data)
+        >>> rgb.shape
+        torch.Size([256, 256, 3])
         """
         # Handle both batched and single input
         input_is_batched = complex_data.dim() == 3
@@ -139,15 +201,28 @@ class GPUTransforms:
         """
         Apply ImageNet normalization on GPU.
 
-        Previously done on CPU - now essentially free on GPU.
+        Previously done on CPU, now essentially free on GPU. Converts from
+        (H, W, 3) to (3, H, W) format required by SAM2.
 
-        Args:
-            images: RGB tensor (B, H, W, 3) or (H, W, 3) in range [0, 1]
-                   NOTE: Expects (H, W, 3) format from channel_extraction_gpu
+        Parameters
+        ----------
+        images : torch.Tensor
+            RGB tensor of shape (B, H, W, 3) or (H, W, 3) in range [0, 1].
+            Expects (H, W, 3) format from channel_extraction_gpu.
 
-        Returns:
-            Normalized tensor (B, 3, H, W) or (3, H, W) with ImageNet mean/std
-            NOTE: Output is (3, H, W) format for SAM2
+        Returns
+        -------
+        torch.Tensor
+            Normalized tensor of shape (B, 3, H, W) or (3, H, W) with
+            ImageNet mean/std applied. Output is in (3, H, W) format for SAM2.
+
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> rgb = torch.rand(256, 256, 3).cuda()  # (H, W, 3)
+        >>> normalized = transforms.imagenet_normalize_gpu(rgb)
+        >>> normalized.shape
+        torch.Size([3, 256, 256])
         """
         # Handle both batched and single input
         if images.dim() == 3:
@@ -163,33 +238,51 @@ class GPUTransforms:
 
     def apply_augmentation_gpu(
         self, images: torch.Tensor, masks: torch.Tensor, augmentation_index: int = 0
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Apply deterministic 4-way augmentation to match CPU implementation.
 
-        IMPORTANT: This uses the SAME physics-preserving transforms as the CPU version.
-        The 4 transforms preserve the time-frequency structure of radio data:
-            0: Original (identity)
-            1: Vertical flip (frequency axis flip)
-            2: Transpose (swap time/frequency axes)
-            3: Transpose + vertical flip
+        Uses the SAME physics-preserving transforms as the CPU version.
+        The 4 transforms preserve the time-frequency structure of radio data.
 
+        Parameters
+        ----------
+        images : torch.Tensor
+            Image tensor of shape (B, H, W, 3) from channel_extraction_gpu.
+        masks : torch.Tensor
+            Ground truth mask tensor of shape (B, H, W).
+        augmentation_index : int, default=0
+            Which augmentation to apply (0-3):
+            - 0: Original (identity)
+            - 1: Vertical flip (frequency axis flip)
+            - 2: Transpose (swap time/frequency axes)
+            - 3: Transpose + vertical flip
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            Tuple of (augmented_images, augmented_masks):
+            - augmented_images: (B, H, W, 3) or (B, W, H, 3) if transposed
+            - augmented_masks: (B, H, W) or (B, W, H) if transposed
+
+        Raises
+        ------
+        ValueError
+            If augmentation_index is not in range [0, 3].
+
+        Notes
+        -----
         These are NOT arbitrary rotations - they preserve the physical meaning
         of the time and frequency axes in radio astronomy data.
 
-        Args:
-            images: Image tensor (B, H, W, 3) from channel_extraction_gpu
-            masks: Mask tensor (B, H, W)
-            augmentation_index: Which augmentation to apply (0-3)
-                0 = Original
-                1 = Vertical flip (axis=0)
-                2 = Transpose
-                3 = Transpose + vertical flip
-
-        Returns:
-            Tuple of (augmented_images, augmented_masks)
-            - augmented_images: (B, H, W, 3) or (B, W, H, 3) if transposed
-            - augmented_masks: (B, H, W) or (B, W, H) if transposed
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> images = torch.rand(4, 256, 256, 3).cuda()
+        >>> masks = torch.randint(0, 2, (4, 256, 256)).cuda()
+        >>> aug_img, aug_mask = transforms.apply_augmentation_gpu(images, masks, 1)
+        >>> aug_img.shape
+        torch.Size([4, 256, 256, 3])
         """
         if not self.enable_augmentation:
             return images, masks
@@ -228,13 +321,25 @@ class GPUTransforms:
 
     def normalize_by_median_gpu(self, data: torch.Tensor) -> torch.Tensor:
         """
-        Normalize by median on GPU.
+        Normalize tensor by its median value on GPU.
 
-        Args:
-            data: Tensor to normalize (any shape)
+        Parameters
+        ----------
+        data : torch.Tensor
+            Tensor to normalize (any shape).
 
-        Returns:
-            Normalized tensor
+        Returns
+        -------
+        torch.Tensor
+            Normalized tensor (data / median if median > 0, else original data).
+
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> data = torch.randn(256, 256).cuda() + 10
+        >>> normalized = transforms.normalize_by_median_gpu(data)
+        >>> torch.median(normalized).item()  # doctest: +SKIP
+        1.0
         """
         # Compute median (GPU operation)
         median = torch.median(data)
@@ -245,17 +350,40 @@ class GPUTransforms:
             return data
 
     def apply_stretch_gpu(
-        self, data: torch.Tensor, stretch_type: str | None = None
+        self, data: torch.Tensor, stretch_type: Optional[str] = None
     ) -> torch.Tensor:
         """
         Apply stretching transform on GPU.
 
-        Args:
-            data: Input tensor
-            stretch_type: 'SQRT', 'LOG10', or None
+        Applies non-linear stretching to enhance contrast in radio data.
 
-        Returns:
-            Stretched tensor
+        Parameters
+        ----------
+        data : torch.Tensor
+            Input tensor (any shape).
+        stretch_type : str or None, default=None
+            Type of stretching to apply:
+            - 'SQRT': Square root stretching
+            - 'LOG10': Logarithmic stretching
+            - None: No stretching (identity)
+
+        Returns
+        -------
+        torch.Tensor
+            Stretched tensor (same shape as input).
+
+        Raises
+        ------
+        ValueError
+            If stretch_type is not one of: None, 'SQRT', 'LOG10'.
+
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> data = torch.rand(256, 256).cuda() * 1000
+        >>> stretched = transforms.apply_stretch_gpu(data, 'SQRT')
+        >>> stretched.max() < data.max()  # doctest: +SKIP
+        True
         """
         if stretch_type is None:
             return data
@@ -279,31 +407,54 @@ class GPUTransforms:
         complex_patch: torch.Tensor,
         mask: torch.Tensor,
         augmentation_index: int = 0,
-        stretch_type: str | None = None,
+        stretch_type: Optional[str] = None,
         normalize_before_stretch: bool = False,
         normalize_after_stretch: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Complete GPU transform pipeline for a single patch or batch.
 
-        This replaces the entire CPU preprocessing pipeline with GPU operations.
+        This replaces the entire CPU preprocessing pipeline with GPU operations,
+        providing 10-100x speedup.
 
-        Args:
-            complex_patch: Complex visibility data (H, W) or (B, H, W)
-            mask: Ground truth mask (H, W) or (B, H, W)
-            augmentation_index: Which augmentation to apply (0-3)
-                0 = Original
-                1 = Vertical flip
-                2 = Transpose
-                3 = Transpose + vertical flip
-            stretch_type: Optional stretching ('SQRT', 'LOG10', or None)
-            normalize_before_stretch: Whether to normalize before stretching
-            normalize_after_stretch: Whether to normalize after stretching
+        Parameters
+        ----------
+        complex_patch : torch.Tensor
+            Complex visibility data of shape (H, W) or (B, H, W).
+        mask : torch.Tensor
+            Ground truth mask of shape (H, W) or (B, H, W).
+        augmentation_index : int, default=0
+            Which augmentation to apply (0-3):
+            - 0: Original
+            - 1: Vertical flip
+            - 2: Transpose
+            - 3: Transpose + vertical flip
+        stretch_type : str or None, default=None
+            Optional stretching: 'SQRT', 'LOG10', or None.
+        normalize_before_stretch : bool, default=False
+            Whether to normalize by median before stretching.
+        normalize_after_stretch : bool, default=False
+            Whether to normalize by median after stretching.
 
-        Returns:
-            Tuple of (normalized_image, mask)
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            Tuple of (normalized_image, mask):
             - normalized_image: (3, H, W) or (B, 3, H, W) with ImageNet normalization
             - mask: (H, W) or (B, H, W) augmented to match image
+
+        Examples
+        --------
+        >>> transforms = GPUTransforms()
+        >>> complex_data = torch.randn(256, 256, dtype=torch.complex64).cuda()
+        >>> mask = torch.randint(0, 2, (256, 256)).cuda()
+        >>> image, aug_mask = transforms.full_transform_pipeline(
+        ...     complex_data, mask,
+        ...     augmentation_index=1,
+        ...     stretch_type='SQRT'
+        ... )
+        >>> image.shape, aug_mask.shape
+        (torch.Size([3, 256, 256]), torch.Size([256, 256]))
         """
         # Ensure tensors are on correct device
         if not complex_patch.is_cuda and self.device != "cpu":
@@ -362,11 +513,26 @@ def create_gpu_transforms(device: str = "cuda", enable_augmentation: bool = True
     """
     Factory function to create GPU transforms.
 
-    Args:
-        device: Device to run transforms on
-        enable_augmentation: Whether to enable augmentation
+    Convenience function for creating GPUTransforms instances.
 
-    Returns:
-        GPUTransforms instance
+    Parameters
+    ----------
+    device : str, default='cuda'
+        Device to run transforms on: 'cuda', 'mps', or 'cpu'.
+    enable_augmentation : bool, default=True
+        Whether to enable physics-preserving augmentations.
+
+    Returns
+    -------
+    GPUTransforms
+        Initialized GPUTransforms instance.
+
+    Examples
+    --------
+    >>> transforms = create_gpu_transforms(device='cuda', enable_augmentation=True)
+    >>> transforms.device
+    'cuda'
+    >>> transforms.enable_augmentation
+    True
     """
     return GPUTransforms(device=device, enable_augmentation=enable_augmentation)

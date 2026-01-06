@@ -1,13 +1,60 @@
 """
-RFI Predictor - Apply trained SAM2 models to new data
+RFI Predictor - Apply trained SAM2 models to new data.
 
-Supports single-pass and iterative flagging with progressive cleaning.
+This module provides inference capabilities for trained SAM2 models applied to
+radio frequency interference (RFI) detection tasks. It supports both single-pass
+and iterative flagging with progressive cleaning.
+
+Classes
+-------
+RFIPredictor
+    Apply trained SAM2 model to predict RFI flags on measurement sets or arrays.
+
+Functions
+---------
+_patch_sam2_view_to_reshape
+    Monkey-patch transformers Sam2Model to fix view/reshape bug.
+
+Examples
+--------
+Single-pass prediction on measurement set:
+
+>>> from samrfi.inference import RFIPredictor
+>>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+>>> flags = predictor.predict_ms('observation.ms', patch_size=128, stretch='SQRT')
+
+Iterative prediction for progressive cleaning:
+
+>>> flags = predictor.predict_iterative(
+...     'observation.ms',
+...     num_iterations=3,
+...     patch_size=128
+... )
+
+Direct array prediction:
+
+>>> import numpy as np
+>>> data = np.random.randn(10, 2, 512, 512) + 1j * np.random.randn(10, 2, 512, 512)
+>>> flags = predictor.predict_array(data, patch_size=512)
+
+Notes
+-----
+The predictor handles automatic preprocessing, patching, prediction, and
+reconstruction of flags. It validates preprocessing parameters against
+checkpoint metadata to ensure consistency between training and inference.
+
+See Also
+--------
+samrfi.training.sam2_trainer : Training module for SAM2 models
+samrfi.data.preprocessor : Data preprocessing pipeline
 """
 
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import Sam2Model, Sam2Processor
@@ -20,25 +67,78 @@ from samrfi.utils.errors import CheckpointMismatchError
 # Monkey-patch transformers Sam2Model to fix view/reshape bug
 # The bug: feat.permute(1, 2, 0).view(...) fails because permute makes tensor non-contiguous
 # Fix: Replace view() with reshape() which handles non-contiguous tensors
-def _patch_sam2_view_to_reshape():
+def _patch_sam2_view_to_reshape() -> None:
     """
     Patch Sam2Model.forward to use reshape instead of view after permute operations.
 
-    This fixes RuntimeError: view size is not compatible with input tensor's size and stride
-    (at least one dimension spans across two contiguous subspaces). Use .reshape(...) instead.
+    This function monkey-patches the transformers Sam2Model to handle non-contiguous
+    tensors that result from permute operations. The original implementation uses
+    view() which fails on non-contiguous tensors; this patch falls back to reshape()
+    which handles both contiguous and non-contiguous tensors.
+
+    Notes
+    -----
+    This is a workaround for a bug in transformers Sam2Model.forward where
+    ``tensor.permute(1, 2, 0).view(...)`` fails with RuntimeError because
+    permute makes the tensor non-contiguous.
+
+    The patch temporarily replaces torch.Tensor.view with a safe version that
+    falls back to reshape() when view() fails, then restores the original view()
+    after the forward pass.
+
+    Examples
+    --------
+    This function is called automatically at module import time:
+
+    >>> # Patch is already applied when you import the module
+    >>> from samrfi.inference import RFIPredictor
+    >>> # Sam2Model.forward now uses safe view operations
     """
     import transformers.models.sam2.modeling_sam2 as sam2_module
 
     # Save original forward method
     original_forward = sam2_module.Sam2Model.forward
 
-    def patched_forward(self, *args, **kwargs):
-        """Wrapped forward that ensures tensors are contiguous before view operations"""
+    def patched_forward(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Wrapped forward that ensures tensors are contiguous before view operations.
+
+        Parameters
+        ----------
+        *args : Any
+            Positional arguments passed to original forward method.
+        **kwargs : Any
+            Keyword arguments passed to original forward method.
+
+        Returns
+        -------
+        Any
+            Output from original forward method.
+        """
         # Temporarily replace tensor.view with a safe version
         original_view = torch.Tensor.view
 
-        def safe_view(tensor, *shape):
-            """Use reshape instead of view to handle non-contiguous tensors"""
+        def safe_view(tensor: torch.Tensor, *shape: int) -> torch.Tensor:
+            """
+            Use reshape instead of view to handle non-contiguous tensors.
+
+            Parameters
+            ----------
+            tensor : torch.Tensor
+                Input tensor to reshape.
+            *shape : int
+                Target shape dimensions.
+
+            Returns
+            -------
+            torch.Tensor
+                Reshaped tensor.
+
+            Raises
+            ------
+            RuntimeError
+                If reshape also fails (non-view-related error).
+            """
             try:
                 return original_view(tensor, *shape)
             except RuntimeError as e:
@@ -69,33 +169,133 @@ class RFIPredictor:
     """
     Apply trained SAM2 model to predict RFI flags.
 
-    Supports iterative flagging where each pass finds fainter RFI
-    that was hidden by brighter RFI in previous passes.
+    This class provides inference capabilities for trained SAM2 models, supporting
+    both single-pass and iterative flagging strategies. Iterative flagging performs
+    multiple passes where each iteration finds fainter RFI that was hidden by
+    brighter RFI in previous passes.
 
-    Usage:
-        >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
-        >>> flags = predictor.predict_ms('observation.ms')
-        >>> # Or iterative:
-        >>> flags = predictor.predict_iterative('observation.ms', num_iterations=3)
+    Parameters
+    ----------
+    model_path : str or Path
+        Path to trained model checkpoint (.pth file) OR HuggingFace repo ID
+        (e.g., 'preshanth/sam-rfi-models/large').
+    sam_checkpoint : str, default='large'
+        SAM2 checkpoint size: 'tiny', 'small', 'base_plus', or 'large'.
+        Must match the architecture used during training.
+    device : str, default='cuda'
+        Compute device for inference: 'cuda' or 'cpu'.
+    batch_size : int, default=4
+        Batch size for inference. Larger batches are faster but use more memory.
+    allow_partial_load : bool, default=False
+        If True, allow loading checkpoints with shape mismatches (not recommended).
+    auto_select_sam : bool, default=False
+        If True, automatically select SAM variant that best matches checkpoint.
+
+    Attributes
+    ----------
+    model_path : Path
+        Path to loaded model checkpoint.
+    device : str
+        Compute device being used.
+    batch_size : int
+        Batch size for inference.
+    processor : Sam2Processor
+        HuggingFace processor for SAM2 model.
+    model : Sam2Model
+        Loaded SAM2 model with trained weights.
+    checkpoint_preprocessing : dict
+        Preprocessing metadata from checkpoint for validation.
+
+    Raises
+    ------
+    ValueError
+        If checkpoint format is unrecognized or shape mismatches are detected.
+    FileNotFoundError
+        If local model_path doesn't exist.
+
+    Examples
+    --------
+    Single-pass prediction on measurement set:
+
+    >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+    >>> flags = predictor.predict_ms('observation.ms', patch_size=128, stretch='SQRT')
+
+    Iterative prediction for progressive cleaning:
+
+    >>> flags = predictor.predict_iterative(
+    ...     'observation.ms',
+    ...     num_iterations=3,
+    ...     patch_size=128
+    ... )
+
+    Direct array prediction:
+
+    >>> import numpy as np
+    >>> data = np.random.randn(10, 2, 512, 512) + 1j * np.random.randn(10, 2, 512, 512)
+    >>> flags = predictor.predict_array(data, patch_size=512)
+
+    Load from HuggingFace Hub:
+
+    >>> predictor = RFIPredictor(model_path='preshanth/sam-rfi-models/large')
+    >>> flags = predictor.predict_ms('observation.ms')
+
+    Notes
+    -----
+    The predictor validates preprocessing parameters (patch_size, stretch, etc.)
+    against checkpoint metadata to ensure consistency between training and inference.
+    Critical parameters like patch_size must match exactly, while non-critical
+    parameters like stretch function will generate warnings if mismatched.
+
+    See Also
+    --------
+    samrfi.training.sam2_trainer : Training module for SAM2 models
+    samrfi.data.preprocessor : Data preprocessing pipeline
     """
 
     def __init__(
         self,
-        model_path,
-        sam_checkpoint="large",
-        device="cuda",
-        batch_size=4,
+        model_path: Union[str, Path],
+        sam_checkpoint: str = "large",
+        device: str = "cuda",
+        batch_size: int = 4,
         allow_partial_load: bool = False,
         auto_select_sam: bool = False,
-    ):
+    ) -> None:
         """
-        Initialize predictor.
+        Initialize RFI predictor with trained SAM2 model.
 
-        Args:
-            model_path: Path to trained model checkpoint (.pth) OR HuggingFace repo ID
-            sam_checkpoint: SAM2 checkpoint size (tiny, small, base_plus, large)
-            device: Compute device ('cuda' or 'cpu')
-            batch_size: Batch size for inference
+        Parameters
+        ----------
+        model_path : str or Path
+            Path to trained model checkpoint (.pth file) OR HuggingFace repo ID
+            (e.g., 'preshanth/sam-rfi-models/large').
+        sam_checkpoint : str, default='large'
+            SAM2 checkpoint size: 'tiny', 'small', 'base_plus', or 'large'.
+            Must match the architecture used during training.
+        device : str, default='cuda'
+            Compute device for inference: 'cuda' or 'cpu'.
+        batch_size : int, default=4
+            Batch size for inference. Larger batches are faster but use more memory.
+        allow_partial_load : bool, default=False
+            If True, allow loading checkpoints with shape mismatches. Not recommended
+            unless you know what you're doing. May lead to poor performance.
+        auto_select_sam : bool, default=False
+            If True, automatically select SAM variant that best matches checkpoint.
+            This tests all available variants (tiny/small/base_plus/large) and
+            selects the one with fewest mismatches. May be slow on first run.
+
+        Raises
+        ------
+        ValueError
+            If checkpoint format is unrecognized or shape mismatches are detected
+            without allow_partial_load=True.
+        FileNotFoundError
+            If local model_path doesn't exist.
+
+        Notes
+        -----
+        For HuggingFace models, the model is downloaded to the local HF cache
+        (respects HF_HOME environment variable).
         """
         # Smart detection: local path OR HuggingFace repo ID
         model_path_str = str(model_path)
@@ -291,22 +491,43 @@ class RFIPredictor:
                 print(line)
 
     def _validate_preprocessing_params(
-        self, patch_size, stretch, normalize_before_stretch=False, normalize_after_stretch=False
-    ):
+        self,
+        patch_size: int,
+        stretch: Optional[str],
+        normalize_before_stretch: bool = False,
+        normalize_after_stretch: bool = False,
+    ) -> None:
         """
         Validate inference preprocessing parameters against checkpoint metadata.
 
-        Raises CheckpointMismatchError if critical parameters mismatch (patch_size).
-        Warns if non-critical parameters mismatch (stretch, normalization).
+        This method compares inference preprocessing parameters with the metadata
+        stored in the checkpoint during training. Critical parameters (patch_size)
+        must match exactly, while non-critical parameters (stretch, normalization)
+        generate warnings if mismatched.
 
-        Args:
-            patch_size: Patch size for inference
-            stretch: Stretch function ('SQRT', 'LOG10', or None)
-            normalize_before_stretch: Normalization before stretch
-            normalize_after_stretch: Normalization after stretch
+        Parameters
+        ----------
+        patch_size : int
+            Patch size for inference (128, 256, 512, or 1024).
+        stretch : str or None
+            Stretch function: 'SQRT', 'LOG10', or None.
+        normalize_before_stretch : bool, default=False
+            Whether to normalize before applying stretch function.
+        normalize_after_stretch : bool, default=False
+            Whether to normalize after applying stretch function.
 
-        Raises:
-            CheckpointMismatchError: If patch_size doesn't match checkpoint
+        Raises
+        ------
+        CheckpointMismatchError
+            If patch_size doesn't match checkpoint metadata.
+
+        Notes
+        -----
+        If the checkpoint doesn't contain preprocessing metadata (old checkpoint),
+        validation is skipped silently.
+
+        Warnings are printed to both logger and stdout for visibility during
+        testing and user workflows.
         """
         if not self.checkpoint_preprocessing:
             # No metadata in checkpoint (old checkpoint), skip validation
@@ -357,26 +578,45 @@ class RFIPredictor:
 
     def _preprocess_data(
         self,
-        data,
-        patch_size,
-        stretch,
-        enable_augmentation,
-        normalize_before_stretch,
-        normalize_after_stretch,
-    ):
+        data: NDArray[np.complexfloating],
+        patch_size: int,
+        stretch: Optional[str],
+        enable_augmentation: bool,
+        normalize_before_stretch: bool,
+        normalize_after_stretch: bool,
+    ) -> Any:
         """
         Create preprocessed dataset from data array.
 
-        Args:
-            data: Complex visibility data (baselines, pols, channels, times)
-            patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT' or 'LOG10' or None)
-            enable_augmentation: Enable rotation augmentation
-            normalize_before_stretch: Normalize before stretch
-            normalize_after_stretch: Normalize after stretch
+        Applies the full preprocessing pipeline to convert raw complex visibility
+        data into a dataset ready for SAM2 prediction. This includes patchification,
+        feature extraction, stretching, and normalization.
 
-        Returns:
-            Dataset ready for prediction
+        Parameters
+        ----------
+        data : ndarray of complex
+            Complex visibility data with shape (baselines, pols, channels, times).
+        patch_size : int
+            Patch size for prediction (128, 256, 512, or 1024).
+        stretch : str or None
+            Stretch function: 'SQRT', 'LOG10', or None.
+        enable_augmentation : bool
+            If True, enable rotation augmentation (4-way transforms).
+        normalize_before_stretch : bool
+            If True, normalize before applying stretch function.
+        normalize_after_stretch : bool
+            If True, normalize after applying stretch function.
+
+        Returns
+        -------
+        Dataset
+            HuggingFace Dataset ready for prediction with preprocessed patches.
+
+        Notes
+        -----
+        The `inference_mode=True` flag is critical for preserving patch order
+        during reconstruction. This ensures patches can be reassembled into
+        the correct positions in the full data array.
         """
         preprocessor = Preprocessor(data, flags=None)
         dataset = preprocessor.create_dataset(
@@ -394,32 +634,84 @@ class RFIPredictor:
 
     def predict_array(
         self,
-        data,
-        patch_size=1024,
-        stretch=None,
-        enable_augmentation=False,
-        normalize_before_stretch=False,
-        normalize_after_stretch=False,
-        return_probabilities=False,
-        threshold=None,
-        save_probabilities=None,
-    ):
+        data: NDArray[np.complexfloating],
+        patch_size: int = 1024,
+        stretch: Optional[str] = None,
+        enable_augmentation: bool = False,
+        normalize_before_stretch: bool = False,
+        normalize_after_stretch: bool = False,
+        return_probabilities: bool = False,
+        threshold: Optional[float] = None,
+        save_probabilities: Optional[Union[str, Path]] = None,
+    ) -> NDArray[Union[np.bool_, np.float32]]:
         """
-        Predict on numpy array directly without MS I/O.
+        Predict RFI flags on numpy array directly without measurement set I/O.
 
-        Args:
-            data: Complex visibility data (baselines, pols, channels, times)
-            patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT' or 'LOG10' or None)
-            enable_augmentation: Enable rotation augmentation (default False)
-            normalize_before_stretch: Normalize before stretch (default False)
-            normalize_after_stretch: Normalize after stretch (default False)
-            return_probabilities: Return continuous probabilities [0,1] instead of binary flags (default False)
-            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
-            save_probabilities: Path to save probability maps (.npy file, optional)
+        This method provides a pure-Python interface for RFI prediction, accepting
+        complex visibility data as a numpy array and returning predicted flags or
+        probability maps.
 
-        Returns:
-            Predicted probabilities (if return_probabilities=True) or flags array (baselines, pols, channels, times)
+        Parameters
+        ----------
+        data : ndarray of complex
+            Complex visibility data with shape (baselines, pols, channels, times).
+        patch_size : int, default=1024
+            Patch size for prediction (128, 256, 512, or 1024).
+            Must match the patch_size used during training.
+        stretch : str or None, default=None
+            Stretch function: 'SQRT', 'LOG10', or None.
+            Should match the stretch used during training.
+        enable_augmentation : bool, default=False
+            If True, enable 4-way rotation augmentation during inference.
+            Generally False for inference (augmentation is for training).
+        normalize_before_stretch : bool, default=False
+            If True, normalize before applying stretch function.
+        normalize_after_stretch : bool, default=False
+            If True, normalize after applying stretch function.
+        return_probabilities : bool, default=False
+            If True, return continuous probabilities [0,1] instead of binary flags.
+        threshold : float or None, default=None
+            Probability threshold for RFI detection. If None, uses adaptive
+            threshold (mean of probability distribution).
+        save_probabilities : str or Path or None, default=None
+            If provided, save probability maps to this path (.npy file).
+
+        Returns
+        -------
+        ndarray of bool or float32
+            Predicted RFI flags (bool) or probabilities (float32) with shape
+            matching input data (baselines, pols, channels, times).
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+        >>> data = np.random.randn(10, 2, 512, 512) + 1j * np.random.randn(10, 2, 512, 512)
+        >>> flags = predictor.predict_array(data, patch_size=512)
+        >>> print(f"Flagged {np.sum(flags)/flags.size*100:.2f}% of data")
+
+        Return probabilities instead of binary flags:
+
+        >>> probs = predictor.predict_array(
+        ...     data,
+        ...     patch_size=512,
+        ...     return_probabilities=True
+        ... )
+        >>> print(f"Probability range: [{probs.min():.3f}, {probs.max():.3f}]")
+
+        Save probability maps for later analysis:
+
+        >>> flags = predictor.predict_array(
+        ...     data,
+        ...     patch_size=512,
+        ...     save_probabilities='rfi_probabilities.npy'
+        ... )
+
+        Notes
+        -----
+        The predictor validates preprocessing parameters against checkpoint metadata.
+        Critical parameters like patch_size must match exactly, while non-critical
+        parameters like stretch function will generate warnings if mismatched.
         """
         logger.info(f"\n{'='*60}")
         logger.info("RFI Prediction - Array Mode")
@@ -525,34 +817,92 @@ class RFIPredictor:
 
     def predict_ms(
         self,
-        ms_path,
-        num_antennas=None,
-        patch_size=128,
-        stretch="SQRT",
-        apply_existing_flags=False,
-        save_flags=True,
-        enable_augmentation=False,
-        normalize_before_stretch=False,
-        normalize_after_stretch=False,
-        threshold=None,
-    ):
+        ms_path: Union[str, Path],
+        num_antennas: Optional[int] = None,
+        patch_size: int = 128,
+        stretch: str = "SQRT",
+        apply_existing_flags: bool = False,
+        save_flags: bool = True,
+        enable_augmentation: bool = False,
+        normalize_before_stretch: bool = False,
+        normalize_after_stretch: bool = False,
+        threshold: Optional[float] = None,
+    ) -> NDArray[np.bool_]:
         """
-        Single-pass prediction on measurement set.
+        Single-pass RFI prediction on CASA measurement set.
 
-        Args:
-            ms_path: Path to measurement set
-            num_antennas: Number of antennas to load (None = all)
-            patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT' or 'LOG10' or None)
-            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
-            apply_existing_flags: If True, mask existing flags before prediction
-            save_flags: If True, save flags back to MS
-            enable_augmentation: Enable rotation augmentation (default False for inference)
-            normalize_before_stretch: Normalize before stretch (default False)
-            normalize_after_stretch: Normalize after stretch (default False)
+        This method loads visibility data from a measurement set, performs RFI
+        prediction, and optionally saves the flags back to the MS. It handles
+        automatic padding/cropping for dimension compatibility with patch_size.
 
-        Returns:
-            Predicted flags array (baselines, pols, channels, times)
+        Parameters
+        ----------
+        ms_path : str or Path
+            Path to CASA measurement set directory.
+        num_antennas : int or None, default=None
+            Number of antennas to load. If None, loads all antennas.
+        patch_size : int, default=128
+            Patch size for prediction (128, 256, 512, or 1024).
+            Must match the patch_size used during training.
+        stretch : str, default='SQRT'
+            Stretch function: 'SQRT', 'LOG10', or None.
+            Should match the stretch used during training.
+        apply_existing_flags : bool, default=False
+            If True, load existing flags from MS and mask them before prediction.
+            Useful for iterative flagging workflows.
+        save_flags : bool, default=True
+            If True, save predicted flags back to measurement set.
+        enable_augmentation : bool, default=False
+            If True, enable 4-way rotation augmentation during inference.
+            Generally False for inference (augmentation is for training).
+        normalize_before_stretch : bool, default=False
+            If True, normalize before applying stretch function.
+        normalize_after_stretch : bool, default=False
+            If True, normalize after applying stretch function.
+        threshold : float or None, default=None
+            Probability threshold for RFI detection. If None, uses adaptive
+            threshold (mean of probability distribution).
+
+        Returns
+        -------
+        ndarray of bool
+            Predicted RFI flags with shape (baselines, pols, channels, times)
+            matching the loaded data dimensions.
+
+        Examples
+        --------
+        >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+        >>> flags = predictor.predict_ms(
+        ...     'observation.ms',
+        ...     patch_size=128,
+        ...     stretch='SQRT'
+        ... )
+        >>> print(f"Flagged {np.sum(flags)/flags.size*100:.2f}% of data")
+
+        Load subset of antennas:
+
+        >>> flags = predictor.predict_ms(
+        ...     'observation.ms',
+        ...     num_antennas=10,
+        ...     patch_size=256
+        ... )
+
+        Apply existing flags before prediction:
+
+        >>> flags = predictor.predict_ms(
+        ...     'observation.ms',
+        ...     apply_existing_flags=True,
+        ...     save_flags=True
+        ... )
+
+        Notes
+        -----
+        The method automatically handles padding/cropping if the data dimensions
+        are not evenly divisible by patch_size. Padding is removed before saving
+        flags back to the MS.
+
+        Preprocessing parameters are validated against checkpoint metadata to
+        ensure consistency between training and inference.
         """
         from samrfi.data.ms_loader import MSLoader
 
@@ -644,38 +994,106 @@ class RFIPredictor:
 
     def predict_iterative(
         self,
-        ms_path,
-        num_iterations=3,
-        num_antennas=None,
-        patch_size=128,
-        stretch="SQRT",
-        save_flags=True,
-        apply_existing_flags=False,
-        enable_augmentation=False,
-        normalize_before_stretch=False,
-        normalize_after_stretch=False,
-        threshold=None,
-    ):
+        ms_path: Union[str, Path],
+        num_iterations: int = 3,
+        num_antennas: Optional[int] = None,
+        patch_size: int = 128,
+        stretch: str = "SQRT",
+        save_flags: bool = True,
+        apply_existing_flags: bool = False,
+        enable_augmentation: bool = False,
+        normalize_before_stretch: bool = False,
+        normalize_after_stretch: bool = False,
+        threshold: Optional[float] = None,
+    ) -> NDArray[np.bool_]:
         """
-        Iterative prediction with progressive cleaning.
+        Iterative RFI prediction with progressive cleaning.
+
+        This method performs multiple flagging passes where each iteration masks
+        already-flagged data and finds remaining RFI. This is particularly effective
+        for detecting faint RFI that was hidden by brighter RFI in earlier passes.
 
         Each iteration:
-        1. Masks already-flagged data
+        1. Masks already-flagged data with NaN
         2. Runs model to find remaining RFI
-        3. Combines flags with previous iterations
+        3. Combines new flags with cumulative flags from previous iterations
 
-        Args:
-            ms_path: Path to measurement set
-            num_iterations: Number of flagging passes
-            num_antennas: Number of antennas to load (None = all)
-            patch_size: Patch size for prediction
-            stretch: Stretch function ('SQRT', 'LOG10', or None)
-            save_flags: If True, save final flags to MS
-            apply_existing_flags: If True, load and preserve existing MS flags
-            threshold: Probability threshold for RFI detection (default: None = adaptive/mean)
+        Parameters
+        ----------
+        ms_path : str or Path
+            Path to CASA measurement set directory.
+        num_iterations : int, default=3
+            Number of flagging passes to perform.
+        num_antennas : int or None, default=None
+            Number of antennas to load. If None, loads all antennas.
+        patch_size : int, default=128
+            Patch size for prediction (128, 256, 512, or 1024).
+            Must match the patch_size used during training.
+        stretch : str, default='SQRT'
+            Stretch function: 'SQRT', 'LOG10', or None.
+            Should match the stretch used during training.
+        save_flags : bool, default=True
+            If True, save final cumulative flags back to measurement set.
+        apply_existing_flags : bool, default=False
+            If True, load existing flags from MS and include them in cumulative flags.
+        enable_augmentation : bool, default=False
+            If True, enable 4-way rotation augmentation during inference.
+            Generally False for inference (augmentation is for training).
+        normalize_before_stretch : bool, default=False
+            If True, normalize before applying stretch function.
+        normalize_after_stretch : bool, default=False
+            If True, normalize after applying stretch function.
+        threshold : float or None, default=None
+            Probability threshold for RFI detection. If None, uses adaptive
+            threshold (mean of probability distribution).
 
-        Returns:
-            Cumulative flags from all iterations
+        Returns
+        -------
+        ndarray of bool
+            Cumulative RFI flags from all iterations with shape
+            (baselines, pols, channels, times).
+
+        Examples
+        --------
+        >>> predictor = RFIPredictor(model_path='./models/sam2_rfi.pth')
+        >>> flags = predictor.predict_iterative(
+        ...     'observation.ms',
+        ...     num_iterations=3,
+        ...     patch_size=128
+        ... )
+        >>> print(f"Total flagged: {np.sum(flags)/flags.size*100:.2f}%")
+
+        Start from existing flags:
+
+        >>> flags = predictor.predict_iterative(
+        ...     'observation.ms',
+        ...     num_iterations=2,
+        ...     apply_existing_flags=True
+        ... )
+
+        More iterations for deeper cleaning:
+
+        >>> flags = predictor.predict_iterative(
+        ...     'observation.ms',
+        ...     num_iterations=5,
+        ...     patch_size=256
+        ... )
+
+        Notes
+        -----
+        Each iteration finds progressively fainter RFI that was previously masked
+        by brighter interference. The effectiveness typically diminishes after
+        3-5 iterations as most detectable RFI has been flagged.
+
+        The MS is loaded once at the beginning, and iterations operate on the
+        in-memory data to avoid repeated I/O overhead.
+
+        Preprocessing parameters are validated against checkpoint metadata to
+        ensure consistency between training and inference.
+
+        See Also
+        --------
+        predict_ms : Single-pass prediction without iteration
         """
         from samrfi.data.ms_loader import MSLoader
 
@@ -774,19 +1192,45 @@ class RFIPredictor:
         return cumulative_flags
 
     def _predict_dataset(
-        self, dataset, target_size=None, return_probabilities=False, threshold=None
-    ):
+        self,
+        dataset: Any,
+        target_size: Optional[Tuple[int, int]] = None,
+        return_probabilities: bool = False,
+        threshold: Optional[float] = None,
+    ) -> List[NDArray[Union[np.bool_, np.float32]]]:
         """
-        Run model prediction on dataset.
+        Run model prediction on preprocessed dataset.
 
-        Args:
-            dataset: HuggingFace Dataset with patches
-            target_size: Target size for output masks (H, W). If None, uses model output size (256x256)
-            return_probabilities: Return continuous probabilities [0,1] instead of binary masks
-            threshold: Probability threshold for binary classification (default: None = adaptive/mean)
+        This method wraps the dataset for SAM2, runs batched inference, and
+        optionally resizes outputs to match target patch size.
 
-        Returns:
-            List of predicted masks (boolean arrays if return_probabilities=False, float arrays otherwise)
+        Parameters
+        ----------
+        dataset : Dataset
+            HuggingFace Dataset with preprocessed patches.
+        target_size : tuple of int or None, default=None
+            Target size for output masks (height, width). If None, uses model
+            output size (256x256). Should typically match patch_size.
+        return_probabilities : bool, default=False
+            If True, return continuous probabilities [0,1] instead of binary masks.
+        threshold : float or None, default=None
+            Probability threshold for binary classification. If None, uses adaptive
+            threshold (mean of sigmoid probabilities per batch).
+
+        Returns
+        -------
+        list of ndarray
+            List of predicted masks (bool if return_probabilities=False,
+            float32 otherwise), one per patch in dataset.
+
+        Notes
+        -----
+        The model outputs logits which are converted to probabilities using sigmoid.
+        For binary masks, an adaptive threshold (mean of probabilities) is used
+        unless a specific threshold is provided.
+
+        GPU memory is managed by running predictions in batches according to
+        self.batch_size.
         """
         # Create SAM dataset wrapper (no bbox perturbation for inference)
         sam_dataset = SAMDataset(dataset, self.processor, bbox_perturbation=0)
@@ -843,22 +1287,55 @@ class RFIPredictor:
         return predicted_masks
 
     def _reconstruct_flags(
-        self, predicted_patches, data_shape, patch_size, num_rotations=1, dataset=None
-    ):
+        self,
+        predicted_patches: List[NDArray[Union[np.bool_, np.float32]]],
+        data_shape: Tuple[int, int, int, int],
+        patch_size: int,
+        num_rotations: int = 1,
+        dataset: Optional[Any] = None,
+    ) -> NDArray[Union[np.bool_, np.float32]]:
         """
         Reconstruct full flag array from predicted patches.
 
-        This reverses the patchification process (with N-way rotation).
+        This method reverses the patchification process, reassembling individual
+        patch predictions into the full data array. It handles rotation augmentation
+        by reversing the transformations and combining predictions.
 
-        Args:
-            predicted_patches: List of predicted patch masks (bool or float)
-            data_shape: Original data shape (baselines, pols, channels, times)
-            patch_size: Size of patches
-            num_rotations: Number of rotations used during augmentation (default: 1)
-            dataset: Optional dataset object with metadata (for original_shapes)
+        Parameters
+        ----------
+        predicted_patches : list of ndarray
+            List of predicted patch masks (bool or float32).
+        data_shape : tuple of int
+            Original data shape (baselines, pols, channels, times).
+        patch_size : int
+            Size of patches used during prediction.
+        num_rotations : int, default=1
+            Number of rotations used during augmentation (1, 2, or 4).
+            Must match the augmentation_rotations from preprocessing.
+        dataset : object or None, default=None
+            Optional dataset object with metadata containing original_shapes
+            for cropping padded dimensions.
 
-        Returns:
-            Reconstructed flags matching data_shape (bool or float matching input)
+        Returns
+        -------
+        ndarray of bool or float32
+            Reconstructed flags matching data_shape. For probabilities (float),
+            uses maximum across rotations. For boolean, uses bitwise OR.
+
+        Notes
+        -----
+        Rotation reversal transformations:
+        - rotation=0: Identity (original)
+        - rotation=1: Vertical flip (reverse of vertical flip)
+        - rotation=2: Transpose (reverse of transpose)
+        - rotation=3: Transpose + vertical flip (reverse both)
+
+        For probability maps, the maximum probability across rotations is used
+        at each pixel. For binary masks, any rotation flagging a pixel results
+        in that pixel being flagged (OR operation).
+
+        If dataset metadata contains original_shapes, the output is cropped to
+        remove padding that was added during preprocessing.
         """
         baselines, pols, channels, times = data_shape
 
@@ -971,12 +1448,37 @@ class RFIPredictor:
         """
         Download trained model from HuggingFace Hub to local cache.
 
-        Args:
-            repo_id: HuggingFace repo ID (e.g., 'preshanth/sam-rfi-models')
-            model_size: Model size subdirectory (tiny, small, base_plus, large)
+        This method downloads model checkpoints from HuggingFace Hub, storing
+        them in the local HF cache directory. Subsequent calls reuse the cached
+        file without re-downloading.
 
-        Returns:
-            Local path to downloaded model file
+        Parameters
+        ----------
+        repo_id : str
+            HuggingFace repository ID (e.g., 'preshanth/sam-rfi-models').
+        model_size : str
+            Model size subdirectory: 'tiny', 'small', 'base_plus', or 'large'.
+
+        Returns
+        -------
+        str
+            Local path to downloaded model checkpoint file.
+
+        Raises
+        ------
+        Exception
+            If download fails due to network issues, invalid repo, or missing file.
+
+        Notes
+        -----
+        The downloaded model is cached in the HuggingFace cache directory,
+        which respects the HF_HOME environment variable. For private repositories,
+        set the HF_TOKEN environment variable with your access token.
+
+        Examples
+        --------
+        >>> predictor = RFIPredictor(model_path='preshanth/sam-rfi-models/large')
+        >>> # Downloads and caches model automatically on first use
         """
         from huggingface_hub import hf_hub_download
 

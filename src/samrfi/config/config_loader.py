@@ -1,22 +1,45 @@
 """
-Configuration loader for SAM-RFI training and data generation
-Handles YAML config files with validation
+Configuration loader for SAM-RFI training and data generation.
+
+This module handles YAML configuration files with validation for both
+training and data generation workflows.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Tuple
 
 import yaml
 
 
 class DataConfig:
     """
-    Flexible config wrapper for data generation
-    Preserves nested YAML structure and supports both dict and attribute access
+    Flexible configuration wrapper for data generation.
+
+    Preserves nested YAML structure and supports both dictionary-like
+    and attribute-style access patterns.
+
+    Parameters
+    ----------
+    data : dict
+        Dictionary of configuration parameters, potentially nested.
+
+    Attributes
+    ----------
+    _data : dict
+        Internal storage of configuration data.
+
+    Examples
+    --------
+    >>> config_dict = {'rfi': {'types': ['narrowband', 'broadband']}}
+    >>> config = DataConfig(config_dict)
+    >>> config.rfi.types  # Attribute access
+    ['narrowband', 'broadband']
+    >>> config['rfi']  # Dict access
+    DataConfig({'types': ['narrowband', 'broadband']})
     """
 
-    def __init__(self, data: dict):
+    def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
         # Recursively wrap nested dicts
         for key, value in data.items():
@@ -25,23 +48,179 @@ class DataConfig:
             else:
                 setattr(self, key, value)
 
-    # Dict-like operations for compatibility
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Get configuration value with optional default.
+
+        Parameters
+        ----------
+        key : str
+            Configuration key to retrieve.
+        default : Any, optional
+            Default value if key not found.
+
+        Returns
+        -------
+        Any
+            Configuration value or default.
+        """
         return self._data.get(key, default)
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
+        """
+        Check if key exists in configuration.
+
+        Parameters
+        ----------
+        key : str
+            Configuration key to check.
+
+        Returns
+        -------
+        bool
+            True if key exists.
+        """
         return key in self._data
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
+        """
+        Get configuration value by key.
+
+        Parameters
+        ----------
+        key : str
+            Configuration key.
+
+        Returns
+        -------
+        Any
+            Configuration value.
+
+        Raises
+        ------
+        KeyError
+            If key not found.
+        """
         return self._data[key]
 
-    def items(self):
+    def items(self) -> Iterator[Tuple[str, Any]]:
+        """
+        Iterate over configuration key-value pairs.
+
+        Returns
+        -------
+        Iterator[Tuple[str, Any]]
+            Iterator of (key, value) pairs.
+        """
         return self._data.items()
 
 
 @dataclass
 class TrainingConfig:
-    """Training configuration dataclass with validation"""
+    """
+    Training configuration dataclass with validation.
+
+    Comprehensive configuration for SAM2 model training including model settings,
+    training hyperparameters, optimizer configuration, loss function settings,
+    data augmentation, and output options.
+
+    Attributes
+    ----------
+    model_checkpoint : str, default='large'
+        SAM2 model size: 'tiny', 'small', 'base_plus', or 'large'.
+    freeze_encoders : bool, default=True
+        Whether to freeze vision and prompt encoders during training.
+    num_epochs : int, default=5
+        Number of training epochs.
+    batch_size : int, default=4
+        Training batch size.
+    learning_rate : float, default=1e-5
+        Learning rate for optimizer.
+    weight_decay : float, default=0.0
+        Weight decay (L2 regularization) for optimizer.
+    device : str, default='cuda'
+        Device for training: 'cuda' or 'cpu'.
+    optimizer : str, default='adam'
+        Optimizer type: 'adam' or 'sgd'.
+    adam_betas : tuple, default=(0.9, 0.999)
+        Beta coefficients for Adam optimizer.
+    adam_eps : float, default=1e-8
+        Epsilon for Adam optimizer.
+    momentum : float, default=0.9
+        Momentum for SGD optimizer.
+    loss_function : str, default='dicece'
+        Loss function type: 'dicece' (Dice + Cross-Entropy).
+    loss_sigmoid : bool, default=True
+        Apply sigmoid to predictions before loss calculation.
+    loss_squared_pred : bool, default=True
+        Use squared predictions in loss calculation.
+    loss_reduction : str, default='mean'
+        Loss reduction method: 'mean' or 'sum'.
+    multimask_output : bool, default=False
+        Enable multi-mask output from SAM2.
+    freeze_vision_encoder : bool, default=True
+        Freeze vision encoder weights during training.
+    freeze_prompt_encoder : bool, default=True
+        Freeze prompt encoder weights during training.
+    bbox_perturbation : int, default=20
+        Bounding box perturbation in pixels for data augmentation.
+    num_workers : int, default=0
+        Number of data loading workers.
+    prefetch_factor : int, default=2
+        Number of batches to prefetch per worker.
+    persistent_workers : bool, default=True
+        Keep workers alive between epochs.
+    pin_memory : bool, default=True
+        Pin memory for faster GPU transfer.
+    log_interval : int, default=100
+        Logging interval in batches.
+    cuda_cache_clear_interval : int, default=100
+        CUDA cache clearing interval in batches.
+    stretch : str or None, default='SQRT'
+        Stretching method: 'SQRT', 'LOG10', or None.
+    flag_sigma : int, default=5
+        Sigma threshold for automatic flagging.
+    patch_method : str, default='patchify'
+        Patching method for dataset creation.
+    patch_size : int, default=128
+        Size of patches in pixels (128, 256, 512, or 1024).
+    num_patches : int or None, default=None
+        Maximum number of patches to use (None = all).
+    apply_stretching : bool, default=True
+        Apply stretching transformation to data.
+    custom_flag : bool, default=True
+        Use custom flagging algorithm.
+    dir_path : str, default='./samrfi_data'
+        Output directory for models and plots.
+    save_plots : bool, default=True
+        Save training plots to disk.
+    plot_dpi : int, default=300
+        DPI for saved plots.
+    plot : bool, default=True
+        Display plots during training.
+    save_model : bool, default=True
+        Save model checkpoints.
+    num_antennas : int or None, default=None
+        Number of antennas to load from measurement set.
+    data_mode : str, default='DATA'
+        Data column to load from measurement set: 'DATA' or 'CORRECTED_DATA'.
+
+    Raises
+    ------
+    ValueError
+        If any configuration value is invalid.
+
+    Examples
+    --------
+    >>> config = TrainingConfig(
+    ...     model_checkpoint='large',
+    ...     num_epochs=10,
+    ...     batch_size=8,
+    ...     learning_rate=1e-4
+    ... )
+    >>> config.device
+    'cuda'
+    """
 
     # Model configuration
     model_checkpoint: str = "large"
@@ -104,7 +283,7 @@ class TrainingConfig:
     num_antennas: int | None = None
     data_mode: str = "DATA"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration values (skip validation for None values)"""
         # Validate model checkpoint (required)
         if self.model_checkpoint is not None:
@@ -151,24 +330,55 @@ class TrainingConfig:
 
 class ConfigLoader:
     """
-    Load and validate YAML configuration files for SAM-RFI
+    Load and validate YAML configuration files for SAM-RFI.
+
+    Provides static methods for loading training and data generation
+    configurations from YAML files with automatic validation.
+
+    Examples
+    --------
+    >>> # Load training configuration
+    >>> config = ConfigLoader.load_training('train_config.yaml')
+    >>> print(config.num_epochs)
+    10
+
+    >>> # Load data generation configuration
+    >>> data_config = ConfigLoader.load_data('data_config.yaml')
+    >>> print(data_config.rfi.types)
+    ['narrowband', 'broadband']
     """
 
     @staticmethod
     def load_training(config_path: str) -> TrainingConfig:
         """
-        Load configuration from YAML file
+        Load training configuration from YAML file.
 
-        Args:
-            config_path: Path to YAML configuration file
+        Parameters
+        ----------
+        config_path : str
+            Path to YAML configuration file.
 
-        Returns:
-            TrainingConfig object with validated parameters
+        Returns
+        -------
+        TrainingConfig
+            Training configuration object with validated parameters.
 
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If configuration is invalid
-            yaml.YAMLError: If YAML parsing fails
+        Raises
+        ------
+        FileNotFoundError
+            If configuration file doesn't exist.
+        ValueError
+            If configuration parameters are invalid.
+        yaml.YAMLError
+            If YAML parsing fails.
+
+        Examples
+        --------
+        >>> config = ConfigLoader.load_training('configs/train.yaml')
+        >>> config.model_checkpoint
+        'large'
+        >>> config.num_epochs
+        10
         """
         config_file = Path(config_path)
 
@@ -199,11 +409,23 @@ class ConfigLoader:
     @staticmethod
     def _flatten_config(config_dict: dict[str, Any]) -> dict[str, Any]:
         """
-        Flatten nested YAML structure to match TrainingConfig fields
+        Flatten nested YAML structure to match TrainingConfig fields.
 
-        Example:
-            Input: {'model': {'checkpoint': 'large'}, 'training': {'num_epochs': 5}}
-            Output: {'model_checkpoint': 'large', 'num_epochs': 5}
+        Parameters
+        ----------
+        config_dict : dict[str, Any]
+            Nested configuration dictionary from YAML file.
+
+        Returns
+        -------
+        dict[str, Any]
+            Flattened configuration dictionary matching TrainingConfig fields.
+
+        Examples
+        --------
+        >>> nested = {'model': {'checkpoint': 'large'}, 'training': {'num_epochs': 5}}
+        >>> ConfigLoader._flatten_config(nested)
+        {'model_checkpoint': 'large', 'num_epochs': 5}
         """
         flat = {}
 
@@ -312,18 +534,32 @@ class ConfigLoader:
     @staticmethod
     def load_data(config_path: str) -> DataConfig:
         """
-        Load data generation configuration from YAML file
-        Preserves nested structure for flexible data generation
+        Load data generation configuration from YAML file.
 
-        Args:
-            config_path: Path to YAML configuration file
+        Preserves nested structure for flexible data generation workflows.
 
-        Returns:
-            DataConfig object with nested structure
+        Parameters
+        ----------
+        config_path : str
+            Path to YAML configuration file.
 
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            yaml.YAMLError: If YAML parsing fails
+        Returns
+        -------
+        DataConfig
+            Data configuration object with nested structure preserved.
+
+        Raises
+        ------
+        FileNotFoundError
+            If configuration file doesn't exist.
+        yaml.YAMLError
+            If YAML parsing fails.
+
+        Examples
+        --------
+        >>> config = ConfigLoader.load_data('configs/data_gen.yaml')
+        >>> config.rfi.narrowband.count
+        100
         """
         config_file = Path(config_path)
 
@@ -345,25 +581,38 @@ class ConfigLoader:
     @staticmethod
     def load(config_path: str) -> TrainingConfig:
         """
-        Load training configuration (alias for load_training)
-        Maintained for backwards compatibility
+        Load training configuration (alias for load_training).
 
-        Args:
-            config_path: Path to YAML configuration file
+        Maintained for backwards compatibility.
 
-        Returns:
-            TrainingConfig object with validated parameters
+        Parameters
+        ----------
+        config_path : str
+            Path to YAML configuration file.
+
+        Returns
+        -------
+        TrainingConfig
+            Training configuration object with validated parameters.
         """
         return ConfigLoader.load_training(config_path)
 
     @staticmethod
-    def save(config: TrainingConfig, output_path: str):
+    def save(config: TrainingConfig, output_path: str) -> None:
         """
-        Save TrainingConfig to YAML file
+        Save TrainingConfig to YAML file.
 
-        Args:
-            config: TrainingConfig object
-            output_path: Path to save YAML file
+        Parameters
+        ----------
+        config : TrainingConfig
+            Training configuration object to save.
+        output_path : str
+            Path where YAML file will be saved.
+
+        Examples
+        --------
+        >>> config = TrainingConfig(num_epochs=20, batch_size=8)
+        >>> ConfigLoader.save(config, 'my_config.yaml')
         """
         # Convert to nested structure matching actual config files
         config_dict = {
@@ -430,12 +679,20 @@ class ConfigLoader:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
     @staticmethod
-    def create_default_config(output_path: str):
+    def create_default_config(output_path: str) -> None:
         """
-        Create a default configuration file
+        Create a default configuration file.
 
-        Args:
-            output_path: Path to save default config YAML
+        Generates a YAML file with default TrainingConfig values.
+
+        Parameters
+        ----------
+        output_path : str
+            Path where default configuration YAML will be saved.
+
+        Examples
+        --------
+        >>> ConfigLoader.create_default_config('default_config.yaml')
         """
         default_config = TrainingConfig()
         ConfigLoader.save(default_config, output_path)
