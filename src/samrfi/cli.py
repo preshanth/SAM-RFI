@@ -585,6 +585,20 @@ def download_model_command(args):
     print("SAM-RFI Model Download")
     print("=" * 60)
 
+    # Validate that output looks like a directory, not a filename
+    if args.output.endswith(".pth") or args.output.endswith(".pt"):
+        print("\n✗ Error: --output should be a directory path, not a filename")
+        print(f"\n  You provided: --output {args.output}")
+        print("\n  Correct usage:")
+        print(f"    samrfi download-model --repo {args.repo} --model {args.model} --output ./")
+        if args.output.endswith((".pth", ".pt")):
+            print(
+                f"    samrfi download-model --repo {args.repo} --model {args.model} --output ./ --name {Path(args.output).name}"
+            )
+        print("\n  --output = directory path (e.g., ./ or /nfs/models/)")
+        print("  --name   = custom filename (optional)")
+        return 1
+
     cache = ModelCache()
 
     try:
@@ -647,11 +661,14 @@ Examples:
   # List models in HuggingFace repository
   samrfi list-models --repo polarimetric/sam-rfi
 
-  # Download model to custom directory (useful for NFS with limited ~/.cache/)
-  samrfi download-model --repo polarimetric/sam-rfi --model sam2_rfi_v1.pth --output /nfs/models/
+  # Download model to current directory (--output is directory path)
+  samrfi download-model --repo polarimetric/sam-rfi --model large/model.pth --output ./
 
-  # Download model with custom name
-  samrfi download-model --repo polarimetric/sam-rfi --model sam2_rfi_v1.pth --output /nfs/models/ --name production.pth
+  # Download to specific directory
+  samrfi download-model --repo polarimetric/sam-rfi --model large/model.pth --output /nfs/models/
+
+  # Download with custom filename (--name is the filename)
+  samrfi download-model --repo polarimetric/sam-rfi --model large/model.pth --output ./ --name production.pth
         """,
     )
 
@@ -831,16 +848,20 @@ Examples:
         "--repo", required=True, help="HuggingFace repo ID (e.g., polarimetric/sam-rfi)"
     )
     download_model_parser.add_argument(
-        "--model", required=True, help="Model filename in repository (e.g., sam2_rfi_v1.pth)"
+        "--model",
+        required=True,
+        help="Model filename in repository (e.g., large/model.pth or sigma5_sqrt.pth)",
     )
     download_model_parser.add_argument(
         "--output",
         required=True,
-        help="Output directory (e.g., /nfs/shared/models/)",
+        metavar="DIR",
+        help="Output directory path (NOT filename). Examples: ./ or /nfs/shared/models/",
     )
     download_model_parser.add_argument(
         "--name",
-        help="Optional custom filename (default: use original name)",
+        metavar="FILENAME",
+        help="Custom filename for downloaded model (e.g., my_model.pth). If not specified, uses original filename from repo.",
     )
 
     # Parse arguments

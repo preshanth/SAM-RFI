@@ -232,19 +232,28 @@ samrfi list-models --repo polarimetric/sam-rfi
 ```
 
 **Download model to custom directory:**
+
+**Important:** `--output` is a **directory path** (not a filename). Use `--name` to specify a custom filename.
+
 ```bash
-# Download with original name
+# Download to current directory (keeps original filename)
 samrfi download-model \
   --repo polarimetric/sam-rfi \
-  --model sam2_rfi_v1.pth \
+  --model large/model.pth \
+  --output ./
+
+# Download to specific directory
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model large/model.pth \
   --output /nfs/shared/models/
 
-# Download with custom name
+# Download with custom filename
 samrfi download-model \
   --repo polarimetric/sam-rfi \
-  --model sam2_rfi_v1.pth \
+  --model large/model.pth \
   --output /nfs/shared/models/ \
-  --name production_model.pth
+  --name sam2_production.pth
 ```
 
 **Use downloaded model for prediction:**
@@ -332,16 +341,22 @@ samrfi list-models --repo polarimetric/sam-rfi
 # Filter by pattern
 samrfi list-models --repo polarimetric/sam-rfi --pattern "*.pth"
 
-# Download model to custom directory
+# Download model to current directory (--output is directory path)
 samrfi download-model \
   --repo polarimetric/sam-rfi \
-  --model sam2_rfi_v1.pth \
+  --model large/model.pth \
+  --output ./
+
+# Download to specific directory
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model large/model.pth \
   --output /nfs/shared/models/
 
-# Download with custom name
+# Download with custom filename (--name is the filename)
 samrfi download-model \
   --repo polarimetric/sam-rfi \
-  --model sam2_rfi_v1.pth \
+  --model large/model.pth \
   --output /nfs/shared/models/ \
   --name production.pth
 ```
