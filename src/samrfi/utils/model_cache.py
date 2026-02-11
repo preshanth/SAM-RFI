@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 try:
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
     from tqdm import tqdm
     from transformers import Sam2Model, Sam2Processor
 except ImportError as e:
@@ -17,6 +17,8 @@ except ImportError as e:
         f"Required packages not installed: {e}\n"
         "Install with: pip install transformers huggingface_hub tqdm"
     ) from e
+
+import fnmatch
 
 
 class ModelCache:
@@ -284,6 +286,134 @@ class ModelCache:
             print(f"✓ Cleared cache for '{checkpoint}': {cache_path}")
         else:
             print(f"Could not find cache path for '{checkpoint}'")
+
+    def list_repo_models(self, repo_id: str, pattern: str = "*.pth") -> list[dict]:
+        """
+        List model files in a HuggingFace repository.
+
+        Args:
+            repo_id: HuggingFace repo ID (e.g., 'polarimetric/sam-rfi')
+            pattern: File pattern to filter (default: '*.pth')
+
+        Returns:
+            List of dicts with:
+                - filename: str
+                - size_mb: float (if available)
+
+        Example:
+            >>> cache = ModelCache()
+            >>> models = cache.list_repo_models('polarimetric/sam-rfi')
+            >>> for m in models:
+            ...     print(f"{m['filename']:40} {m['size_mb']:8.1f} MB")
+        """
+        try:
+            # List all files in repo
+            all_files = list_repo_files(repo_id=repo_id, repo_type="model")
+
+            # Filter by pattern
+            matched_files = [f for f in all_files if fnmatch.fnmatch(f, pattern)]
+
+            # Build result list
+            models = []
+            for filename in matched_files:
+                model_info = {"filename": filename, "size_mb": None}
+
+                # Try to get file size (requires additional API call per file)
+                # We'll skip this for now to keep it fast - size info not critical for listing
+                models.append(model_info)
+
+            return models
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to list models in repository '{repo_id}': {e}\n"
+                f"Make sure the repository exists and you have access to it.\n"
+                f"For private repos, set HF_TOKEN environment variable."
+            ) from e
+
+    def download_from_repo(
+        self,
+        repo_id: str,
+        filename: str,
+        output_dir: str,
+        local_name: str | None = None,
+        show_progress: bool = True,
+    ) -> str:
+        """
+        Download model from HuggingFace repo to custom directory.
+
+        Args:
+            repo_id: HuggingFace repo ID (e.g., 'polarimetric/sam-rfi')
+            filename: Model filename in repo (e.g., 'sam2_rfi_v1.pth')
+            output_dir: Local directory to save model
+            local_name: Optional custom name (if None, uses original filename)
+            show_progress: Show download progress bar
+
+        Returns:
+            Path to downloaded file
+
+        Example:
+            >>> cache = ModelCache()
+            >>> # Download with original name
+            >>> path = cache.download_from_repo(
+            ...     'polarimetric/sam-rfi',
+            ...     'sam2_v1.pth',
+            ...     '/nfs/models/'
+            ... )
+            >>> # Download with custom name
+            >>> path = cache.download_from_repo(
+            ...     'polarimetric/sam-rfi',
+            ...     'sam2_v1.pth',
+            ...     '/nfs/models/',
+            ...     local_name='my_custom_model.pth'
+            ... )
+        """
+        # Create output directory if needed
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Determine final filename
+        final_name = local_name if local_name else filename
+        final_path = output_path / final_name
+
+        if show_progress:
+            print("Downloading from HuggingFace...")
+            print(f"  Repository: {repo_id}")
+            print(f"  File: {filename}")
+            print(f"  Destination: {final_path}")
+
+        try:
+            # Download file from HuggingFace
+            downloaded_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="model",
+                cache_dir=None,  # Use temp cache
+                local_dir=None,
+                local_dir_use_symlinks=False,
+            )
+
+            # Copy to final destination with desired name
+            import shutil
+
+            shutil.copy2(downloaded_path, final_path)
+
+            if show_progress:
+                size_mb = final_path.stat().st_size / (1024 * 1024)
+                print(f"✓ Download complete ({size_mb:.1f} MB)")
+                print(f"  Saved to: {final_path}")
+
+            return str(final_path)
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to download '{filename}' from '{repo_id}': {e}\n"
+                f"Make sure:\n"
+                f"  1. Repository exists: https://huggingface.co/{repo_id}\n"
+                f"  2. File exists in repository: {filename}\n"
+                f"  3. You have access (set HF_TOKEN env var for private repos)\n"
+                f"  4. Destination is writable: {output_dir}"
+            ) from e
 
     @staticmethod
     def list_available_models() -> None:

@@ -9,7 +9,7 @@ synthetic:
   rfi_power_min: 1000.0
   rfi_power_max: 10000.0
   polarization_correlation: 0.8
-  enable_bandpass_rolloff: true
+  enable_bandpass_rolloff: false
   bandpass_polynomial_order: 0
 
   # RFI type counts (how many instances of each type to generate)

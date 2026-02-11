@@ -536,6 +536,80 @@ def evaluate_command(args):
     print("=" * 60)
 
 
+def list_models_command(args):
+    """List models in a HuggingFace repository"""
+    from .utils.model_cache import ModelCache
+
+    print("=" * 60)
+    print("SAM-RFI Model Listing")
+    print("=" * 60)
+
+    cache = ModelCache()
+
+    print(f"\nRepository: {args.repo}")
+    print(f"Pattern: {args.pattern}")
+    print("\nFetching model list from HuggingFace...")
+
+    try:
+        models = cache.list_repo_models(args.repo, pattern=args.pattern)
+
+        if not models:
+            print(f"\n✗ No models found matching pattern '{args.pattern}'")
+            print(f"  Repository: {args.repo}")
+            return 1
+
+        print(f"\n✓ Found {len(models)} model(s):")
+        print("-" * 60)
+
+        for model in models:
+            filename = model["filename"]
+            size_info = f"{model['size_mb']:.1f} MB" if model["size_mb"] else "size unknown"
+            print(f"  {filename:50} {size_info}")
+
+        print("-" * 60)
+        print("\nTo download a model:")
+        print(f"  samrfi download-model --repo {args.repo} --model <filename> --output <directory>")
+
+        return 0
+
+    except Exception as e:
+        print(f"\n✗ Error: {e}")
+        return 1
+
+
+def download_model_command(args):
+    """Download model from HuggingFace repository to custom directory"""
+    from .utils.model_cache import ModelCache
+
+    print("=" * 60)
+    print("SAM-RFI Model Download")
+    print("=" * 60)
+
+    cache = ModelCache()
+
+    try:
+        downloaded_path = cache.download_from_repo(
+            repo_id=args.repo,
+            filename=args.model,
+            output_dir=args.output,
+            local_name=args.name,
+            show_progress=True,
+        )
+
+        print("\n" + "=" * 60)
+        print("✓ Download Complete!")
+        print("=" * 60)
+        print(f"Model saved to: {downloaded_path}")
+        print("\nUsage:")
+        print(f"  samrfi predict --model {downloaded_path} --input observation.ms")
+
+        return 0
+
+    except Exception as e:
+        print(f"\n✗ Error: {e}")
+        return 1
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -569,6 +643,15 @@ Examples:
 
   # Predict (iterative - 3 passes)
   samrfi predict --model ./models/sam2_rfi.pth --input observation.ms --iterations 3
+
+  # List models in HuggingFace repository
+  samrfi list-models --repo polarimetric/sam-rfi
+
+  # Download model to custom directory (useful for NFS with limited ~/.cache/)
+  samrfi download-model --repo polarimetric/sam-rfi --model sam2_rfi_v1.pth --output /nfs/models/
+
+  # Download model with custom name
+  samrfi download-model --repo polarimetric/sam-rfi --model sam2_rfi_v1.pth --output /nfs/models/ --name production.pth
         """,
     )
 
@@ -727,6 +810,39 @@ Examples:
         "--output", default="metrics.csv", help="Output CSV file path (default: metrics.csv)"
     )
 
+    # List models parser
+    list_models_parser = subparsers.add_parser(
+        "list-models", help="List models in a HuggingFace repository"
+    )
+    list_models_parser.add_argument(
+        "--repo", required=True, help="HuggingFace repo ID (e.g., polarimetric/sam-rfi)"
+    )
+    list_models_parser.add_argument(
+        "--pattern",
+        default="*.pth",
+        help="File pattern to filter models (default: *.pth)",
+    )
+
+    # Download model parser
+    download_model_parser = subparsers.add_parser(
+        "download-model", help="Download model from HuggingFace to custom directory"
+    )
+    download_model_parser.add_argument(
+        "--repo", required=True, help="HuggingFace repo ID (e.g., polarimetric/sam-rfi)"
+    )
+    download_model_parser.add_argument(
+        "--model", required=True, help="Model filename in repository (e.g., sam2_rfi_v1.pth)"
+    )
+    download_model_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output directory (e.g., /nfs/shared/models/)",
+    )
+    download_model_parser.add_argument(
+        "--name",
+        help="Optional custom filename (default: use original name)",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -760,6 +876,10 @@ Examples:
         elif args.command == "evaluate":
             evaluate_command(args)
             return 0
+        elif args.command == "list-models":
+            return list_models_command(args)
+        elif args.command == "download-model":
+            return download_model_command(args)
     except ConfigValidationError as e:
         logger.error(f"Configuration error: {e}")
         return 1

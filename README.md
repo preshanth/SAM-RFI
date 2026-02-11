@@ -10,6 +10,10 @@
 
 -------------------------------------------------------------------------------------
 
+> **Note:** This README was generated with assistance from Claude Code. While we have reviewed the content, there may be inaccuracies or outdated information. The authors take full responsibility for the documentation. If you find errors or have suggestions for improvements, please [file an issue](https://github.com/preshanth/SAM-RFI/issues) or submit a pull request. Your contributions help make this documentation better for everyone.
+
+-------------------------------------------------------------------------------------
+
 **Authors:** Preshanth Jagannathan (pjaganna@nrao.edu), Srikrishna Sekhar (ssekhar@nrao.edu), Derod Deal (dealderod@gmail.com)
 
 SAM-RFI is a Python package that applies Meta's Segment Anything Model 2 (SAM2) for Radio Frequency Interference (RFI) detection and flagging in radio astronomy data. The system processes CASA measurement sets and generates precise segmentation masks for contaminated visibilities. In order to do that it leverages the `rfi_toolbox` package which presents general purpose RFI simulation and measurement set handling
@@ -218,6 +222,44 @@ Iterative flagging progressively finds fainter RFI by masking already-flagged re
 - `--threshold FLOAT` - Probability threshold (default: adaptive/mean)
 - `--no-save` - Preview only, do not write flags to MS
 
+### 4. Working with Custom Models from HuggingFace
+
+For users on NFS or systems with limited `~/.cache/` storage, you can list and download models from HuggingFace repositories to custom directories.
+
+**List available models in a repository:**
+```bash
+samrfi list-models --repo polarimetric/sam-rfi
+```
+
+**Download model to custom directory:**
+```bash
+# Download with original name
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model sam2_rfi_v1.pth \
+  --output /nfs/shared/models/
+
+# Download with custom name
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model sam2_rfi_v1.pth \
+  --output /nfs/shared/models/ \
+  --name production_model.pth
+```
+
+**Use downloaded model for prediction:**
+```bash
+samrfi predict \
+  --model /nfs/shared/models/sam2_rfi_v1.pth \
+  --input observation.ms
+```
+
+**Note:** For private repositories, set the `HF_TOKEN` environment variable:
+```bash
+export HF_TOKEN=your_huggingface_token
+samrfi list-models --repo your-org/private-repo
+```
+
 ---
 
 ## CLI Reference
@@ -279,6 +321,29 @@ samrfi create-config \
 
 # Validate configuration
 samrfi validate-config --config config.yaml
+```
+
+### Model Management
+
+```bash
+# List models in HuggingFace repository
+samrfi list-models --repo polarimetric/sam-rfi
+
+# Filter by pattern
+samrfi list-models --repo polarimetric/sam-rfi --pattern "*.pth"
+
+# Download model to custom directory
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model sam2_rfi_v1.pth \
+  --output /nfs/shared/models/
+
+# Download with custom name
+samrfi download-model \
+  --repo polarimetric/sam-rfi \
+  --model sam2_rfi_v1.pth \
+  --output /nfs/shared/models/ \
+  --name production.pth
 ```
 
 ---
