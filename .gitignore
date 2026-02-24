@@ -182,3 +182,6 @@ casa-*.log
 # Archive (keep structure but ignore if regenerated)
 archive/
 CLAUDE.md
+# pixi environments
+.pixi/*
+!.pixi/config.toml
