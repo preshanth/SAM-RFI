@@ -1,0 +1,23 @@
+[workspace]
+name = "samrfi-dev"
+version = "0.1.0"
+description = "Dev env for SAM-RFI / DINO RFI segmentation experiments"
+channels = ["conda-forge", "pytorch"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.11.*"
+numpy = ">=1.26"
+scipy = ">=1.10"
+matplotlib = ">=3.7"
+tqdm = ">=4.65"
+pytorch = ">=2.1"
+scikit-image = ">=0.20"
+pyyaml = ">=6.0"
+
+[pypi-dependencies]
+transformers = ">=4.53"
+
+[activation.env]
+# rfi_toolbox is a bare package dir; put its parent on the import path
+PYTHONPATH = "/var/home/pjaganna/Software:/var/home/pjaganna/Software/SAM-RFI/src"

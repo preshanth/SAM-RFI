@@ -1,0 +1,39 @@
+# Single-sample inspection config (~40% pixel occupancy).
+# Derived from synthetic_test_100.yaml: identical physical scales, geometry,
+# bandpass and polarization. Only the per-sample RFI counts are raised to
+# roughly double the coverage (default config targets ~20%).
+# Driven by scripts/inspect_sample.py via ConfigLoader.load_data.
+
+synthetic:
+  num_samples: 1
+  num_channels: 1024
+  num_times: 1024
+
+  # Physical scales (milli-Jansky and Jansky)
+  noise_mjy: 1.0
+  rfi_power_min: 1000.0
+  rfi_power_max: 10000.0
+
+  num_polarizations: 1
+  generate_mad_masks: false
+
+  # RFI counts raised to target ~40% pixel coverage (vs ~20% default)
+  rfi_type_counts:
+    narrowband_persistent: 30    # full-time narrow lines
+    broadband_persistent: 10     # full-frequency time slabs (dominant area driver)
+    frequency_sweep: 2           # radar chirps
+    narrowband_bursty: 30        # pulsed transmitters
+    broadband_bursty: 5          # transients
+
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8
+  polarization_correlation: 0.8
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  flag_sigma: 5
+  patch_size: 1024
+  enable_augmentation: false
+  augmentation_rotations: 1

@@ -185,3 +185,6 @@ CLAUDE.md
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Reproducible experiment outputs (regenerate via scripts/ + configs/)
+experiments/

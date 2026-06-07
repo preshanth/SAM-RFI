@@ -1,0 +1,35 @@
+# Small config for the DINO overfit go/no-go test.
+# 448x448 is divisible by both DINOv2 patch-14 and DINOv3 patch-16.
+# Derived from inspect_single.yaml; counts scaled down for the smaller plane,
+# still targeting ~40% occupancy.
+
+synthetic:
+  num_samples: 8
+  num_channels: 448
+  num_times: 448
+
+  noise_mjy: 1.0
+  rfi_power_min: 1000.0
+  rfi_power_max: 10000.0
+  num_polarizations: 1
+  generate_mad_masks: false
+
+  rfi_type_counts:
+    narrowband_persistent: 14
+    broadband_persistent: 5
+    frequency_sweep: 2
+    narrowband_bursty: 14
+    broadband_bursty: 3
+
+  enable_bandpass_rolloff: true
+  bandpass_polynomial_order: 8
+  polarization_correlation: 0.8
+
+processing:
+  normalize_before_stretch: false
+  normalize_after_stretch: false
+  stretch: null
+  flag_sigma: 5
+  patch_size: 448
+  enable_augmentation: false
+  augmentation_rotations: 1
