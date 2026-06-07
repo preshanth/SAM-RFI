@@ -212,6 +212,9 @@ def train_command(args):
         patience=config.patience,
         use_amp=config.use_amp,
         accumulation_steps=config.accumulation_steps,
+        scheduler=config.scheduler,
+        warmup_steps=config.warmup_steps,
+        encoder_lr=config.encoder_lr,
         model_path=args.resume,  # Resume from checkpoint if provided
     )
 

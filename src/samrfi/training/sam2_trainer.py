@@ -5,6 +5,7 @@ Mirrors the working SAM1 training approach
 
 import gc
 import logging
+import math
 import multiprocessing
 import os
 import time
@@ -120,6 +121,10 @@ class SAM2Trainer:
         cuda_cache_clear_interval=100,
         use_amp=False,
         accumulation_steps=1,
+        # LR schedule / encoder fine-tuning
+        scheduler=None,
+        warmup_steps=0,
+        encoder_lr=None,
         # Output settings
         plot=True,
         model_path=None,
@@ -150,6 +155,13 @@ class SAM2Trainer:
             accumulation_steps: Accumulate gradients over this many batches before each
                 optimizer step, for an effective batch size of
                 batch_size * accumulation_steps without the extra memory. Default 1.
+            scheduler: LR schedule across optimizer steps. One of 'cosine', 'linear',
+                or None (default, constant LR). Steps once per optimizer step.
+            warmup_steps: Linear warmup duration in optimizer steps before the schedule
+                decays. Only used when `scheduler` is set. Default 0.
+            encoder_lr: Separate (typically lower) learning rate for the vision encoder
+                when it is unfrozen (freeze_vision_encoder=False). None (default) uses
+                `learning_rate` for all parameters.
         """
 
         # Fix multiprocessing for CUDA in workers (required for GPU transforms)
@@ -285,12 +297,32 @@ class SAM2Trainer:
                 logger.info("  Loaded model weights (old format)")
                 start_epoch = 0
 
-        # Setup optimizer
-        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        # Setup optimizer. Split trainable parameters into a vision-encoder group and
+        # the rest so the encoder can take a lower LR when it is being fine-tuned;
+        # encoder_lr=None collapses this back to a single LR (no behavior change).
+        effective_encoder_lr = encoder_lr if encoder_lr is not None else learning_rate
+        encoder_params = []
+        base_params = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith("vision_encoder"):
+                encoder_params.append(param)
+            else:
+                base_params.append(param)
+
+        param_groups = [{"params": base_params, "lr": learning_rate}]
+        if encoder_params:
+            param_groups.append({"params": encoder_params, "lr": effective_encoder_lr})
+            if effective_encoder_lr != learning_rate:
+                logger.info(
+                    f"  Discriminative LR: vision encoder {effective_encoder_lr}, "
+                    f"rest {learning_rate}"
+                )
 
         if optimizer.lower() == "adam":
             opt = Adam(
-                trainable_params,
+                param_groups,
                 lr=learning_rate,
                 weight_decay=weight_decay,
                 betas=adam_betas,
@@ -300,7 +332,7 @@ class SAM2Trainer:
             from torch.optim import AdamW
 
             opt = AdamW(
-                trainable_params,
+                param_groups,
                 lr=learning_rate,
                 weight_decay=weight_decay,
                 betas=adam_betas,
@@ -310,7 +342,7 @@ class SAM2Trainer:
             from torch.optim import SGD
 
             opt = SGD(
-                trainable_params, lr=learning_rate, weight_decay=weight_decay, momentum=momentum
+                param_groups, lr=learning_rate, weight_decay=weight_decay, momentum=momentum
             )
         else:
             raise ValueError(f"Unknown optimizer: {optimizer}. Use 'adam', 'adamw', or 'sgd'")
@@ -339,6 +371,37 @@ class SAM2Trainer:
                 f"  Gradient accumulation: {accumulation_steps} steps "
                 f"(effective batch size {batch_size * accumulation_steps})"
             )
+
+        # Optional LR scheduler, stepped once per optimizer step.
+        lr_scheduler = None
+        if scheduler is not None:
+            steps_per_epoch = math.ceil(len(train_dataloader) / accumulation_steps)
+            total_optim_steps = steps_per_epoch * num_epochs
+            if scheduler.lower() == "cosine":
+                from transformers import get_cosine_schedule_with_warmup
+
+                lr_scheduler = get_cosine_schedule_with_warmup(
+                    opt, warmup_steps, total_optim_steps
+                )
+            elif scheduler.lower() == "linear":
+                from transformers import get_linear_schedule_with_warmup
+
+                lr_scheduler = get_linear_schedule_with_warmup(
+                    opt, warmup_steps, total_optim_steps
+                )
+            else:
+                raise ValueError(
+                    f"Unknown scheduler: {scheduler}. Use 'cosine', 'linear', or None"
+                )
+            logger.info(
+                f"  LR scheduler: {scheduler} (warmup {warmup_steps} / "
+                f"{total_optim_steps} total steps)"
+            )
+            if checkpoint_data and "scheduler_state_dict" in checkpoint_data and start_epoch > 0:
+                sched_state = checkpoint_data["scheduler_state_dict"]
+                if sched_state is not None:
+                    lr_scheduler.load_state_dict(sched_state)
+                    logger.info("  Restored scheduler state")
 
         # Setup loss function
         if loss_function.lower() == "dicece":
@@ -446,6 +509,8 @@ class SAM2Trainer:
                     scaler.step(opt)
                     scaler.update()
                     opt.zero_grad()
+                    if lr_scheduler is not None:
+                        lr_scheduler.step()
 
                 # Report the per-batch loss magnitude (undo accumulation scaling)
                 loss_value = loss.item() * accumulation_steps
@@ -581,6 +646,9 @@ class SAM2Trainer:
                 best_checkpoint = {
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": opt.state_dict(),
+                    "scheduler_state_dict": (
+                        lr_scheduler.state_dict() if lr_scheduler is not None else None
+                    ),
                     "epoch": epoch,
                     "training_losses": train_losses[: epoch + 1 - start_epoch],
                     "validation_losses": val_losses[: epoch + 1 - start_epoch],
@@ -633,6 +701,9 @@ class SAM2Trainer:
                 freeze_vision_encoder,
                 freeze_prompt_encoder,
                 trained_model_path,
+                scheduler_state=(
+                    lr_scheduler.state_dict() if lr_scheduler is not None else None
+                ),
             )
 
         # Plot loss curve
@@ -661,6 +732,7 @@ class SAM2Trainer:
         freeze_vision_encoder=True,
         freeze_prompt_encoder=True,
         trained_model_path=None,
+        scheduler_state=None,
     ):
         """Save trained model checkpoint with full training state"""
         # Extract params from dataset if available (for backward compatibility in filename)
@@ -713,6 +785,7 @@ class SAM2Trainer:
         checkpoint = {
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler_state,
             "epoch": epoch,
             "training_losses": self.ave_meanloss,
             "validation_losses": self.val_losses,

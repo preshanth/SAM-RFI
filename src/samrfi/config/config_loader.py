@@ -86,6 +86,9 @@ class TrainingConfig:
     patience: int | None = None  # Early-stopping patience in epochs (None disables)
     use_amp: bool = False  # Automatic mixed precision (CUDA only)
     accumulation_steps: int = 1  # Gradient accumulation steps (effective batch multiplier)
+    scheduler: str | None = None  # LR schedule: 'cosine', 'linear', or None
+    warmup_steps: int = 0  # Warmup steps for the LR scheduler
+    encoder_lr: float | None = None  # Separate LR for unfrozen vision encoder
 
     # Dataset configuration
     stretch: str | None = "SQRT"
@@ -152,6 +155,17 @@ class TrainingConfig:
             raise ValueError(
                 f"accumulation_steps must be >= 1, got {self.accumulation_steps}"
             )
+
+        if self.scheduler is not None and self.scheduler.lower() not in ("cosine", "linear"):
+            raise ValueError(
+                f"scheduler must be 'cosine', 'linear', or None, got {self.scheduler}"
+            )
+
+        if self.warmup_steps is not None and self.warmup_steps < 0:
+            raise ValueError(f"warmup_steps must be >= 0, got {self.warmup_steps}")
+
+        if self.encoder_lr is not None and self.encoder_lr <= 0:
+            raise ValueError(f"encoder_lr must be positive when set, got {self.encoder_lr}")
 
         if self.flag_sigma is not None and self.flag_sigma <= 0:
             raise ValueError(f"flag_sigma must be positive, got {self.flag_sigma}")
@@ -272,6 +286,9 @@ class ConfigLoader:
             flat["patience"] = training_config.get("patience", None)
             flat["use_amp"] = training_config.get("use_amp", False)
             flat["accumulation_steps"] = training_config.get("accumulation_steps", 1)
+            flat["scheduler"] = training_config.get("scheduler", None)
+            flat["warmup_steps"] = training_config.get("warmup_steps", 0)
+            flat["encoder_lr"] = training_config.get("encoder_lr", None)
 
             # Output settings (can be in training or output section)
             if "plot" in training_config:
