@@ -57,7 +57,11 @@ Usage:
 >>> loader.load(num_antennas=5)
 >>> preprocessor = Preprocessor(loader.data)
 >>> dataset = preprocessor.create_dataset(patch_size=128)
->>> trainer = SAM2Trainer(dataset, device='cuda')
+>>> # SAM2Trainer expects an object exposing a `.dataset` attribute
+>>> class DatasetWrapper:
+...     def __init__(self, ds):
+...         self.dataset = ds
+>>> trainer = SAM2Trainer(DatasetWrapper(dataset), device='cuda')
 >>> trainer.train(num_epochs=10, batch_size=4)
 >>> predictor = RFIPredictor('model.pth', device='cuda')
 >>> flags = predictor.predict_ms('observation.ms')
