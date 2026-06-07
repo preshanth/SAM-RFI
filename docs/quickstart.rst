@@ -131,7 +131,8 @@ Load and Preprocess Data
 
 ::
 
-    from samrfi.data import MSLoader, Preprocessor
+    from rfi_toolbox.io import MSLoader
+    from rfi_toolbox.preprocessing import Preprocessor
 
     # Load measurement set
     loader = MSLoader('observation.ms')

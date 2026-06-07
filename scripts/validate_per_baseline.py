@@ -25,9 +25,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
+from rfi_toolbox.data_generation import SyntheticDataGenerator
+from rfi_toolbox.evaluation import evaluate_segmentation
+from rfi_toolbox.io import inject_synthetic_data
+
 from samrfi.config import ConfigLoader
-from samrfi.data_generation import SyntheticDataGenerator
-from samrfi.evaluation import evaluate_segmentation, inject_synthetic_data
 from samrfi.inference import RFIPredictor
 
 

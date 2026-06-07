@@ -12,17 +12,22 @@ Key Features:
 - Iterative flagging for deep RFI cleaning
 - GPU-accelerated training and inference
 
+Shared primitives (MSLoader, Preprocessor, TorchDataset, BatchWriter,
+SyntheticDataGenerator, segmentation/statistics metrics) live in the external
+``rfi_toolbox`` package and are imported directly from there. The ``samrfi.*``
+modules below provide only the SAM2-specific pieces layered on top.
+
 Modules:
 --------
-data : Data loading and preprocessing
-    - MSLoader: Load CASA measurement sets
-    - Preprocessor: Patchify, normalize, and preprocess data
-    - SAMDataset: PyTorch Dataset wrapper
-    - TorchDataset: Efficient torch-backed datasets with shared memory
+data : SAM2-specific dataset wrappers
+    - SAMDataset: SAM2 Dataset wrapper (bbox prompts + processor)
+    - BatchedDataset: Streaming reader for generated batch_*.pt directories
+    - HFDatasetWrapper: Convert datasets to/from HuggingFace format
+    - AdaptivePatcher, RAMCachedDataset, GPU transforms
 
 data_generation : Dataset generators
-    - SyntheticDataGenerator: Generate physically realistic synthetic RFI
     - MSDataGenerator: Convert MS files to training datasets
+    (SyntheticDataGenerator lives in rfi_toolbox.data_generation)
 
 training : Model training
     - SAM2Trainer: Train SAM2 models with HuggingFace transformers
@@ -82,15 +87,10 @@ from .data import BatchedDataset, HFDatasetWrapper, SAMDataset
 
 
 __all__ = [
-    # Data
-    "Preprocessor",
+    # SAM2-specific data modules (shared primitives live in rfi_toolbox)
     "SAMDataset",
     "BatchedDataset",
-    "TorchDataset",
-    "BatchWriter",
     "HFDatasetWrapper",
-    # Data generation
-    "SyntheticDataGenerator",
     # Config
     "ConfigLoader",
 ]

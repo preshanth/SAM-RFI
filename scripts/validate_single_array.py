@@ -18,9 +18,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from rfi_toolbox.data_generation import SyntheticDataGenerator
+from rfi_toolbox.evaluation import evaluate_segmentation, print_statistics_comparison
+
 from samrfi.config import ConfigLoader
-from samrfi.data_generation import SyntheticDataGenerator
-from samrfi.evaluation import evaluate_segmentation, print_statistics_comparison
 from samrfi.inference import RFIPredictor
 
 
@@ -166,7 +167,7 @@ def create_plots(waterfall, ground_truth, predicted_mask, probabilities, metrics
 
     from matplotlib.colors import LogNorm
 
-    from samrfi.evaluation import compute_calcquality, compute_ffi, compute_statistics
+    from rfi_toolbox.evaluation import compute_calcquality, compute_ffi, compute_statistics
 
     magnitude = np.abs(waterfall)
     vmin, vmax = magnitude[magnitude > 0].min(), magnitude.max()

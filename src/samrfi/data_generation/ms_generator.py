@@ -106,7 +106,7 @@ class MSDataGenerator:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save dataset using BatchWriter (BatchedDataset format)
-        from samrfi.data.torch_dataset import BatchWriter
+        from rfi_toolbox.datasets import BatchWriter
 
         writer = BatchWriter(output_dir, samples_per_batch=100)
         writer.add_dataset(dataset)

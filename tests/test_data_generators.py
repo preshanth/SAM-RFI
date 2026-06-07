@@ -4,7 +4,7 @@ Unit tests for data generators
 
 from unittest.mock import Mock
 
-from samrfi.data_generation.synthetic_generator import SyntheticDataGenerator
+from rfi_toolbox.data_generation import SyntheticDataGenerator
 
 
 class TestSyntheticDataGenerator:

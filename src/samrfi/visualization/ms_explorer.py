@@ -86,7 +86,7 @@ class MSWaterfallExplorer:
 
     def _load_ms_metadata(self):
         """Load MS metadata without loading full data."""
-        from ..data import MSLoader
+        from rfi_toolbox.io import MSLoader
 
         print(f"Loading metadata from {self.ms_path}...")
         self.ms_loader = MSLoader(str(self.ms_path))

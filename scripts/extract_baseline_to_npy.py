@@ -13,7 +13,7 @@ import argparse
 
 import numpy as np
 
-from samrfi.data import MSLoader
+from rfi_toolbox.io import MSLoader
 
 
 def main():

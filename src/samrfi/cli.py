@@ -13,9 +13,10 @@ from rfi_toolbox.io import MSLoader
 
 from .config import validate_all
 from .config.config_loader import ConfigLoader
+from rfi_toolbox.data_generation import SyntheticDataGenerator
+from rfi_toolbox.evaluation import evaluate_segmentation
+
 from .data_generation.ms_generator import MSDataGenerator
-from .data_generation.synthetic_generator import SyntheticDataGenerator
-from .evaluation.metrics import evaluate_segmentation
 from .inference import RFIPredictor
 from .training.sam2_trainer import SAM2Trainer
 from .utils import logger, setup_logger

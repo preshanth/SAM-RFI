@@ -49,7 +49,7 @@ Test that the CLI is available::
 
 Test imports::
 
-    python -c "from samrfi.data import MSLoader, Preprocessor; from samrfi.training import SAM2Trainer; print('✓ Installation successful')"
+    python -c "from rfi_toolbox.io import MSLoader; from rfi_toolbox.preprocessing import Preprocessor; from samrfi.training import SAM2Trainer; print('✓ Installation successful')"
 
 Installation Options
 --------------------

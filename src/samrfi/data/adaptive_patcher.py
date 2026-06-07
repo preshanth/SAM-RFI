@@ -128,7 +128,7 @@ def check_ms_compatibility(ms_path: str, patch_size: int = 1024) -> dict:
     Returns:
         Dictionary with compatibility info
     """
-    from samrfi.data.ms_loader import MSLoader
+    from rfi_toolbox.io import MSLoader
 
     loader = MSLoader(ms_path)
 

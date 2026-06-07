@@ -17,7 +17,7 @@ The ``samrfi.data`` module provides tools for loading, preprocessing, and managi
 MSLoader
 ~~~~~~~~
 
-.. autoclass:: samrfi.data.MSLoader
+.. autoclass:: rfi_toolbox.io.MSLoader
    :members:
    :undoc-members:
    :show-inheritance:
@@ -26,7 +26,7 @@ MSLoader
 
    **Example**::
 
-       from samrfi.data import MSLoader
+       from rfi_toolbox.io import MSLoader
 
        loader = MSLoader('observation.ms')
        loader.load(num_antennas=5, mode='DATA')
@@ -37,7 +37,7 @@ MSLoader
 Preprocessor
 ~~~~~~~~~~~~
 
-.. autoclass:: samrfi.data.Preprocessor
+.. autoclass:: rfi_toolbox.preprocessing.Preprocessor
    :members:
    :undoc-members:
    :show-inheritance:
@@ -46,7 +46,7 @@ Preprocessor
 
    **Example**::
 
-       from samrfi.data import Preprocessor
+       from rfi_toolbox.preprocessing import Preprocessor
 
        preprocessor = Preprocessor(data, flags=flags)
        dataset = preprocessor.create_dataset(
@@ -124,7 +124,7 @@ The ``samrfi.data_generation`` module provides tools for generating training dat
 SyntheticDataGenerator
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: samrfi.data_generation.SyntheticDataGenerator
+.. autoclass:: rfi_toolbox.data_generation.SyntheticDataGenerator
    :members:
    :undoc-members:
    :show-inheritance:
@@ -133,13 +133,11 @@ SyntheticDataGenerator
 
    **Example**::
 
-       from samrfi.data_generation import SyntheticDataGenerator
+       from rfi_toolbox.data_generation import SyntheticDataGenerator
 
+       # config provides the .synthetic / .processing sections (e.g. via ConfigLoader)
        generator = SyntheticDataGenerator(config)
-       dataset = generator.generate(
-           num_samples=1000,
-           output_path='./datasets/synthetic'
-       )
+       generator.generate(output_path='./datasets/synthetic')
 
    **RFI Types:**
 

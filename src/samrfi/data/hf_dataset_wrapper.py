@@ -8,7 +8,7 @@ from PIL import Image
 
 from datasets import Dataset
 
-from .torch_dataset import TorchDataset
+from rfi_toolbox.datasets import TorchDataset
 
 
 class HFDatasetWrapper:
