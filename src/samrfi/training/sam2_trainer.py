@@ -92,7 +92,7 @@ class SAM2Trainer:
         num_epochs=3,
         batch_size=4,
         sam_checkpoint="large",
-        learning_rate=1e-6,
+        learning_rate=1e-5,
         # Optimizer settings
         optimizer="adam",
         weight_decay=0.05,
@@ -124,6 +124,7 @@ class SAM2Trainer:
         trained_model_path=None,
         validation_dataset=None,
         save_model=True,
+        patience=None,
     ):
         """
         Train SAM2 model on RFI dataset
@@ -138,6 +139,10 @@ class SAM2Trainer:
             trained_model_path: Path to save trained model
             validation_dataset: Optional HuggingFace dataset for validation
             save_model: Whether to save model checkpoint (default: True, set False for validation)
+            patience: Early-stopping patience in epochs. If set, training stops when the
+                monitored loss (validation loss if a validation set is given, otherwise
+                training loss) has not improved for `patience` consecutive epochs.
+                Default None disables early stopping (no change to existing behavior).
         """
 
         # Fix multiprocessing for CUDA in workers (required for GPU transforms)
@@ -516,39 +521,65 @@ class SAM2Trainer:
                 log_msg += f" | Val loss: {epoch_val_loss:.6f}"
             logger.info(log_msg)
 
-            # Save best model based on validation loss
+            # Save best model based on the monitored loss: validation loss when a
+            # validation set is provided, otherwise fall back to training loss so a
+            # best checkpoint is still produced (and early stopping has a signal).
             if epoch_val_loss is not None:
-                if not hasattr(self, "best_val_loss"):
-                    self.best_val_loss = float("inf")
+                monitor_loss = epoch_val_loss
+                monitor_name = "val_loss"
+            else:
+                monitor_loss = epoch_mean_train_loss
+                monitor_name = "train_loss"
 
-                if epoch_val_loss < self.best_val_loss:
+            if not hasattr(self, "best_monitor_loss"):
+                self.best_monitor_loss = float("inf")
+                self.best_epoch = epoch
+                self.epochs_since_improvement = 0
+
+            if monitor_loss < self.best_monitor_loss:
+                self.best_monitor_loss = monitor_loss
+                self.best_epoch = epoch
+                self.epochs_since_improvement = 0
+                # Preserve the legacy attribute name when validating
+                if epoch_val_loss is not None:
                     self.best_val_loss = epoch_val_loss
-                    best_model_path = os.path.join(self.directory, "sam2_rfi_best.pth")
-                    best_checkpoint = {
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": opt.state_dict(),
-                        "epoch": epoch,
-                        "training_losses": train_losses[: epoch + 1 - start_epoch],
-                        "validation_losses": val_losses[: epoch + 1 - start_epoch],
-                        "patch_size": patch_size,  # Kept for backward compatibility
-                        "preprocessing": preprocessing_metadata,
-                        "config": {
-                            "sam_checkpoint": sam_checkpoint,
-                            "learning_rate": learning_rate,
-                            "batch_size": batch_size,
-                            "loss_function": loss_function,
-                            "freeze_vision_encoder": freeze_vision_encoder,
-                            "freeze_prompt_encoder": freeze_prompt_encoder,
-                        },
-                    }
-                    torch.save(best_checkpoint, best_model_path)
-                    logger.info(
-                        f"  💾 New best model saved (val_loss: {epoch_val_loss:.6f}) -> {best_model_path}"
-                    )
+                best_model_path = os.path.join(self.directory, "sam2_rfi_best.pth")
+                best_checkpoint = {
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": opt.state_dict(),
+                    "epoch": epoch,
+                    "training_losses": train_losses[: epoch + 1 - start_epoch],
+                    "validation_losses": val_losses[: epoch + 1 - start_epoch],
+                    "patch_size": patch_size,  # Kept for backward compatibility
+                    "preprocessing": preprocessing_metadata,
+                    "config": {
+                        "sam_checkpoint": sam_checkpoint,
+                        "learning_rate": learning_rate,
+                        "batch_size": batch_size,
+                        "loss_function": loss_function,
+                        "freeze_vision_encoder": freeze_vision_encoder,
+                        "freeze_prompt_encoder": freeze_prompt_encoder,
+                    },
+                }
+                torch.save(best_checkpoint, best_model_path)
+                logger.info(
+                    f"  💾 New best model saved ({monitor_name}: {monitor_loss:.6f}) -> {best_model_path}"
+                )
+            else:
+                self.epochs_since_improvement += 1
 
             # Force garbage collection at end of epoch
             gc.collect()
             torch.cuda.empty_cache()
+
+            # Early stopping (opt-in via `patience`; default None preserves behavior)
+            if patience is not None and self.epochs_since_improvement >= patience:
+                logger.info(
+                    f"\nEarly stopping at epoch {epoch+1}: {monitor_name} has not improved "
+                    f"for {patience} epoch(s) (best {monitor_name}: {self.best_monitor_loss:.6f} "
+                    f"at epoch {self.best_epoch+1})."
+                )
+                break
 
         self.ave_meanloss = train_losses
         self.val_losses = val_losses if val_losses else None

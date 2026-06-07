@@ -83,6 +83,7 @@ class TrainingConfig:
     # Training optimization
     log_interval: int = 100
     cuda_cache_clear_interval: int = 100
+    patience: int | None = None  # Early-stopping patience in epochs (None disables)
 
     # Dataset configuration
     stretch: str | None = "SQRT"
@@ -141,6 +142,9 @@ class TrainingConfig:
 
         if self.learning_rate is not None and self.learning_rate <= 0:
             raise ValueError(f"learning_rate must be positive, got {self.learning_rate}")
+
+        if self.patience is not None and self.patience <= 0:
+            raise ValueError(f"patience must be positive when set, got {self.patience}")
 
         if self.flag_sigma is not None and self.flag_sigma <= 0:
             raise ValueError(f"flag_sigma must be positive, got {self.flag_sigma}")
@@ -258,6 +262,7 @@ class ConfigLoader:
             flat["cuda_cache_clear_interval"] = training_config.get(
                 "cuda_cache_clear_interval", 100
             )
+            flat["patience"] = training_config.get("patience", None)
 
             # Output settings (can be in training or output section)
             if "plot" in training_config:

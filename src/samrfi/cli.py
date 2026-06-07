@@ -208,6 +208,7 @@ def train_command(args):
         plot=config.plot,
         save_model=config.save_model,
         validation_dataset=val_dataset,
+        patience=config.patience,
         model_path=args.resume,  # Resume from checkpoint if provided
     )
 
