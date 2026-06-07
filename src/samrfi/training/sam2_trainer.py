@@ -118,6 +118,8 @@ class SAM2Trainer:
         # Training optimization
         log_interval=100,
         cuda_cache_clear_interval=100,
+        use_amp=False,
+        accumulation_steps=1,
         # Output settings
         plot=True,
         model_path=None,
@@ -143,6 +145,11 @@ class SAM2Trainer:
                 monitored loss (validation loss if a validation set is given, otherwise
                 training loss) has not improved for `patience` consecutive epochs.
                 Default None disables early stopping (no change to existing behavior).
+            use_amp: Enable automatic mixed precision (fp16 autocast + GradScaler) on
+                CUDA. Default False preserves full-fp32 behavior; ignored on CPU.
+            accumulation_steps: Accumulate gradients over this many batches before each
+                optimizer step, for an effective batch size of
+                batch_size * accumulation_steps without the extra memory. Default 1.
         """
 
         # Fix multiprocessing for CUDA in workers (required for GPU transforms)
@@ -313,6 +320,26 @@ class SAM2Trainer:
             opt.load_state_dict(checkpoint_data["optimizer_state_dict"])
             logger.info("  Restored optimizer state")
 
+        # Automatic mixed precision: autocast region + loss scaler.
+        # No-op when use_amp=False or when running on CPU.
+        if accumulation_steps < 1:
+            raise ValueError(f"accumulation_steps must be >= 1, got {accumulation_steps}")
+        device_type = "cuda" if str(self.device).startswith("cuda") else "cpu"
+        use_amp = use_amp and device_type == "cuda"
+        try:
+            # Generic device API (torch >= 2.3)
+            scaler = torch.amp.GradScaler(device_type, enabled=use_amp)
+        except (AttributeError, TypeError):
+            # Fallback for torch 2.0-2.2 (CUDA-only scaler namespace)
+            scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        if use_amp:
+            logger.info("  Mixed precision (AMP) enabled")
+        if accumulation_steps > 1:
+            logger.info(
+                f"  Gradient accumulation: {accumulation_steps} steps "
+                f"(effective batch size {batch_size * accumulation_steps})"
+            )
+
         # Setup loss function
         if loss_function.lower() == "dicece":
             seg_loss = monai.losses.DiceCELoss(
@@ -381,41 +408,47 @@ class SAM2Trainer:
             epoch_start_time = time.time()
             logger.info(f"\nEpoch {epoch+1}/{num_epochs} [Train]: Starting {total_batches} batches")
 
+            opt.zero_grad()
             for batch_idx, batch in enumerate(train_dataloader, 1):
-                # Forward pass
-                outputs = model(
-                    pixel_values=batch["pixel_values"].to(self.device),
-                    input_boxes=batch["input_boxes"].to(self.device),
-                    multimask_output=multimask_output,
-                )
+                # Forward pass (under autocast when AMP is enabled)
+                with torch.amp.autocast(device_type, enabled=use_amp):
+                    outputs = model(
+                        pixel_values=batch["pixel_values"].to(self.device),
+                        input_boxes=batch["input_boxes"].to(self.device),
+                        multimask_output=multimask_output,
+                    )
 
-                # Get predictions and ground truth
-                predicted_masks = outputs.pred_masks.squeeze(1)
-                ground_truth_masks = batch["ground_truth_mask"].float().to(self.device)
+                    # Get predictions and ground truth
+                    predicted_masks = outputs.pred_masks.squeeze(1)
+                    ground_truth_masks = batch["ground_truth_mask"].float().to(self.device)
 
-                # Ensure ground truth masks have correct dimensions
-                if len(ground_truth_masks.shape) == 3:
-                    ground_truth_masks = ground_truth_masks.unsqueeze(1)
+                    # Ensure ground truth masks have correct dimensions
+                    if len(ground_truth_masks.shape) == 3:
+                        ground_truth_masks = ground_truth_masks.unsqueeze(1)
 
-                # Resize ground truth to match predicted mask size
-                predicted_mask_size = predicted_masks.shape[-2:]
-                ground_truth_masks_resized = interpolate(
-                    ground_truth_masks,
-                    size=predicted_mask_size,
-                    mode="bilinear",
-                    align_corners=False,
-                )
+                    # Resize ground truth to match predicted mask size
+                    predicted_mask_size = predicted_masks.shape[-2:]
+                    ground_truth_masks_resized = interpolate(
+                        ground_truth_masks,
+                        size=predicted_mask_size,
+                        mode="bilinear",
+                        align_corners=False,
+                    )
 
-                # Compute loss
-                loss = seg_loss(predicted_masks, ground_truth_masks_resized)
+                    # Compute loss, normalized for gradient accumulation
+                    loss = seg_loss(predicted_masks, ground_truth_masks_resized)
+                    loss = loss / accumulation_steps
 
-                # Backward pass
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
+                # Backward with gradient scaling; step every accumulation_steps batches
+                # (and on the final batch to flush any remainder).
+                scaler.scale(loss).backward()
+                if batch_idx % accumulation_steps == 0 or batch_idx == total_batches:
+                    scaler.step(opt)
+                    scaler.update()
+                    opt.zero_grad()
 
-                # Extract loss value
-                loss_value = loss.item()
+                # Report the per-batch loss magnitude (undo accumulation scaling)
+                loss_value = loss.item() * accumulation_steps
                 epoch_train_losses.append(loss_value)
 
                 # CRITICAL: Explicit cleanup to prevent memory accumulation
@@ -461,11 +494,12 @@ class SAM2Trainer:
 
                 with torch.no_grad():
                     for batch_idx, batch in enumerate(val_dataloader, 1):
-                        outputs = model(
-                            pixel_values=batch["pixel_values"].to(self.device),
-                            input_boxes=batch["input_boxes"].to(self.device),
-                            multimask_output=multimask_output,
-                        )
+                        with torch.amp.autocast(device_type, enabled=use_amp):
+                            outputs = model(
+                                pixel_values=batch["pixel_values"].to(self.device),
+                                input_boxes=batch["input_boxes"].to(self.device),
+                                multimask_output=multimask_output,
+                            )
 
                         predicted_masks = outputs.pred_masks.squeeze(1)
                         ground_truth_masks = batch["ground_truth_mask"].float().to(self.device)

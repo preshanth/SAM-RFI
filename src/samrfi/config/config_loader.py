@@ -84,6 +84,8 @@ class TrainingConfig:
     log_interval: int = 100
     cuda_cache_clear_interval: int = 100
     patience: int | None = None  # Early-stopping patience in epochs (None disables)
+    use_amp: bool = False  # Automatic mixed precision (CUDA only)
+    accumulation_steps: int = 1  # Gradient accumulation steps (effective batch multiplier)
 
     # Dataset configuration
     stretch: str | None = "SQRT"
@@ -145,6 +147,11 @@ class TrainingConfig:
 
         if self.patience is not None and self.patience <= 0:
             raise ValueError(f"patience must be positive when set, got {self.patience}")
+
+        if self.accumulation_steps is not None and self.accumulation_steps < 1:
+            raise ValueError(
+                f"accumulation_steps must be >= 1, got {self.accumulation_steps}"
+            )
 
         if self.flag_sigma is not None and self.flag_sigma <= 0:
             raise ValueError(f"flag_sigma must be positive, got {self.flag_sigma}")
@@ -263,6 +270,8 @@ class ConfigLoader:
                 "cuda_cache_clear_interval", 100
             )
             flat["patience"] = training_config.get("patience", None)
+            flat["use_amp"] = training_config.get("use_amp", False)
+            flat["accumulation_steps"] = training_config.get("accumulation_steps", 1)
 
             # Output settings (can be in training or output section)
             if "plot" in training_config:

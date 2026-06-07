@@ -210,6 +210,8 @@ def train_command(args):
         save_model=config.save_model,
         validation_dataset=val_dataset,
         patience=config.patience,
+        use_amp=config.use_amp,
+        accumulation_steps=config.accumulation_steps,
         model_path=args.resume,  # Resume from checkpoint if provided
     )
 
