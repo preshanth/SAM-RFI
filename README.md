@@ -92,13 +92,13 @@ pre-commit install
 samrfi --help
 
 # Test core imports (no GPU/CASA required)
-python -c "from samrfi.data import Preprocessor; from samrfi.data_generation import SyntheticDataGenerator; print('Core installation successful')"
+python -c "from rfi_toolbox.preprocessing import Preprocessor; from rfi_toolbox.data_generation import SyntheticDataGenerator; print('Core installation successful')"
 
 # Test GPU functionality (requires [gpu])
 python -c "from samrfi.training import SAM2Trainer; from samrfi.inference import RFIPredictor; print('GPU installation successful')"
 
 # Test CASA functionality (requires [casa])
-python -c "from samrfi.data.ms_loader import MSLoader; print('CASA installation successful')"
+python -c "from rfi_toolbox.io import MSLoader; print('CASA installation successful')"
 ```
 
 ---
@@ -368,15 +368,17 @@ samrfi download-model \
 ### Core Data Operations (No GPU/CASA Required)
 
 ```python
-from samrfi.data import Preprocessor, TorchDataset
-from samrfi.data_generation import SyntheticDataGenerator
-from samrfi.evaluation import compute_iou, compute_ffi
+from samrfi.config import ConfigLoader
+from rfi_toolbox.preprocessing import Preprocessor
+from rfi_toolbox.data_generation import SyntheticDataGenerator
+from rfi_toolbox.evaluation import compute_iou, compute_ffi
 
-# Generate synthetic data
-generator = SyntheticDataGenerator(config_path='configs/synthetic_train_4k.yaml')
-dataset = generator.generate(num_samples=1000, output_dir='./datasets/synthetic')
+# Generate synthetic data (num_samples and output paths come from the config)
+config = ConfigLoader.load_data('configs/synthetic_train_4k.yaml')
+generator = SyntheticDataGenerator(config)
+generator.generate(output_path='./datasets/synthetic')
 
-# Preprocess data
+# Preprocess your own complex visibilities into a patch dataset
 import numpy as np
 data = np.random.randn(2, 4, 1024, 1024) + 1j * np.random.randn(2, 4, 1024, 1024)
 preprocessor = Preprocessor(data)
@@ -390,7 +392,7 @@ ffi = compute_ffi(data, flags=predicted_mask)
 ### Measurement Set Operations (Requires [casa])
 
 ```python
-from samrfi.data.ms_loader import MSLoader
+from rfi_toolbox.io import MSLoader
 
 # Load measurement set
 loader = MSLoader('observation.ms')
@@ -409,22 +411,25 @@ loader.save_flags(predicted_flags)
 
 ```python
 from samrfi.training import SAM2Trainer
-from samrfi.data import TorchDataset
+from samrfi.data import BatchedDataset
 
-# Load batched dataset
-dataset = TorchDataset.from_directory('./datasets/train_4k/exact_masks')
+# Load a generated dataset directory (batch_*.pt + metadata.json)
+dataset = BatchedDataset('./datasets/train_4k/exact_masks')
 
-# Create trainer
-trainer = SAM2Trainer(dataset, device='cuda')
+# SAM2Trainer expects an object exposing a `.dataset` attribute
+class DatasetWrapper:
+    def __init__(self, ds):
+        self.dataset = ds
 
-# Train model
+trainer = SAM2Trainer(DatasetWrapper(dataset), device='cuda', dir_path='./samrfi_data')
+
+# Train. Pass validation_dataset to enable automatic best-model saving
+# (sam2_rfi_best.pth). For most workflows the `samrfi train` CLI is simpler.
 trainer.train(
     num_epochs=10,
     batch_size=12,
     sam_checkpoint='large',
     learning_rate=1e-5,
-    output_dir='./samrfi_data',
-    save_best_only=True
 )
 ```
 
@@ -800,7 +805,7 @@ Expected behavior: Loss decreases from approximately 1.0 to below 0.3 within 10 
 ### Metrics Module
 
 ```python
-from samrfi.evaluation import (
+from rfi_toolbox.evaluation import (
     compute_iou,           # Intersection over Union
     compute_precision,     # True Positive Rate
     compute_recall,        # Sensitivity
@@ -817,7 +822,7 @@ metrics = evaluate_segmentation(predicted_mask, ground_truth_mask)
 ### Statistical Validation
 
 ```python
-from samrfi.evaluation import (
+from rfi_toolbox.evaluation import (
     compute_statistics,              # Before/after statistics
     compute_ffi,                     # Flagging Fidelity Index
     print_statistics_comparison      # Formatted output
