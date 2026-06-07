@@ -17,6 +17,8 @@ pyyaml = ">=6.0"
 
 [pypi-dependencies]
 transformers = ">=4.53"
+casatasks = "*"
+casatools = "*"
 
 [activation.env]
 # rfi_toolbox is a bare package dir; put its parent on the import path

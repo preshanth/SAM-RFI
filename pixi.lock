@@ -204,6 +204,9 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
       - pypi: https://files.pythonhosted.org/packages/1e/d3/26bf1008eb3d2daa8ef4cacc7f3bfdc11818d111f7e2d0201bc6e3b49d45/annotated_doc-0.0.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/da/42/e921fccf5015463e32a3cf6ee7f980a6ed0f395ceeaa45060b61d86486c2/anyio-4.13.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/87/2f/7ec061e2eda1d029b7a09c0ae6e87a659aee2f47856dc0b2195d24f33eed/casaconfig-1.5.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/2c/fd/e6c7da4262138ceffbbb1adfc647892c590e4e698d5d0f06d03af587eea3/casatasks-6.7.0.31-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/3f/18/eed8145a606e8a309009b428be12affce8f08f8f7ac75dfb998e87e0fbce/casatools-6.7.0.31-cp311-cp311-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/59/8c/57e832b7af6d7c5abe66eb3fbe3a3a32f4d11ea23a1aa7131371035be991/certifi-2026.5.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/0d/67e5b4109ea4a837e80daa87c2c696711955e40449a97e8926672534def2/click-8.4.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
@@ -214,6 +217,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/e5/e0/050018d855d26d3c0b4a7d1b2ed692be758ce276d8289e2a2b44ba1014a5/pyerfa-2.0.1.5-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/33/6f/1481597e859ef19508b345eec4afd1416ed6e6b459c75a64026ef193aecf/regex-2026.5.9-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl
@@ -392,6 +396,31 @@ packages:
   purls: []
   size: 989514
   timestamp: 1766415934926
+- pypi: https://files.pythonhosted.org/packages/87/2f/7ec061e2eda1d029b7a09c0ae6e87a659aee2f47856dc0b2195d24f33eed/casaconfig-1.5.0-py3-none-any.whl
+  name: casaconfig
+  version: 1.5.0
+  sha256: f046c92183d2b9561921abbba9ea4bcee291822941be2e54010544d0d4d12671
+  requires_dist:
+  - certifi>=2023.5.7
+  requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/2c/fd/e6c7da4262138ceffbbb1adfc647892c590e4e698d5d0f06d03af587eea3/casatasks-6.7.0.31-py3-none-any.whl
+  name: casatasks
+  version: 6.7.0.31
+  sha256: 61621b22e74cd9fb1e87af0c0626e3ff1e3c6e824e4f203e60a25d623e741dec
+  requires_dist:
+  - casatools==6.7.0.31
+  - matplotlib
+  - scipy
+  - certifi
+  - pyerfa
+- pypi: https://files.pythonhosted.org/packages/3f/18/eed8145a606e8a309009b428be12affce8f08f8f7ac75dfb998e87e0fbce/casatools-6.7.0.31-cp311-cp311-manylinux_2_28_x86_64.whl
+  name: casatools
+  version: 6.7.0.31
+  sha256: 273c80c9f378bb2fcaef29ccaae06cd10369e5a48b1771e56dc00574d90314ff
+  requires_dist:
+  - numpy
+  - casaconfig
+  requires_python: '>=3.6'
 - pypi: https://files.pythonhosted.org/packages/59/8c/57e832b7af6d7c5abe66eb3fbe3a3a32f4d11ea23a1aa7131371035be991/certifi-2026.5.20-py3-none-any.whl
   name: certifi
   version: 2026.5.20
@@ -2281,6 +2310,16 @@ packages:
   - pkg:pypi/pybind11-global?source=hash-mapping
   size: 228871
   timestamp: 1755953338243
+- pypi: https://files.pythonhosted.org/packages/e5/e0/050018d855d26d3c0b4a7d1b2ed692be758ce276d8289e2a2b44ba1014a5/pyerfa-2.0.1.5-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  name: pyerfa
+  version: 2.0.1.5
+  sha256: 0e43c7194e3242083f2350b46c09fd4bf8ba1bcc0ebd1460b98fc47fe2389906
+  requires_dist:
+  - numpy>=1.19.3
+  - sphinx-astropy>=1.3 ; extra == 'docs'
+  - pytest ; extra == 'test'
+  - pytest-doctestplus>=0.7 ; extra == 'test'
+  requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl
   name: pygments
   version: 2.20.0
