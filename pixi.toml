@@ -5,15 +5,21 @@ description = "Dev env for SAM-RFI / DINO RFI segmentation experiments"
 channels = ["conda-forge", "pytorch"]
 platforms = ["linux-64"]
 
+[system-requirements]
+# Resolve the CUDA build of pytorch (local: 1080 Ti sm_61 / RTX 2060 sm_75;
+# remote: A100 sm_80). Driver 580 supports CUDA 12.x.
+cuda = "12"
+
 [dependencies]
 python = "3.11.*"
 numpy = ">=1.26"
 scipy = ">=1.10"
 matplotlib = ">=3.7"
 tqdm = ">=4.65"
-pytorch = ">=2.1"
+pytorch = { version = ">=2.1", build = "cuda*" }
 scikit-image = ">=0.20"
 pyyaml = ">=6.0"
+pytest = ">=9.0.3,<10"
 
 [pypi-dependencies]
 transformers = ">=4.53"
@@ -21,5 +27,6 @@ casatasks = "*"
 casatools = "*"
 
 [activation.env]
-# rfi_toolbox is a bare package dir; put its parent on the import path
-PYTHONPATH = "/var/home/pjaganna/Software:/var/home/pjaganna/Software/SAM-RFI/src"
+# rfi_toolbox is a git clone (nested package layout); put the repo root on the
+# import path so `import rfi_toolbox` resolves to <repo>/rfi_toolbox.
+PYTHONPATH = "/var/home/pjaganna/Software/rfi_toolbox:/var/home/pjaganna/Software/SAM-RFI/src"
